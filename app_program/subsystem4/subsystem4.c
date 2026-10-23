@@ -1,52 +1,64 @@
 /*
  *	subsystem4.c
- *	Subsystem 4 -- Monitor: creates its objects and starts its task.
+ *	Subsystem 4 -- IMU & terrain: creates its objects and starts its
+ *	tasks.
  *
- *	APIs shown: tk_cre_flg, tk_cre_mbf, tk_cre_alm
+ *	APIs shown: tk_cre_mtx (TA_INHERIT), tk_cre_cyc, tk_sta_cyc
+ *
+ *	Template rule: the owner creates an object in phase 1, before any
+ *	task can use it.  The I2C bus and the sensor are set up by the IMU
+ *	task itself (drv_lsm303.c), so a missing sensor never stops start-up.
  */
 
 #include "subsystem4.h"
 
-EXPORT ID	mbf_summary;	/* IF-03 */
-EXPORT ID	flg_events;	/* IF-03 */
-EXPORT ID	alm_monitor;
+EXPORT ID	cyc_imu;
+EXPORT ID	mtx_s4_status;
 
 EXPORT ER subsystem4_init(void)
 {
-	T_CFLG	cflg = {0};
-	T_CMBF	cmbf = {0};
-	T_CALM	calm = {0};
+	T_CMTX	cmtx = {0};
+	T_CCYC	ccyc = {0};
 
-	/* Event flag: a 32-bit pattern of bits.  Tasks wait for a bit (or a
-	   combination of bits) to be set. */
-	cflg.flgatr  = TA_TFIFO | TA_WMUL;	/* allow several waiters */
-	cflg.iflgptn = 0;			/* all bits clear to begin with */
-	flg_events = tk_cre_flg(&cflg);
-	if (flg_events < E_OK) {
-		return flg_events;
-	}
+	/* Mutex for the two status words.  TA_INHERIT: a low-priority reader
+	   (e.g. Telemetry, pri 20) holding it is raised to our priority. */
+	cmtx.mtxatr = TA_INHERIT;
+	mtx_s4_status = tk_cre_mtx(&cmtx);
+	if (mtx_s4_status < E_OK) return mtx_s4_status;
 
-	/* Message buffer: COPIES variable-length data into a kernel ring
-	   buffer.  Here it carries short text lines from subsystem 3. */
-	cmbf.mbfatr = TA_TFIFO;
-	cmbf.bufsz  = 4 * S4_SUMMARY_MAX;	/* total buffer size, bytes */
-	cmbf.maxmsz = S4_SUMMARY_MAX;		/* largest single message */
-	mbf_summary = tk_cre_mbf(&cmbf);
-	if (mbf_summary < E_OK) {
-		return mbf_summary;
-	}
+	/* 10 ms tick (NFR11), started in subsystem4_start() once the task
+	   exists */
+	ccyc.cycatr = TA_HLNG;
+	ccyc.cychdr = (FP)imu_cyclic_handler;
+	ccyc.cyctim = S4_PERIOD_MS;
+	ccyc.cycphs = S4_PERIOD_MS;
+	cyc_imu = tk_cre_cyc(&ccyc);
+	if (cyc_imu < E_OK) return cyc_imu;
 
-	/* Alarm handler: called ONCE, a given time after tk_sta_alm().
-	   The monitor task re-arms it each time round its loop. */
-	calm.almatr = TA_HLNG;
-	calm.almhdr = (FP)monitor_alarm_handler;
-	alm_monitor = tk_cre_alm(&calm);
-	return (alm_monitor < E_OK) ? alm_monitor : E_OK;
+	/* Example objects still used by subsystem 3 (remove later) */
+	return s4_example_init();
 }
 
 EXPORT ER subsystem4_start(void)
 {
-	/* No affinity: the scheduler may run it on either core */
-	ID tid = app_start_task(monitor_task, S4_PRI_MONITOR, 0, "monitor_task");
-	return (tid < E_OK) ? tid : E_OK;
+	ID	tid;
+	ER	er;
+
+	tid_imu = app_start_task(imu_task, S4_PRI_IMU, S4_IMU_PRC, "imu_task");
+	if (tid_imu < E_OK) return tid_imu;
+
+	er = tk_sta_cyc(cyc_imu);
+	if (er < E_OK) return er;
+
+#if S4_LOG_MS > 0
+	tid = app_start_task(imu_log_task, S4_PRI_LOG, 0, "imu_log_task");
+	if (tid < E_OK) return tid;
+#endif
+
+#if S4_EXAMPLE_MONITOR
+	tid = app_start_task(monitor_task, S4_PRI_MONITOR, 0, "monitor_task");
+	if (tid < E_OK) return tid;
+#endif
+	(void)tid;
+	return E_OK;
 }
