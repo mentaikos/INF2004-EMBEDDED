@@ -8,13 +8,17 @@
 #include "../test_report.h"
 
 #if APP_TEST
+#include "scan_checks.h"
+#define S5_CHECK(id, cond, desc) TEST_CHECK(id, cond, desc)
 
 EXPORT void subsystem5_test(void)
 {
 	TEST_INIT();
 
-	/* Replace with real checks of this subsystem's behaviour */
-	TEST_CHECK("S5-U01", tk_get_tid() > 0, "example: running in a task context");
+	TEST_CHECK("S5-U01", tk_get_tid() > 0, "running in a Micro T-Kernel task");
+	S5_RUN_CHECKS();
+	TEST_CHECK("S5-U21", sem_echo > 0 && flg_scan > 0 && mtx_s5_status > 0,
+		   "scan semaphore, event flag and mutex exist");
 
 	TEST_SUMMARY("subsystem5");
 }

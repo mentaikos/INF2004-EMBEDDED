@@ -1,0 +1,7 @@
+﻿Date: 2026-10-23 (Asia/Singapore)
+Revision: 68da3bd + uncommitted Buddy 5 changes
+ARM GNU Toolchain 15.2.Rel1; -Wall -Wextra -Werror -fsyntax-only
+PASS SMP=0 TEST=0
+PASS SMP=0 TEST=1
+PASS SMP=1 TEST=0
+PASS SMP=1 TEST=1

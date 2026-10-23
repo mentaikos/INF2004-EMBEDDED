@@ -1,0 +1,29 @@
+﻿Date: 2026-10-23 (Asia/Singapore)
+Revision: 68da3bd + uncommitted Buddy 5 changes; no commit/push.
+GCC: -std=c11 -O2 -Wall -Wextra -Werror -DS5_HOST_TEST
+Scope: host logic only; hardware and target tests not executed.
+[TEST] S5-U03 PASS  time of flight and absent echo
+[TEST] S5-U04 PASS  near/far/no-echo are distinct
+[TEST] S5-U05 PASS  all 25 packed bins preserve neighbours and guards
+[TEST] S5-U06 PASS  servo angles, centre pulse and settling
+[TEST] S5-U07 PASS  fine scan refines occupied coarse intervals only
+[TEST] S5-U08 PASS  polar width and footprint-aware side clearance
+[TEST] S5-U09 PASS  unknown echoes block affected sides
+[TEST] S5-U10 PASS  turning envelope must clear too
+[TEST] S5-U11 PASS  scan starts stopped and aborts on movement
+[TEST] S5-U12 PASS  only current generation approval starts bypass
+[TEST] S5-U13 PASS  expired approval rejected across timer wrap
+[TEST] S5-U14 PASS  rescan discards a simultaneous old approval
+[TEST] S5-U15 PASS  missing echoes fault with bounded retry rate/count
+[TEST] S5-U16 PASS  fresh stable observations confirm rejoin once
+[TEST] S5-U17 PASS  line-loss relay cancels stability
+[TEST] S5-U18 PASS  3-second recovery timeout across timer wrap
+[TEST] S5-U19 PASS  hump filter preserves persistent/critical hazards
+[TEST] S5-U20 PASS  E-STOP invalidates pending approval
+[TEST] S5-U22 PASS  clear scan still needs VC approval
+[TEST] S5-U23 PASS  restored echo/reset cannot override E-STOP
+[TEST] S5-U24 PASS  stale line samples never confirm recovery
+[TEST] S5-U25 PASS  unknown forward/foreground blocks turn approval
+[TEST] S5-H01 PASS  independent 100-mm board scene within 10% width
+[TEST] S5-H02 PASS  no-echo scene cannot authorise movement
+[TEST] subsystem5 host SUMMARY 24 passed, 0 failed; scan=22 B, profile=8 B, state=52 B
