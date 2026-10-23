@@ -59,6 +59,50 @@ IMPORT void subsystem4_test(void);
 IMPORT void subsystem5_test(void);
 #endif
 
+/* ---------------------------------------------------------------------
+ *  Vehicle Controller events (design 7.2: mbf_vc_evt).  Every event is
+ *  ONE 32-bit word, sent without blocking:
+ *	UW w = EVT_PACK(EVT_xxx, payload);
+ *	tk_snd_mbf(mbf_vc_evt, &w, sizeof(w), TMO_POL);
+ *	[3:0]  type     EVT_xxx
+ *	[31:4] payload  event-specific (28 bits), see the list
+ *  Codes are the design's event list in order, as subsystem 2 already
+ *  uses them.  The Vehicle Controller's owner creates mbf_vc_evt and
+ *  hands its ID to each sender (motion_bind_vc(), s3_bind_vc(), ...).
+ * --------------------------------------------------------------------- */
+#define EVT_NAV_CMD			0	/* NAV_xxx, 2 bits         (S3) */
+#define EVT_JUNCTION			1	/*                         (S3) */
+#define EVT_LINE_LOST			2	/*                         (S3) */
+#define EVT_LINE_FOUND			3	/*                         (S3) */
+#define EVT_HUMP_START			4	/*                         (S4) */
+#define EVT_HUMP_END			5	/* peak height, mm         (S4) */
+#define EVT_OBSTACLE_DETECTED		6	/*                         (S5) */
+#define EVT_OBSTACLE_PROFILE		7	/*                         (S5) */
+#define EVT_NO_CLEAR			8	/*                         (S5) */
+#define EVT_SENSOR_FAULT		9	/* sender's FAULT_xxx bits      */
+#define EVT_REJOIN_LINE_CONFIRMED	10	/*                         (S5) */
+#define EVT_START			11	/*                         (S1) */
+#define EVT_STOP			12	/*                         (S1) */
+#define EVT_MOTION_DONE			13	/* finished command        (S2) */
+#define EVT_MISSION_END			14	/*                         (VC) */
+
+#define EVT_TYPE_MASK		0xFu
+#define EVT_PAYLOAD_SHIFT	4
+#define EVT_PACK(type, payload)	\
+	(((UW)(type) & EVT_TYPE_MASK) | ((UW)(payload) << EVT_PAYLOAD_SHIFT))
+#define EVT_TYPE(w)		((UINT)((w) & EVT_TYPE_MASK))
+#define EVT_PAYLOAD(w)		((UW)(w) >> EVT_PAYLOAD_SHIFT)
+
+/* Navigation commands decoded from barcodes (FR8, FR29): 2 bits
+   (Week 8 tribunal), the EVT_NAV_CMD payload */
+#define NAV_LEFT	0
+#define NAV_RIGHT	1
+#define NAV_STRAIGHT	2
+#define NAV_U_TURN	3
+#define NAV_BITS	2
+#define NAV_MASK	0x3u
+#define NAV_NONE	4	/* "no command"; never sent or packed */
+
 /* Print a readable message if a kernel call failed (negative error code) */
 #define CHECK(er, what)							\
 	do {								\
