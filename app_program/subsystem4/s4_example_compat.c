@@ -13,7 +13,6 @@
  */
 
 #include "subsystem4.h"
-#include "../subsystem1/subsystem1.h"	/* IF-05: tid_led */
 #include "../subsystem2/subsystem2.h"	/* sem_slots, mpf_samples (read only) */
 #include "../subsystem3/subsystem3.h"	/* IF-04: app_stats, mtx_stats */
 
@@ -52,19 +51,6 @@ EXPORT void monitor_alarm_handler(void *exinf)
 	tk_set_flg(flg_events, FLG_ALARM);
 }
 
-LOCAL const char *state_name(UINT tskstat)
-{
-	switch (tskstat) {
-	case TTS_RUN:	return "RUN";
-	case TTS_RDY:	return "READY";
-	case TTS_WAI:	return "WAIT";
-	case TTS_SUS:	return "SUSPEND";
-	case TTS_WAS:	return "WAIT+SUSPEND";
-	case TTS_DMT:	return "DORMANT";
-	default:	return "?";
-	}
-}
-
 EXPORT void monitor_task(INT stacd, void *exinf)
 {
 	UINT		flgptn;
@@ -73,10 +59,7 @@ EXPORT void monitor_task(INT stacd, void *exinf)
 	APP_STATS	snap;
 	T_RSEM		rsem;
 	T_RMPF		rmpf;
-	T_RTSK		rtsk;
 	SYSTIM		now;
-	UW		reports = 0;
-	BOOL		led_paused = FALSE;
 	ER		er;
 
 	(void)stacd; (void)exinf;
