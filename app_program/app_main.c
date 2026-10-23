@@ -23,6 +23,8 @@
  *	  subsystem3/  Consumer  collects samples into statistics  (core 0)
  *	  subsystem4/  Monitor   prints reports, pauses/resumes the LED
  *	  subsystem5/  (empty template for the fifth student)
+ *	  vehicle_controller/  system statechart; the only sender of motion
+ *	               commands (added by the team, see its header)
  *
  *	How they talk to each other (the interfaces, see TEAM.md section 5):
  *	  IF-01  S2 -> S3  mailbox mbx_samples      (owned by S3)
@@ -54,6 +56,7 @@
  */
 
 #include "app.h"
+#include "vehicle_controller/vehicle_controller.h"
 
 /*
  * Create and start one task (declared in app.h for every subsystem).
@@ -113,6 +116,10 @@ EXPORT INT usermain(void)
 	CHECK(subsystem3_init(), "subsystem3_init");
 	CHECK(subsystem4_init(), "subsystem4_init");
 	CHECK(subsystem5_init(), "subsystem5_init");
+	/* The Vehicle Controller last: it binds its event buffer and fault
+	   flag into every subsystem, so their objects must exist and none of
+	   their tasks may run yet */
+	CHECK(vc_init(), "vc_init");
 
 	/* Phase 2: every subsystem starts its tasks */
 	CHECK(subsystem1_start(), "subsystem1_start");
@@ -120,6 +127,7 @@ EXPORT INT usermain(void)
 	CHECK(subsystem3_start(), "subsystem3_start");
 	CHECK(subsystem4_start(), "subsystem4_start");
 	CHECK(subsystem5_start(), "subsystem5_start");
+	CHECK(vc_start(), "vc_start");
 
 	tm_printf((UB*)"all subsystems started\n\n");
 
@@ -133,6 +141,7 @@ EXPORT INT usermain(void)
 	subsystem3_test();
 	subsystem4_test();
 	subsystem5_test();
+	vc_test();
 	tm_printf((UB*)"[TEST] === test run end ===\n");
 #endif
 

@@ -15,6 +15,8 @@ Define a test here before running it. Test IDs never change.
 | INT-03 | S3 steering byte reaches S2 Motion Control every 20 ms, none refused (≥ 72 in 1.5 s) | `mbf_steer` (S3 → S2) | auto | `subsystem3_test.c` | `[TEST] INT-03 PASS` |
 | INT-04 | S3 telemetry slot reaches the dashboard: frame bits 30..37 change with line state (move tape under sensors) and show NAV of a swiped barcode | IF-S1-01 `s1_tlm_set_slot` (S3 → S1) | manual | build with Buddy 1 merged + `NET=lwip MQTT=1`; watch `tools/s1_dashboard.py` | b3 = line(2) bc(2) nav(2) err(1) ovf(1) as described in `subsystem3.h` |
 | INT-05 | S4 shock sets E-STOP in `flg_safety`; S2 Motion Control is in E_STOP_BRAKE within 50 ms; shock latched until acknowledged; STOPPED after the VC-style clear | `flg_safety` (S4 → S2), NFR10, Version C rows 10–11 | auto | `subsystem4_test.c` (wheels off the table) | `[TEST] INT-05 PASS` |
+| INT-06 | Motion's MOTION_DONE reaches the Vehicle Controller through `mbf_vc_evt` (proves the VC binding) | `mbf_vc_evt` (S2 → VC), `motion_bind_vc` | auto | `vc_test.c` (E-STOP must be clear) | `[TEST] INT-06 PASS` |
+| INT-07 | every buddy's events reach the VC: JUNCTION/LINE_LOST/NAV_CMD (S3), HUMP_START/END (S4), OBSTACLE_DETECTED/PROFILE (S5), START/STOP (S1) | `mbf_vc_evt`, `s3/s4/s5_bind_vc` | manual | run on the track with the console open | each event logged as a `vc:` state change |
 
 *Method:* **auto** = `TEST_CHECK` in code, result printed on the console;
 **manual** = a person observes the result (LED, scope, meter, phone app…).
