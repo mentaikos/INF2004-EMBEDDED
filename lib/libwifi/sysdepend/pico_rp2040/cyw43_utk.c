@@ -36,7 +36,14 @@
  * that drops the handshake under load. Without a retry the radio would sit in
  * CYW43_LINK_FAIL until the next power cycle, so re-issue the join on a fixed
  * backoff for as long as the link is down. */
-#define WIFI_REJOIN_DELAY_US (5 * 1000 * 1000ull)
+/* Buddy 1 (NFR19): retry 1 s after a failure, and give a join attempt at
+ * most 5 s to reach CYW43_LINK_UP before it is abandoned and retried. */
+#ifndef WIFI_REJOIN_DELAY_US
+#define WIFI_REJOIN_DELAY_US     (1 * 1000 * 1000ull)
+#endif
+#ifndef WIFI_JOIN_TIMEOUT_US
+#define WIFI_JOIN_TIMEOUT_US     (5 * 1000 * 1000ull)
+#endif
 
 /* Overridable from the makefile if an AP needs something else. MIXED accepts
  * both TKIP and AES; the driver treats it the same as WPA2_AES_PSK for a
@@ -276,6 +283,7 @@ void cyw43_utk_task(int32_t stacd, void *exinf)
 #if TM_NET_LWIP
     int32_t  prev_link_status = radio_status.link_status;
     uint64_t rejoin_at = 0;
+    uint64_t join_started = time_us_64();   /* first join requested above */
 #endif
 
     for(;;) {
@@ -300,17 +308,36 @@ void cyw43_utk_task(int32_t stacd, void *exinf)
                           (int)radio_status.link_status);
             }
 
-            /* Negative == the association attempt is over and lost. Arm a
-             * retry; a positive-but-not-UP status (JOIN/NOIP) is still making
-             * progress, so leave it alone and let DHCP finish. */
-            rejoin_at = (radio_status.link_status < 0)?
+            /* Negative == the association attempt is over and lost.
+             * DOWN (0) == the AP dropped us (DISASSOC) after we were
+             * connected; the driver does not rejoin on its own, so retry
+             * that too (Buddy 1, NFR7). JOIN/NOIP are still making progress
+             * and are left to the 5 s join timeout below. */
+            rejoin_at = (radio_status.link_status < 0 ||
+                         radio_status.link_status == CYW43_LINK_DOWN)?
                         time_us_64() + WIFI_REJOIN_DELAY_US: 0;
+        }
+
+        /* Join timeout (NFR19): associated but no IP, or still joining,
+         * after 5 s -- give up on this attempt and start a fresh one. */
+        if(radio_status.link_status == CYW43_LINK_UP) {
+            join_started = 0;
+        } else if(join_started != 0 &&
+                  time_us_64() - join_started >= WIFI_JOIN_TIMEOUT_US &&
+                  (radio_status.link_status == CYW43_LINK_JOIN ||
+                   radio_status.link_status == CYW43_LINK_NOIP)) {
+            tm_printf((UB*)"wifi: join timeout (5 s), leaving and retrying\n");
+            (void)cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
+            join_started = 0;
+            rejoin_at = time_us_64() + WIFI_REJOIN_DELAY_US;
         }
 
         if(rejoin_at != 0 && time_us_64() >= rejoin_at) {
             rejoin_at = 0;
-            if(radio_status.link_status < 0) {
+            if(radio_status.link_status < 0 ||
+               radio_status.link_status == CYW43_LINK_DOWN) {
                 (void)wifi_try_join();
+                join_started = time_us_64();
                 /* Force the next iteration to treat whatever comes back as a
                  * change, so the new outcome is always reported. Must be a
                  * value cyw43_tcpip_link_status() can never return (it yields

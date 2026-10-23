@@ -51,9 +51,9 @@
  * sys_timeout() user above the stack has to be added here or the pool runs
  * dry and lwip_utk_assert() halts with "pool MEMP_SYS_TIMEOUT is empty":
  * mqtt.c arms its own cyclic keepalive timer per client, and mqtt_utk.c adds
- * the heartbeat chain plus a connect-retry timer. Four covers those with
- * room to spare; each slot is only a few bytes. */
-#define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 4)
+ * a drain timer, a CONNACK timeout and a reconnect back-off timer (Buddy 1).
+ * Six covers those with room to spare; each slot is only a few bytes. */
+#define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 6)
 
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
@@ -90,5 +90,14 @@
 #define LWIP_STATS_DISPLAY          0
 
 #define LWIP_DEBUG                  0
+
+/* ---- MQTT client (Buddy 1, lwip/apps/mqtt) ----
+ * mqtt.c checks keep-alive on a cyclic timer that defaults to 5 s, which
+ * would stretch the 2 s keep-alive (NFR20) to ~10 s. With a 1 s timer the
+ * client sends PINGREQ after 2 s of silence and drops the link when nothing
+ * comes back from the broker for more than 3 s (1.5 x keep-alive). */
+#define MQTT_CYCLIC_TIMER_INTERVAL  1
+#define MQTT_OUTPUT_RINGBUF_SIZE    1024
+#define MQTT_REQ_MAX_IN_FLIGHT      8
 
 #endif /* LWIP_LWIPOPTS_H */

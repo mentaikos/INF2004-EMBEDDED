@@ -24,3 +24,6 @@ config/wifi_secrets.h
 
 # macOS
 .DS_Store
+
+# Buddy 1 CSV file log - raw bytes in hex
+s1_mqtt_log.csv
