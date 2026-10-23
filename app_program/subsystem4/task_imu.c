@@ -150,6 +150,34 @@ LOCAL void publish(void)
 /*  IMU Monitor task                                                  */
 /* ------------------------------------------------------------------ */
 
+/* Sensor not found at start-up: say why, once (integration aid).
+   Lines low      -> no power, shorted, or the cable is not on Grove 6.
+   Nothing found  -> SDA/SCL swapped, wrong port or module unpowered.
+   0x1E answers but IRA_REG_M != 0x48 -> not an LSM303DLHC (e.g. an
+   LSM303D answers WHO_AM_I 0x0F = 0x49, an LSM303AGR mag 0x4F = 0x40). */
+LOCAL void imu_diagnose(void)
+{
+	UB	found[8], v;
+	UINT	lv = lsm303_line_levels();
+	INT	n, i;
+
+	tm_printf((UB*)"s4: I2C idle levels SDA=%d SCL=%d (both must be 1)\n",
+		  lv & 1u, (lv >> 1) & 1u);
+	n = lsm303_scan(found, 8);
+	tm_printf((UB*)"s4: I2C scan: %d device(s)", n);
+	for (i = 0; i < n && i < 8; i++) tm_printf((UB*)" 0x%02x", found[i]);
+	tm_printf((UB*)"\n");
+	if (lsm303_read_reg(LSM303_MAG_ADDR, 0x0A, &v)) {
+		tm_printf((UB*)"s4: 0x1E IRA_REG_M=0x%02x (LSM303DLHC = 0x48)\n", v);
+	}
+	if (lsm303_read_reg(LSM303_MAG_ADDR, 0x0F, &v)) {
+		tm_printf((UB*)"s4: 0x1E reg 0x0F=0x%02x\n", v);
+	}
+	if (lsm303_read_reg(0x1D, 0x0F, &v)) {
+		tm_printf((UB*)"s4: 0x1D WHO_AM_I=0x%02x (LSM303D = 0x49)\n", v);
+	}
+}
+
 EXPORT void imu_task(INT stacd, void *exinf)
 {
 	IMU_SAMPLE	s;
@@ -181,6 +209,10 @@ EXPORT void imu_task(INT stacd, void *exinf)
 		  acc_ok ? "found" : "MISSING", mag_ok ? "found" : "MISSING",
 		  dg.sensor_found ? "LSM303DLHC ready, keep the robot STILL for 2 s"
 				  : "IMU FAULT, retrying every 1 s");
+
+	if (!dg.sensor_found) {
+		imu_diagnose();
+	}
 
 	imu_init(&imu);
 	if (!dg.sensor_found) {

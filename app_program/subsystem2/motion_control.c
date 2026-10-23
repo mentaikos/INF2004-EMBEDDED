@@ -27,13 +27,15 @@
  *	  - MOVE(d)/TURN target reached -> brake, MOTION_DONE, STOPPED
  *	  - a new MOVE/TURN pre-empts the current one; SPEED_LIMIT only
  *	    changes the cap.
- *	The task never blocks except in its tick wait, and sends to other
- *	tasks with TMO_POL only.
+ *	The task never blocks except in its tick wait (and Buddy 1's
+ *	telemetry-slot mutex, a few us every 100 ms, priority inheritance),
+ *	and sends to other tasks with TMO_POL only.
  */
 
 #include "subsystem2.h"
 #include "motor_driver.h"
 #include "encoder.h"
+#include "../subsystem1/subsystem1.h"	/* telemetry slot */
 #include <tk/syslib.h>
 
 /* ---------------------------------------------------------------------
@@ -77,6 +79,7 @@ LOCAL volatile UB	faults;		/* latched FAULT_* bits */
 LOCAL volatile UH	evt_drops;	/* events the VC buffer refused */
 LOCAL volatile ID	vc_mbf;		/* bound by motion_bind_vc() */
 LOCAL volatile ID	fault_flg;
+LOCAL UB		tlm_div;	/* telemetry slot divider */
 
 /* ---------------------------------------------------------------------
  *  Small helpers
@@ -461,6 +464,16 @@ LOCAL void publish_status(void)
 	g_motion_status = s2_sts_pack(mf.dir_l ? -sl : sl, mf.dir_r ? -sr : sr,
 				      dist_mm, mf.state, mf.dir_l, mf.dir_r,
 				      stopped);
+
+	/* Buddy 1's telemetry slot (IF-S1-01): the tribunal's 26 bits =
+	   speed_l 7 | speed_r 7 | distance 12 = status bits [25:0].  Every
+	   5th cycle (100 ms) is enough for a 500 ms publisher; the call
+	   takes Buddy 1's mutex (priority inheritance) for a few us only. */
+	if (++tlm_div >= S2_TLM_EVERY) {
+		tlm_div = 0;
+		(void)s1_tlm_set_slot(S1_SLOT_B2,
+				      (UD)(g_motion_status & S2_TLM_MASK));
+	}
 }
 
 /* ---------------------------------------------------------------------

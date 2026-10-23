@@ -213,6 +213,10 @@ Inline UW s2_sts_pack(INT spd_l, INT spd_r, UW dist_mm, UINT state,
 	return w;
 }
 
+/* Telemetry slot for Buddy 1 (S1_SLOT_B2, 26 bits): status bits [25:0] */
+#define S2_TLM_MASK		0x03FFFFFFu
+#define S2_TLM_EVERY		5	/* cycles between slot updates (100 ms) */
+
 Inline INT  s2_sts_speed_l(UW w) { return s2_sext(w >> S2_STS_SPDL_SHIFT, 7); }
 Inline INT  s2_sts_speed_r(UW w) { return s2_sext(w >> S2_STS_SPDR_SHIFT, 7); }
 Inline UW   s2_sts_dist(UW w)    { return (w >> S2_STS_DIST_SHIFT) & S2_STS_DIST_MASK; }

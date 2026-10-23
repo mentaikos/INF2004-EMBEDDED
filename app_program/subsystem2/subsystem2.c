@@ -83,3 +83,15 @@ EXPORT ER subsystem2_start(void)
 #endif
 	return E_OK;
 }
+
+/*
+ * Buddy 1's E-STOP hook (subsystem1.h, IF-S1-02).  Replaces subsystem 1's
+ * WEAK print-only version.  A dashboard E-STOP sets the bit in flg_safety
+ * straight away: Motion wakes on it and brakes in the same instant, with
+ * no Vehicle Controller in the path (NFR10, best effort over MQTT).
+ * Only the VC clears it, on a new START.
+ */
+EXPORT void s1_out_estop(void)
+{
+	tk_set_flg(flg_safety, S2_FLG_ESTOP);
+}

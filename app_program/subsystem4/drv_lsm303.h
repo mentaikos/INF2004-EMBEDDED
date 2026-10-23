@@ -52,6 +52,12 @@ IMPORT BOOL	lsm303_init(void);
 /* Read both sensors (robot axes).  s->ok = FALSE on any I2C error. */
 IMPORT void	lsm303_read(IMU_SAMPLE *s);
 
+/* Bring-up diagnostics: idle line levels (bit 0 SDA, bit 1 SCL), bus
+   scan, single register read */
+IMPORT UINT	lsm303_line_levels(void);
+IMPORT INT	lsm303_scan(UB *found, INT max);
+IMPORT BOOL	lsm303_read_reg(UB addr, UB reg, UB *val);
+
 /* Diagnostics: transfers that failed (NACK / time-out), wraps */
 IMPORT UH	lsm303_error_count(void);
 

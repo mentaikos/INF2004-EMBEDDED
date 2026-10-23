@@ -27,6 +27,7 @@
 #include "../subsystem3/subsystem3.h"
 #include "../subsystem4/subsystem4.h"
 #include "../subsystem5/subsystem5.h"
+#include "../subsystem1/subsystem1.h"	/* heartbeat mission state */
 
 EXPORT volatile UW	g_vc_status;
 
@@ -119,6 +120,20 @@ LOCAL UW s5_status(void)
 	return (s5_get_status(&s) == E_OK) ? s.status : (UW)S5_ST_SENSOR_FAULT;
 }
 
+/* VC state -> Buddy 1's 3-bit heartbeat state (subsystem1.h):
+   0 INIT, 1 IDLE, 2 RUNNING, 3 E_STOPPED, 4 FAULT, 5 COMPLETE */
+LOCAL UINT vc_mission_state(UINT st)
+{
+	if (VC_IS_RUNNING(st)) return 2;
+	switch (st) {
+	case VC_ST_INIT:	return 0;
+	case VC_ST_E_STOPPED:	return 3;
+	case VC_ST_FAULT:	return 4;
+	case VC_ST_COMPLETE:	return 5;
+	default:		return 1;	/* IDLE */
+	}
+}
+
 LOCAL void set_state(UINT st)
 {
 	if (vc.state != st) {
@@ -126,6 +141,7 @@ LOCAL void set_state(UINT st)
 	}
 	vc.state = (UB)st;
 	vc.t_state = now_ms();
+	s1_set_mission_state(vc_mission_state(st));	/* Buddy 1 heartbeat */
 }
 
 LOCAL void script_clear(void)
@@ -249,7 +265,8 @@ LOCAL BOOL hazard_cleared(void)
 	UW	s5 = s5_status();
 	INT	s4 = s4_sts_state(s4_get_status_w0());
 
-	if (s4 == S4_ST_SHOCK || s4 == S4_ST_FAULT) return FALSE;
+	if (s4 == S4_ST_SHOCK) return FALSE;
+	if (VC_REQUIRE_IMU && s4 == S4_ST_FAULT) return FALSE;
 	if (s5_sts_state(s5) == S5_ST_SENSOR_FAULT) return FALSE;
 	if (vc_range_hazard(s5)) return FALSE;
 	if (s2_sts_state(motion_get_status()) == S2_ST_STALL_FAULT) return FALSE;
@@ -261,7 +278,7 @@ LOCAL BOOL hazard_cleared(void)
    Scan, then STARTING waits until it is watching forward. */
 LOCAL void do_start(void)
 {
-	if (!s3_is_calibrated() || !s4_is_calibrated()) {
+	if (!s3_is_calibrated() || (VC_REQUIRE_IMU && !s4_is_calibrated())) {
 		vc.reason = VC_R_NOT_CALIBRATED;
 		tm_printf((UB*)"vc: START refused, IR %d IMU %d calibrated\n",
 			  s3_is_calibrated(), s4_is_calibrated());
@@ -286,7 +303,8 @@ LOCAL void do_reset(void)
 	INT	s4 = s4_sts_state(s4_get_status_w0());
 
 	cmd_stop();		/* also clears Motion's STALL / ENC latch */
-	if (s4 == S4_ST_FAULT || s5_sts_state(s5) == S5_ST_SENSOR_FAULT) {
+	if ((VC_REQUIRE_IMU && s4 == S4_ST_FAULT) ||
+	    s5_sts_state(s5) == S5_ST_SENSOR_FAULT) {
 		vc.reason = VC_R_FAULT_ACTIVE;
 		tm_printf((UB*)"vc: reset refused, sensor still in fault\n");
 		return;
@@ -465,6 +483,10 @@ LOCAL void handle_event(UW w)
 		return;
 
 	case EVT_SENSOR_FAULT:
+		if (!VC_REQUIRE_IMU && pl == FAULT_IMU) {
+			vc.faults |= (UB)pl;	/* bench mode: IMU optional */
+			return;
+		}
 		if (run) enter_fault(VC_R_SENSOR_FAULT, (UINT)pl);
 		else vc.faults |= (UB)pl;	/* IDLE: START guard handles it */
 		return;

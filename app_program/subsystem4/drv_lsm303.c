@@ -262,3 +262,38 @@ EXPORT UH lsm303_error_count(void)
 {
 	return i2c_errors;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Bring-up diagnostics (added at integration): printed once when the */
+/*  sensor does not answer, to tell wiring from the wrong chip.        */
+/* ------------------------------------------------------------------ */
+
+/* Idle bus levels after lsm303_bus_init(): bit 0 SDA, bit 1 SCL.
+   Both must read 1 (pull-ups); 0 = no power / shorted / swapped cable. */
+EXPORT UINT lsm303_line_levels(void)
+{
+	UW	in = in_w(GPIO_IN);
+
+	return ((in >> S4_PIN_IMU_SDA) & 1u) | (((in >> S4_PIN_IMU_SCL) & 1u) << 1);
+}
+
+/* Probe 0x08..0x77; writes up to max answering addresses, returns count */
+EXPORT INT lsm303_scan(UB *found, INT max)
+{
+	UB	a;
+	INT	n = 0;
+
+	for (a = 0x08; a <= 0x77; a++) {
+		if (lsm303_probe(a)) {
+			if (n < max) found[n] = a;
+			n++;
+		}
+	}
+	return n;
+}
+
+/* One register read for the diagnostics.  TRUE = the device answered */
+EXPORT BOOL lsm303_read_reg(UB addr, UB reg, UB *val)
+{
+	return read_regs(addr, reg, val, 1);
+}

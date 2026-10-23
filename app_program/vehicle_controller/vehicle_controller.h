@@ -66,6 +66,11 @@
 #define VC_BYPASS_MIN_CM	10
 #define VC_BYPASS_MAX_CM	60
 
+/* START needs the IMU calibrated and an IMU fault stops the mission
+   (design).  0 = bench mode ONLY: drive without a working IMU (no hump
+   height, no shock E-STOP).  Never 0 on the track or in a demo. */
+#define VC_REQUIRE_IMU		1
+
 /* Finish condition (assumption A9, still open): 0 = only EVT_MISSION_END
    ends the mission; N = the N-th junction ends it. */
 #define VC_FINISH_JUNCTIONS	0
