@@ -61,4 +61,7 @@ IMPORT BOOL	lsm303_read_reg(UB addr, UB reg, UB *val);
 /* Diagnostics: transfers that failed (NACK / time-out), wraps */
 IMPORT UH	lsm303_error_count(void);
 
+/* Diagnostics: times SDA was found stuck low and clocked free (wraps) */
+IMPORT UH	lsm303_bus_recoveries(void);
+
 #endif /* DRV_LSM303_H */

@@ -160,21 +160,47 @@ LOCAL void imu_diagnose(void)
 	UB	found[8], v;
 	UINT	lv = lsm303_line_levels();
 	INT	n, i;
+	BOOL	acc = FALSE, mag = FALSE, ira_ok = FALSE;
 
-	tm_printf((UB*)"s4: I2C idle levels SDA=%d SCL=%d (both must be 1)\n",
-		  lv & 1u, (lv >> 1) & 1u);
+	tm_printf((UB*)"s4: I2C idle levels SDA=%d SCL=%d (both must be 1),"
+		  " stuck-bus recoveries %d\n",
+		  lv & 1u, (lv >> 1) & 1u, (INT)lsm303_bus_recoveries());
 	n = lsm303_scan(found, 8);
 	tm_printf((UB*)"s4: I2C scan: %d device(s)", n);
-	for (i = 0; i < n && i < 8; i++) tm_printf((UB*)" 0x%02x", found[i]);
+	for (i = 0; i < n && i < 8; i++) {
+		tm_printf((UB*)" 0x%02x", found[i]);
+		if (found[i] == LSM303_ACC_ADDR) acc = TRUE;
+		if (found[i] == LSM303_MAG_ADDR) mag = TRUE;
+	}
 	tm_printf((UB*)"\n");
 	if (lsm303_read_reg(LSM303_MAG_ADDR, 0x0A, &v)) {
 		tm_printf((UB*)"s4: 0x1E IRA_REG_M=0x%02x (LSM303DLHC = 0x48)\n", v);
+		ira_ok = (v == 0x48);
 	}
 	if (lsm303_read_reg(LSM303_MAG_ADDR, 0x0F, &v)) {
 		tm_printf((UB*)"s4: 0x1E reg 0x0F=0x%02x\n", v);
 	}
 	if (lsm303_read_reg(0x1D, 0x0F, &v)) {
 		tm_printf((UB*)"s4: 0x1D WHO_AM_I=0x%02x (LSM303D = 0x49)\n", v);
+	}
+
+	/* One plain-language verdict for whoever reads the log */
+	if ((lv & 3u) != 3u) {
+		tm_printf((UB*)"s4: VERDICT a line is held low: IMU unpowered, cable"
+			  " shorted, or not plugged into Grove 6 (GP26/GP27)\n");
+	} else if (n == 0) {
+		tm_printf((UB*)"s4: VERDICT nothing answers: SDA/SCL swapped, wrong"
+			  " Grove port, or the module has no power (check VIN/GND)\n");
+	} else if (!acc || !mag) {
+		tm_printf((UB*)"s4: VERDICT devices answer but not both 0x19 and 0x1E:"
+			  " a different IMU chip than the LSM303DLHC -- send this log"
+			  " to Buddy 4\n");
+	} else if (!ira_ok) {
+		tm_printf((UB*)"s4: VERDICT 0x19/0x1E answer but the ID is wrong: not an"
+			  " LSM303DLHC -- send this log to Buddy 4\n");
+	} else {
+		tm_printf((UB*)"s4: VERDICT wiring and chip look OK now (loose"
+			  " contact?); the IMU retries every 1 s\n");
 	}
 }
 
@@ -245,6 +271,8 @@ EXPORT void imu_task(INT stacd, void *exinf)
 					imu_restart(&imu);	/* calibrate again */
 					clr_fault(FAULT_IMU);
 					dg.sensor_found = 1;
+					tm_printf((UB*)"s4: IMU answers again, keep the"
+						  " robot STILL for 2 s (calibrating)\n");
 				}
 			}
 		} else {

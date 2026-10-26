@@ -178,9 +178,77 @@ LOCAL BOOL read_regs(UB addr, UB reg, UB *buf, INT n)
 	return i2c_xfer(addr, &reg, 1, buf, n);
 }
 
+/* ------------------------------------------------------------------ */
+/*  Bus recovery.  If the Pico resets (or is reflashed) in the middle  */
+/*  of a read while the sensor stays powered, the sensor can hold SDA  */
+/*  low, waiting for clocks that never come: every transfer then fails */
+/*  until its power is cut.  Standard fix (I2C spec 3.1.16): with the  */
+/*  pins as plain GPIO, clock SCL up to 9 times until SDA is released, */
+/*  then send a STOP.  Open drain is emulated: OUT stays 0, OE = 1     */
+/*  pulls the line low, OE = 0 lets the pull-up take it high.          */
+/* ------------------------------------------------------------------ */
+
+#define BUS_HALF_US		5	/* 100 kHz while clocking the bus free */
+#define PIN_BIT(pin)		(1u << (pin))
+
+LOCAL UH	bus_recoveries;		/* IMU task only */
+
+LOCAL void wait_us(UW us)
+{
+	UW	t0 = now_us();
+
+	while ((now_us() - t0) < us) ;
+}
+
+LOCAL void line_low(UINT pin)     { out_w(GPIO_OE_SET, PIN_BIT(pin)); }
+LOCAL void line_release(UINT pin) { out_w(GPIO_OE_CLR, PIN_BIT(pin)); }
+LOCAL UINT line_level(UINT pin)   { return (in_w(GPIO_IN) >> pin) & 1u; }
+
+LOCAL void bus_recover(void)
+{
+	INT	i;
+
+	/* Both lines released, as SIO inputs with pull-ups */
+	out_w(GPIO_OE_CLR, PIN_BIT(S4_PIN_IMU_SDA) | PIN_BIT(S4_PIN_IMU_SCL));
+	out_w(GPIO_OUT_CLR, PIN_BIT(S4_PIN_IMU_SDA) | PIN_BIT(S4_PIN_IMU_SCL));
+	out_w(GPIO(S4_PIN_IMU_SDA), GPIO_IE | GPIO_DRIVE_4MA | GPIO_PUE | GPIO_SHEMITT);
+	out_w(GPIO(S4_PIN_IMU_SCL), GPIO_IE | GPIO_DRIVE_4MA | GPIO_PUE | GPIO_SHEMITT);
+	out_w(GPIO_CTRL(S4_PIN_IMU_SDA), GPIO_CTRL_FUNCSEL_SIO);
+	out_w(GPIO_CTRL(S4_PIN_IMU_SCL), GPIO_CTRL_FUNCSEL_SIO);
+	wait_us(BUS_HALF_US);
+
+	if (line_level(S4_PIN_IMU_SDA)) return;	/* bus idle: nothing to do */
+	bus_recoveries++;
+
+	for (i = 0; i < 9 && !line_level(S4_PIN_IMU_SDA); i++) {
+		line_low(S4_PIN_IMU_SCL);
+		wait_us(BUS_HALF_US);
+		line_release(S4_PIN_IMU_SCL);
+		wait_us(BUS_HALF_US);
+	}
+	/* STOP: SDA rises while SCL is high */
+	line_low(S4_PIN_IMU_SCL);
+	wait_us(BUS_HALF_US);
+	line_low(S4_PIN_IMU_SDA);
+	wait_us(BUS_HALF_US);
+	line_release(S4_PIN_IMU_SCL);
+	wait_us(BUS_HALF_US);
+	line_release(S4_PIN_IMU_SDA);
+	wait_us(BUS_HALF_US);
+}
+
+EXPORT UH lsm303_bus_recoveries(void)
+{
+	return bus_recoveries;
+}
+
 EXPORT void lsm303_bus_init(void)
 {
 	UW	t0;
+
+	/* Free a bus left stuck by an earlier reset, before I2C1 takes the
+	   pins (the pins switch back to I2C1 at the end of this function) */
+	bus_recover();
 
 	/* Pulse the I2C1 reset (atomic set/clear aliases: RESETS is shared
 	   with every other peripheral) and wait until it is out of reset */
