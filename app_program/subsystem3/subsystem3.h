@@ -185,7 +185,13 @@ IMPORT void	s3_bind_vc(ID mbf_vc_evt, ID flg_fault);
 #ifndef FAULT_BARCODE_ERR
 #define FAULT_BARCODE_ERR	0x0020u
 #endif
-#define S3_FAULT_IR_RIGHT	1	/* EVT_SENSOR_FAULT payload from S3 */
+/* IR_RIGHT calibration failed (sensor not on white, unplugged or
+   saturated).  Sent as the EVT_SENSOR_FAULT payload and set in
+   flg_fault; cleared by subsystem 3 once calibration succeeds.  Its own
+   bit, so it never reads as another owner's fault (e.g. FAULT_STALL). */
+#ifndef FAULT_IR_RIGHT
+#define FAULT_IR_RIGHT		0x0100u
+#endif
 
 /* =====================================================================
  *  Private to subsystem 3.  Declared here (not in extra headers) so the

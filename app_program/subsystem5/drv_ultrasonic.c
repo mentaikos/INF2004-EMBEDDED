@@ -128,7 +128,6 @@ EXPORT UB drv_us_ping(void)
 		return S5_RANGE_NO_ECHO;         /* stuck/old high is not a new echo */
 	}
 	start = in_w(TIMER_TIMERAWL);
-	echo_phase = 1;
 	ISpinUnlock(&echo_lock, mask);
 	/* Tick is 10 ms: use the hardware timer for this short 10-us pulse. */
 	DI(pulse_mask);
@@ -137,6 +136,16 @@ EXPORT UB drv_us_ping(void)
 	while ((UW)(in_w(TIMER_TIMERAWL) - pulse) < 10u) { }
 	gpio_set_val(S5_PIN_TRIG, 0);
 	EI(pulse_mask);
+	/* Arm only now.  TRIG and ECHO share one Grove cable, so the trigger
+	   can couple a short blip onto ECHO; armed before TRIG, that blip was
+	   timed as a ~10 us "echo" = NEAR with nothing in front.  A real echo
+	   rises only after the 8-cycle 40 kHz burst (~200 us), so nothing real
+	   is missed.  Drop edges latched during TRIG before arming. */
+	ISpinLock(&echo_lock, &mask);
+	out_w(S5_ECHO_INTR, S5_ECHO_EDGE_BITS);
+	echo_width_us = 0;
+	echo_phase = 1;
+	ISpinUnlock(&echo_lock, mask);
 	er = tk_wai_sem(sem_echo, 1, 30);
 	ISpinLock(&echo_lock, &mask);
 	width = echo_width_us;

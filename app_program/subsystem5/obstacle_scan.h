@@ -17,6 +17,8 @@
 #define S5_DETECT_CM           20
 #define S5_CRITICAL_MM         50       /* TODO validate brake distance */
 #define S5_ECHO_TIMEOUT_US     30000u
+#define S5_ECHO_MIN_US         100u     /* < 1.7 cm: below the HC-SR04P's 2 cm
+					   minimum, so a glitch, not an echo */
 #define S5_INVALID_LIMIT       3
 #define S5_RETRY_LIMIT         3
 #define S5_RETRY_MS            1000
@@ -100,7 +102,7 @@ typedef struct {
 	UB line_fresh : 1;
 	UB index : 5;
 	UB near_count : 2;
-	UB reserved : 1;
+	UB crit_seen : 1;       /* one critical reading, waiting for a second */
 	UB invalid_count : 2;
 	UB retries : 2;
 	UB line_count : 2;

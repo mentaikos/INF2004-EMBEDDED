@@ -43,7 +43,7 @@ LOCAL INT project(INT mm, INT degrees)
 EXPORT UB s5_range_from_echo(UW width_us)
 {
 	UW mm;
-	if (width_us == 0 || width_us > S5_ECHO_TIMEOUT_US)
+	if (width_us < S5_ECHO_MIN_US || width_us > S5_ECHO_TIMEOUT_US)
 		return S5_RANGE_NO_ECHO;
 	/* d = c*t/2. c=343 m/s: mm = us*343/2000, rounded once.
 	 * Classify BEFORE cm rounding so a 49 mm echo stays NEAR. */
@@ -396,8 +396,16 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 	if (range > 100u || range == 4 || range == S5_RANGE_UNSCANNED)
 		range = S5_RANGE_NO_ECHO;
 	s->range = range;
-	/* A physical near return is never suppressed by hump masking. */
+	/* A physical near return is never suppressed by hump masking, but it
+	 * must be seen on two consecutive pings: one stray echo (noise, TRIG
+	 * crosstalk) no longer E-STOPs the robot.  Cost: one 60 ms ping, about
+	 * 6 mm at the 10 cm/s cap that applies within 20 cm (NFR12). */
 	if (range == S5_RANGE_NEAR || (measured(range) && range * 10u <= S5_CRITICAL_MM)) {
+		if (!s->crit_seen) {
+			s->crit_seen = 1;
+			return;             /* unconfirmed: this ping is ignored */
+		}
+		s->crit_seen = 0;
 		out->estop = TRUE;
 		invalidate(s);
 		s->state = S5_ST_OBSTACLE_DETECTED;
@@ -405,6 +413,7 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 		out->payload = (UW)range | ((UW)10u << 7);
 		return;
 	}
+	s->crit_seen = 0;
 	if (s->state == S5_ST_SENSOR_FAULT) {
 		if (s->retries < S5_RETRY_LIMIT) s->retries++;
 		s->retry_ms = in->now_ms;

@@ -96,6 +96,14 @@ LOCAL void set_fault(UINT bits)
 	if (flg > 0) tk_set_flg(flg, bits);
 }
 
+/* Clear only subsystem 3's own bits */
+LOCAL void clear_fault(UINT bits)
+{
+	ID	flg = fault_flg;
+
+	if (flg > 0) tk_clr_flg(flg, ~bits);
+}
+
 /* Motion Control (S2) keeps only the newest byte; never waits */
 LOCAL void send_steer(void)
 {
@@ -165,13 +173,15 @@ LOCAL void calibrate(UH raw)
 		bc_overflows_seen = drv_ir_overflow_count();
 		drv_ir_start_edges(white);
 		s3.calibrated = 1;
+		if (cal.fault_sent) clear_fault(FAULT_IR_RIGHT);
 		tm_printf((UB*)"s3: calibrated, white=%d (range %d..%d)\n",
 			  white, cal.min, cal.max);
 	} else {
 		/* Not on plain white, or the sensor is unplugged/saturated:
 		   report once, then keep retrying quietly */
 		if (!cal.fault_sent) {
-			send_vc(EVT_SENSOR_FAULT, S3_FAULT_IR_RIGHT);
+			set_fault(FAULT_IR_RIGHT);
+			send_vc(EVT_SENSOR_FAULT, FAULT_IR_RIGHT);
 			cal.fault_sent = 1;
 			tm_printf((UB*)"s3: calibration failed, white=%d"
 				  " range %d..%d, retrying\n",

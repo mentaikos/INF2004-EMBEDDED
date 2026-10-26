@@ -236,6 +236,13 @@ LOCAL BOOL s5_check_critical(void)
 	if (out.event >= 0) return FALSE;
 	s5_scan_sample(&s, &in, 18, &out);
 	if (out.event != 6) return FALSE;     /* persistent obstacle is not masked */
+	/* Critical (< 5 cm) needs two consecutive readings: one stray NEAR,
+	   then a normal reading, must not stop the robot */
+	s5_scan_sample(&s, &in, S5_RANGE_NEAR, &out);
+	if (out.estop || out.event >= 0) return FALSE;
+	s5_scan_sample(&s, &in, 60, &out);
+	s5_scan_sample(&s, &in, S5_RANGE_NEAR, &out);
+	if (out.estop || out.event >= 0) return FALSE;
 	s5_scan_sample(&s, &in, S5_RANGE_NEAR, &out);
 	return out.estop && out.event == 6 && s.state == S5_ST_OBSTACLE_DETECTED;
 }

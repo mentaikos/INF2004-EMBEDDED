@@ -120,6 +120,7 @@ IMPORT void subsystem5_test(void);
 #define FAULT_BARCODE_ERR	0x0020u	/* S3 Line & Barcode: read failed */
 #define FAULT_LINE_TIMEOUT	0x0040u	/* VC LINE_SEARCH / S5 rejoin > 3 s */
 #define FAULT_SHOCK		0x0080u	/* S4 IMU: shock latch */
+#define FAULT_IR_RIGHT		0x0100u	/* S3: barcode IR not calibrated */
 
 /* Print a readable message if a kernel call failed (negative error code) */
 #define CHECK(er, what)							\
