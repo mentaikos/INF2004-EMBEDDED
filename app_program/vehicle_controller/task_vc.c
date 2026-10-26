@@ -116,8 +116,15 @@ LOCAL BOOL estop_set(void)
 
 LOCAL UW s5_status(void)
 {
+#if VC_USE_ULTRASONIC
 	S5_SNAPSHOT	s;
 	return (s5_get_status(&s) == E_OK) ? s.status : (UW)S5_ST_SENSOR_FAULT;
+#else
+	/* Bench mode: Obstacle Scan not running.  Report FORWARD_WATCH with
+	   the range "beyond 100 cm", so START and STARTING never wait for it
+	   and the VC never enters OBSTACLE_SCAN. */
+	return (UW)S5_ST_FORWARD_WATCH | ((UW)S5_RANGE_FAR << 11);
+#endif
 }
 
 /* VC state -> Buddy 1's 3-bit heartbeat state (subsystem1.h):
@@ -318,6 +325,13 @@ LOCAL void do_start(void)
 		vc.reason = (UB)why;
 		return;
 	}
+#if !VC_USE_ULTRASONIC
+	tm_printf((UB*)"vc: WARNING ultrasonic disabled (VC_USE_ULTRASONIC 0):"
+		  " no obstacle detection\n");
+#endif
+#if !S4_SHOCK_ESTOP
+	tm_printf((UB*)"vc: WARNING shock E-STOP disabled (S4_SHOCK_ESTOP 0)\n");
+#endif
 	cmd_stop();				/* Motion: E_STOP_BRAKE -> STOPPED */
 	tk_clr_flg(flg_safety, ~(UINT)S2_FLG_ESTOP);
 	s5_reset();			/* needs E_STOP clear and Motion stopped */

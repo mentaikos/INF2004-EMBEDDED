@@ -74,6 +74,11 @@
                  brake latency (S4-T02, Version C row 11)
      TIMING pin  high while one IMU cycle runs: period, jitter and WCET
                  (S4-T01) */
+/* SHOCK -> E-STOP.  1 = normal (FR27, NFR10).  0 = bench mode ONLY while
+   false shocks are being fixed: SHOCK is still detected, logged and
+   latched, but does not set E-STOP.  Never 0 on the track or in a demo. */
+#define S4_SHOCK_ESTOP		0
+
 #define S4_DEBUG_SHOCK_PIN	(-1)
 #define S4_DEBUG_TIMING_PIN	(-1)
 

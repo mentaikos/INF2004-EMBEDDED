@@ -103,7 +103,9 @@ LOCAL void debug_pin(INT pin, UINT level)
    Telemetry (s4_shock_ack). */
 LOCAL void on_shock(void)
 {
+#if S4_SHOCK_ESTOP
 	tk_set_flg(flg_safety, S2_FLG_ESTOP);
+#endif
 	shock_seq = (UB)(shock_seq + 1);
 	shock_tlm_until = sys_ms() + S4_TLM_SHOCK_HOLD_MS;
 	set_fault(FAULT_SHOCK);
@@ -317,6 +319,12 @@ EXPORT void imu_task(INT stacd, void *exinf)
 
 		/* 3.-4. logic and reactions */
 		n = imu_step(&imu, &s, s2_dist_diff(prev_dist, dist), now_ms, ev);
+		if (n > 0 && ev[0].type == IMU_EV_SHOCK) {
+			/* Integration aid: the raw reading that tripped SHOCK.
+			   At rest |a| is ~1000 mg; shock is > 2500 mg. */
+			tm_printf((UB*)"s4: SHOCK raw ax=%d ay=%d az=%d mg (%s)\n",
+				  s.ax, s.ay, s.az, lsm303_chip_name());
+		}
 		prev_dist = dist;
 		handle_events(ev, n);
 #if APP_TEST

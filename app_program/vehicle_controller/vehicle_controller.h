@@ -71,6 +71,14 @@
    height, no shock E-STOP).  Never 0 on the track or in a demo. */
 #define VC_REQUIRE_IMU		1
 
+/* Obstacle Scan (Buddy 5, ultrasonic + servo).  1 = normal.  0 = bench
+   mode ONLY: Obstacle Scan's task is not started (its objects still are),
+   and the VC treats the path ahead as always clear -- NO obstacle
+   detection, NO stop for an obstacle (NFR1, NFR10, NFR12 not met).
+   For testing line following and motion while the ultrasonic is being
+   fixed.  Never 0 on the track with people or obstacles, or in a demo. */
+#define VC_USE_ULTRASONIC	0
+
 /* Finish condition (assumption A9, still open): 0 = only EVT_MISSION_END
    ends the mission; N = the N-th junction ends it. */
 #define VC_FINISH_JUNCTIONS	0

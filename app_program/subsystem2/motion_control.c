@@ -462,18 +462,33 @@ LOCAL BOOL stalled(void)
 #if S2_DEBUG
 LOCAL void debug_print(void)
 {
-	static UB n;
+	static UB n, lv_prev, tog_l, tog_r;
 	static UH last;
+	UB	lv;
+
+	/* Raw encoder pin levels, sampled every 20 ms: if a level toggles
+	   while the count stays 0, the signal arrives but the interrupt does
+	   not count it; if it never toggles, no signal reaches the pin. */
+	lv = (UB)((gpio_get_val(S2_PIN_ENC_L) ? 1u : 0u) |
+		  (gpio_get_val(S2_PIN_ENC_R) ? 2u : 0u));
+	if ((lv ^ lv_prev) & 1u) { if (tog_l < 255) tog_l++; }
+	if ((lv ^ lv_prev) & 2u) { if (tog_r < 255) tog_r++; }
+	lv_prev = lv;
 
 	if (++n < 1000 / S2_PERIOD_MS) return;
 	n = 0;
 	/* quiet while stopped, unless a wheel was turned by hand */
-	if (wh[0].duty == 0 && wh[1].duty == 0 && last == enc_prev.cnt.both) return;
+	if (wh[0].duty == 0 && wh[1].duty == 0 && last == enc_prev.cnt.both &&
+	    tog_l == 0 && tog_r == 0) return;
 	last = enc_prev.cnt.both;
-	tm_printf((UB*)"s2: st=%d L cnt=%d duty=%d v=%dmm/s | R cnt=%d duty=%d"
-		  " v=%dmm/s\n", mf.state,
-		  enc_prev.cnt.c[ENC_LEFT], wh[0].duty, wh[0].meas,
-		  enc_prev.cnt.c[ENC_RIGHT], wh[1].duty, wh[1].meas);
+	tm_printf((UB*)"s2: st=%d L(GP%d) cnt=%d pin=%d toggles=%d duty=%d v=%dmm/s"
+		  " | R(GP%d) cnt=%d pin=%d toggles=%d duty=%d v=%dmm/s\n",
+		  mf.state,
+		  S2_PIN_ENC_L, enc_prev.cnt.c[ENC_LEFT], lv & 1u, tog_l,
+		  wh[0].duty, wh[0].meas,
+		  S2_PIN_ENC_R, enc_prev.cnt.c[ENC_RIGHT], (lv >> 1) & 1u, tog_r,
+		  wh[1].duty, wh[1].meas);
+	tog_l = tog_r = 0;
 }
 #endif
 

@@ -126,7 +126,12 @@ EXPORT INT usermain(void)
 	CHECK(subsystem2_start(), "subsystem2_start");
 	CHECK(subsystem3_start(), "subsystem3_start");
 	CHECK(subsystem4_start(), "subsystem4_start");
+#if VC_USE_ULTRASONIC
 	CHECK(subsystem5_start(), "subsystem5_start");
+#else
+	tm_printf((UB*)"Obstacle Scan NOT started (VC_USE_ULTRASONIC 0,"
+		  " bench mode)\n");
+#endif
 	CHECK(vc_start(), "vc_start");
 
 	tm_printf((UB*)"all subsystems started\n\n");
