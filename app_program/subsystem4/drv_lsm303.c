@@ -77,6 +77,19 @@
 #define MAG_IRA_REG_M		0x0A
 #define MAG_IRA_VALUE		0x48	/* 'H' */
 
+/* LSM303AGR (many newer GY-511 boards): same addresses, the accelerometer
+   registers used here are the same (CTRL_REG1_A, CTRL_REG4_A, OUT_X_L_A),
+   but the magnetometer is different (datasheet DocID027765) */
+#define ACC_WHO_AM_I_A		0x0F	/* 0x33 on DLHC and AGR */
+#define AGR_WHO_AM_I_M		0x4F
+#define AGR_WHO_AM_I_VALUE	0x40
+#define AGR_CFG_REG_A_M		0x60	/* temp comp, ODR, mode */
+#define AGR_CFG_REG_C_M		0x62	/* BDU */
+#define AGR_OUTX_L_REG_M	0x68	/* X, Y, Z, little endian, auto-increment */
+
+LOCAL UB	chip;			/* LSM303_CHIP_xxx, IMU task only */
+LOCAL UB	last_ira, last_agr_id, last_acc_id;	/* for the fault log */
+
 LOCAL UH	i2c_errors;		/* IMU task only */
 
 LOCAL UW now_us(void)
@@ -284,19 +297,72 @@ EXPORT BOOL lsm303_probe(UB addr)
 	return i2c_xfer(addr, NULL, 0, &d, 1);
 }
 
+/*
+ * Find out which chip is fitted, then configure it.  The accelerometer
+ * (pitch, humps, shock) is set up the same way on both chips:
+ *   CTRL_REG1_A = 0x57  100 Hz, X/Y/Z on
+ *   CTRL_REG4_A = 0x98  BDU, +-4 g, high resolution (12 bits, ~2 mg/LSB)
+ * If no known magnetometer answers but the accelerometer does, run
+ * accelerometer-only: everything works except heading / turn rate.
+ */
 EXPORT BOOL lsm303_init(void)
 {
-	UB	id = 0;
+	UB	v;
 
+	chip = LSM303_CHIP_NONE;
+	last_ira = last_agr_id = last_acc_id = 0;
 	lsm303_bus_init();
-	if (!read_regs(LSM303_MAG_ADDR, MAG_IRA_REG_M, &id, 1)) return FALSE;
-	if (id != MAG_IRA_VALUE) return FALSE;	/* not an LSM303DLHC */
 
-	return write_reg(LSM303_ACC_ADDR, ACC_CTRL_REG1_A, 0x57) &&
-	       write_reg(LSM303_ACC_ADDR, ACC_CTRL_REG4_A, 0x98) &&
-	       write_reg(LSM303_MAG_ADDR, MAG_CRA_REG_M, 0x18) &&
-	       write_reg(LSM303_MAG_ADDR, MAG_CRB_REG_M, 0x20) &&
-	       write_reg(LSM303_MAG_ADDR, MAG_MR_REG_M, 0x00);
+	/* The accelerometer must answer and take its settings */
+	if (!read_regs(LSM303_ACC_ADDR, ACC_WHO_AM_I_A, &v, 1)) return FALSE;
+	last_acc_id = v;
+	if (!write_reg(LSM303_ACC_ADDR, ACC_CTRL_REG1_A, 0x57) ||
+	    !write_reg(LSM303_ACC_ADDR, ACC_CTRL_REG4_A, 0x98)) return FALSE;
+
+	/* Which magnetometer?  DLHC: IRA_REG_M = 'H'.  AGR: WHO_AM_I_M = 0x40 */
+	if (read_regs(LSM303_MAG_ADDR, MAG_IRA_REG_M, &v, 1)) {
+		last_ira = v;
+		if (v == MAG_IRA_VALUE &&
+		    write_reg(LSM303_MAG_ADDR, MAG_CRA_REG_M, 0x18) &&	/* 75 Hz */
+		    write_reg(LSM303_MAG_ADDR, MAG_CRB_REG_M, 0x20) &&	/* +-1.3 G */
+		    write_reg(LSM303_MAG_ADDR, MAG_MR_REG_M, 0x00)) {	/* continuous */
+			chip = LSM303_CHIP_DLHC;
+			return TRUE;
+		}
+	}
+	if (read_regs(LSM303_MAG_ADDR, AGR_WHO_AM_I_M, &v, 1)) {
+		last_agr_id = v;
+		if (v == AGR_WHO_AM_I_VALUE &&
+		    write_reg(LSM303_MAG_ADDR, AGR_CFG_REG_A_M, 0x8C) &&	/* temp comp, 100 Hz, continuous */
+		    write_reg(LSM303_MAG_ADDR, AGR_CFG_REG_C_M, 0x10)) {	/* BDU */
+			chip = LSM303_CHIP_AGR;
+			return TRUE;
+		}
+	}
+	chip = LSM303_CHIP_ACC_ONLY;
+	return TRUE;
+}
+
+EXPORT UINT lsm303_chip(void)
+{
+	return chip;
+}
+
+EXPORT const char *lsm303_chip_name(void)
+{
+	switch (chip) {
+	case LSM303_CHIP_DLHC:		return "LSM303DLHC";
+	case LSM303_CHIP_AGR:		return "LSM303AGR";
+	case LSM303_CHIP_ACC_ONLY:	return "accelerometer only (no known magnetometer, heading off)";
+	default:			return "none";
+	}
+}
+
+EXPORT void lsm303_last_ids(UB *acc_id, UB *ira, UB *agr_id)
+{
+	*acc_id = last_acc_id;
+	*ira    = last_ira;
+	*agr_id = last_agr_id;
 }
 
 EXPORT void lsm303_read(IMU_SAMPLE *s)
@@ -304,8 +370,12 @@ EXPORT void lsm303_read(IMU_SAMPLE *s)
 	UB	a[6], m[6];
 	H	sx, sy, sz, mx, my, mz;
 
-	s->ok = read_regs(LSM303_ACC_ADDR, ACC_OUT_X_L_A | ACC_AUTO_INC, a, 6) &&
-		read_regs(LSM303_MAG_ADDR, MAG_OUT_X_H_M, m, 6);
+	s->ok = read_regs(LSM303_ACC_ADDR, ACC_OUT_X_L_A | ACC_AUTO_INC, a, 6);
+	if (s->ok && chip == LSM303_CHIP_DLHC) {
+		s->ok = read_regs(LSM303_MAG_ADDR, MAG_OUT_X_H_M, m, 6);
+	} else if (s->ok && chip == LSM303_CHIP_AGR) {
+		s->ok = read_regs(LSM303_MAG_ADDR, AGR_OUTX_L_REG_M, m, 6);
+	}
 	if (!s->ok) return;
 
 	/* accel: little endian, 12 bits left-justified -> >> 4, 2 mg/LSB */
@@ -313,10 +383,18 @@ EXPORT void lsm303_read(IMU_SAMPLE *s)
 	sy = (H)(((H)(UH)(a[2] | (a[3] << 8)) >> 4) * 2);
 	sz = (H)(((H)(UH)(a[4] | (a[5] << 8)) >> 4) * 2);
 
-	/* mag: big endian, order X, Z, Y; raw counts are enough for heading */
-	mx = (H)(UH)((m[0] << 8) | m[1]);
-	mz = (H)(UH)((m[2] << 8) | m[3]);
-	my = (H)(UH)((m[4] << 8) | m[5]);
+	/* mag: raw counts are enough for heading */
+	if (chip == LSM303_CHIP_DLHC) {		/* big endian, order X, Z, Y */
+		mx = (H)(UH)((m[0] << 8) | m[1]);
+		mz = (H)(UH)((m[2] << 8) | m[3]);
+		my = (H)(UH)((m[4] << 8) | m[5]);
+	} else if (chip == LSM303_CHIP_AGR) {	/* little endian, order X, Y, Z */
+		mx = (H)(UH)(m[0] | (m[1] << 8));
+		my = (H)(UH)(m[2] | (m[3] << 8));
+		mz = (H)(UH)(m[4] | (m[5] << 8));
+	} else {				/* accelerometer only: heading 0 */
+		mx = my = mz = 0;
+	}
 
 	s->ax = LSM303_ROBOT_X(sx, sy, sz);
 	s->ay = LSM303_ROBOT_Y(sx, sy, sz);

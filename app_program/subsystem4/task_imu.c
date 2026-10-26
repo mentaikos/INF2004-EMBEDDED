@@ -213,6 +213,7 @@ EXPORT void imu_task(INT stacd, void *exinf)
 	UW		dist, prev_dist;
 	BOOL		acc_ok, mag_ok;
 	INT		n;
+	UB		retries = 0, id_acc, id_ira, id_agr;
 
 	(void)stacd; (void)exinf;
 
@@ -233,8 +234,11 @@ EXPORT void imu_task(INT stacd, void *exinf)
 	tm_printf((UB*)"s4: I2C1 GP%d/GP%d: accel 0x19 %s, mag 0x1E %s -> %s\n",
 		  S4_PIN_IMU_SDA, S4_PIN_IMU_SCL,
 		  acc_ok ? "found" : "MISSING", mag_ok ? "found" : "MISSING",
-		  dg.sensor_found ? "LSM303DLHC ready, keep the robot STILL for 2 s"
+		  dg.sensor_found ? "ready, keep the robot STILL for 2 s"
 				  : "IMU FAULT, retrying every 1 s");
+	if (dg.sensor_found) {
+		tm_printf((UB*)"s4: chip = %s\n", lsm303_chip_name());
+	}
 
 	if (!dg.sensor_found) {
 		imu_diagnose();
@@ -271,8 +275,20 @@ EXPORT void imu_task(INT stacd, void *exinf)
 					imu_restart(&imu);	/* calibrate again */
 					clr_fault(FAULT_IMU);
 					dg.sensor_found = 1;
-					tm_printf((UB*)"s4: IMU answers again, keep the"
-						  " robot STILL for 2 s (calibrating)\n");
+					tm_printf((UB*)"s4: IMU answers again (%s), keep"
+						  " the robot STILL for 2 s (calibrating)\n",
+						  lsm303_chip_name());
+				} else if (++retries % 5 == 0) {
+					/* Why it still fails, every 5 s, so the log
+					   explains itself even if opened late.
+					   ID 0 = no answer at all (wiring/power). */
+					lsm303_last_ids(&id_acc, &id_ira, &id_agr);
+					tm_printf((UB*)"s4: IMU still in FAULT: accel id"
+						  " 0x%02x, mag 0x0A=0x%02x 0x4F=0x%02x,"
+						  " i2c_err %d (0 = no answer: check"
+						  " wiring/power on Grove 6)\n",
+						  id_acc, id_ira, id_agr,
+						  (INT)lsm303_error_count());
 				}
 			}
 		} else {

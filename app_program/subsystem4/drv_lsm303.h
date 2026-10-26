@@ -46,8 +46,21 @@ IMPORT void	lsm303_bus_init(void);
 /* TRUE if a device answers at addr (bring-up scan) */
 IMPORT BOOL	lsm303_probe(UB addr);
 
-/* Bus init + check IRA_REG_M = 0x48 + configure both sensors.  TRUE = OK */
+/* Bus init, find the chip, configure it.  TRUE = the accelerometer works
+   (with or without a known magnetometer, see lsm303_chip()). */
 IMPORT BOOL	lsm303_init(void);
+
+/* Which chip lsm303_init() found */
+#define LSM303_CHIP_NONE	0
+#define LSM303_CHIP_DLHC	1	/* LSM303DLHC: accel + mag */
+#define LSM303_CHIP_AGR		2	/* LSM303AGR:  accel + mag (other registers) */
+#define LSM303_CHIP_ACC_ONLY	3	/* accel works, magnetometer unknown */
+IMPORT UINT	lsm303_chip(void);
+IMPORT const char *lsm303_chip_name(void);
+
+/* IDs read by the last lsm303_init() (0 = no answer), for the fault log:
+   accel WHO_AM_I_A (0x0F), DLHC IRA_REG_M (0x0A), AGR WHO_AM_I_M (0x4F) */
+IMPORT void	lsm303_last_ids(UB *acc_id, UB *ira, UB *agr_id);
 
 /* Read both sensors (robot axes).  s->ok = FALSE on any I2C error. */
 IMPORT void	lsm303_read(IMU_SAMPLE *s);
