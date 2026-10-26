@@ -21,6 +21,7 @@
 #include "imu_monitor.h"
 #include "drv_lsm303.h"
 #include "../subsystem2/subsystem2.h"	/* g_motion_status, flg_safety */
+#include "../subsystem1/subsystem1.h"	/* s1_tlm_set_slot, S1_SLOT_B4 */
 #include <tk/syslib.h>
 
 EXPORT ID		tid_imu;
@@ -36,6 +37,15 @@ LOCAL S4_DIAG		s4_diag;	/* guarded by mtx_s4_status */
 /* Shock latch: one writer per byte (s4_shock_ack in subsystem4.h) */
 LOCAL volatile UB	shock_seq;	/* IMU task only: shocks seen, wraps */
 LOCAL volatile UB	shock_acked;	/* Telemetry only: last one published */
+LOCAL UW		shock_tlm_until; /* IMU task only: hold in telemetry */
+
+LOCAL UW sys_ms(void)
+{
+	SYSTIM	tim;
+
+	tk_get_tim(&tim);
+	return tim.lo;
+}
 
 /* Bound by s4_bind_vc() before the tasks start; 0 = not yet */
 LOCAL volatile ID	vc_mbf;
@@ -95,6 +105,7 @@ LOCAL void on_shock(void)
 {
 	tk_set_flg(flg_safety, S2_FLG_ESTOP);
 	shock_seq = (UB)(shock_seq + 1);
+	shock_tlm_until = sys_ms() + S4_TLM_SHOCK_HOLD_MS;
 	set_fault(FAULT_SHOCK);
 	debug_pin(S4_DEBUG_SHOCK_PIN, 1);
 }
@@ -144,6 +155,11 @@ LOCAL void publish(void)
 	s4_w1 = w1;
 	s4_diag = dg;
 	tk_unl_mtx(mtx_s4_status);
+
+	/* Buddy 1's telemetry slot (44 bits, s4_tlm_slot): shock bit held
+	   1 s = two 500 ms frames, so it is always sent (Version C row 10) */
+	(void)s1_tlm_set_slot(S1_SLOT_B4, s4_tlm_slot(w0, w1,
+			(W)(shock_tlm_until - sys_ms()) > 0));
 }
 
 /* ------------------------------------------------------------------ */
@@ -213,7 +229,7 @@ EXPORT void imu_task(INT stacd, void *exinf)
 	UW		dist, prev_dist;
 	BOOL		acc_ok, mag_ok;
 	INT		n;
-	UB		retries = 0, id_acc, id_ira, id_agr;
+	UB		retries = 0, id_acc, id_ira, id_agr, id_d;
 
 	(void)stacd; (void)exinf;
 
@@ -282,13 +298,14 @@ EXPORT void imu_task(INT stacd, void *exinf)
 					/* Why it still fails, every 5 s, so the log
 					   explains itself even if opened late.
 					   ID 0 = no answer at all (wiring/power). */
-					lsm303_last_ids(&id_acc, &id_ira, &id_agr);
-					tm_printf((UB*)"s4: IMU still in FAULT: accel id"
-						  " 0x%02x, mag 0x0A=0x%02x 0x4F=0x%02x,"
-						  " i2c_err %d (0 = no answer: check"
-						  " wiring/power on Grove 6)\n",
-						  id_acc, id_ira, id_agr,
+					lsm303_last_ids(&id_acc, &id_ira, &id_agr, &id_d);
+					tm_printf((UB*)"s4: IMU still in FAULT: 0x19 accel id"
+						  " 0x%02x, 0x1E: 0x0A=0x%02x 0x4F=0x%02x"
+						  " 0x0F=0x%02x (LSM303D=0x49), i2c_err %d"
+						  " (all 0 = nothing answers: wiring/power)\n",
+						  id_acc, id_ira, id_agr, id_d,
 						  (INT)lsm303_error_count());
+					imu_diagnose();
 				}
 			}
 		} else {

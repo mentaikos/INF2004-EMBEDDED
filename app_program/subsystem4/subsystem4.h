@@ -130,6 +130,20 @@ IMPORT UB	s4_shock_seq(void);
 IMPORT BOOL	s4_shock_pending(void);
 IMPORT void	s4_shock_ack(UB seq);
 
+/* Telemetry slot (Buddy 1: S1_SLOT_B4 = 44 bits, frame bits 38..81),
+   set by the IMU task every 10 ms:
+	[43:13]  status word 0 (31 bits: state, pitch, heading, rate, cal)
+	[12:2]   status word 1 (11 bits: hump height, count, I2C fails)
+	[1]      shock, held 1 s (two 500 ms telemetry frames)
+	[0]      0, spare
+   The dashboard decodes it with the same shifts as s4_pack.h. */
+#define S4_TLM_SHOCK_HOLD_MS	1000
+Inline UD s4_tlm_slot(UW w0, UW w1, BOOL shock)
+{
+	return ((UD)(w0 & 0x7FFFFFFFu) << 13) | ((UD)(w1 & 0x7FFu) << 2) |
+	       ((UD)(shock ? 1u : 0u) << 1);
+}
+
 /* Diagnostics (console and tests; not sent) */
 typedef struct {
 	UW	wcet_us;	/* longest IMU cycle since start */
