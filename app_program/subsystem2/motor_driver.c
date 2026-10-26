@@ -35,7 +35,19 @@ LOCAL UW duty_to_cc(INT duty_pm)
 
 EXPORT void motor_init(void)
 {
-	UINT	w;
+	UINT	w, n;
+
+	/* Release the PWM block from reset.  The kernel only does this when
+	   it uses PWM for its own physical timer (config.h USE_PTMR, which
+	   is 0 here), so without this every PWM register write is ignored
+	   and the motor pins stay LOW: the motors never move under code,
+	   while the board's test buttons still work.  Atomic clear alias:
+	   RESETS is shared with every other peripheral.  Also needed by
+	   Buddy 5's servo (slice 6), which starts after this. */
+	clr_w(RESETS_RESET, RESETS_RESET_PWM);
+	for (n = 0; n < 100000u &&
+		    (in_w(RESETS_RESET_DONE) & RESETS_RESET_PWM) == 0; n++) {
+	}
 
 	for (w = 0; w < 2; w++) {
 		/* Compare values to 0 BEFORE the pins switch to PWM, so the

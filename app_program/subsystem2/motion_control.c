@@ -60,6 +60,8 @@ typedef struct {
 	UH	settle_ms;	/* braking before a direction change */
 	UH	progress;	/* counts since the current MOVE(d)/TURN */
 	UB	want_dir;	/* direction wanted by the state */
+	UB	hist[S2_SPEED_WIN];	/* counts in each of the last cycles */
+	UB	hi;		/* next slot in hist */
 } WHEEL;
 
 EXPORT volatile UW	g_motion_status;
@@ -261,25 +263,24 @@ LOCAL UW		cycle_prev_us;
 LOCAL void update_speed(UINT w, UINT d, UINT period_us, INT dt_ms)
 {
 	WHEEL	*p = &wh[w];
-	INT	est;
+	UINT	k, sum = 0;
 
+	/* Speed = counts in the last S2_SPEED_WIN cycles (100 ms).  With
+	   ~220 counts per turn that is ~20 counts at 20 cm/s, so the reading
+	   is steady.  (The single edge period, used before, jumped to tens of
+	   m/s on one short or noisy pulse.) */
+	(void)period_us;
+	p->hist[p->hi] = (UB)(d > 255u ? 255u : d);
+	p->hi = (UB)((p->hi + 1u) % S2_SPEED_WIN);
+	for (k = 0; k < S2_SPEED_WIN; k++) sum += p->hist[k];
+	p->meas = (H)s2_clamp((INT)(sum * S2_UM_PER_COUNT) /
+			      (S2_SPEED_WIN * dt_ms), 0, 2 * S2_TOP_SPEED_MM_S);
+
+	/* time since the last pulse, for the stall check */
 	if (d > 0) {
 		p->since_ms = 0;
-		if (period_us != ENC_PERIOD_NONE && period_us > 0) {
-			est = (INT)(S2_UM_PER_COUNT * 1000u / period_us);
-		} else {
-			est = (INT)(d * S2_UM_PER_COUNT) / dt_ms;  /* um/ms = mm/s */
-		}
-		p->meas = (H)((p->meas + est) / 2);
-	} else {
-		if (p->since_ms <= 0xFFFFu - (UH)dt_ms) p->since_ms += (UH)dt_ms;
-		if (p->since_ms >= S2_ZERO_SPEED_MS) {
-			p->meas = 0;
-		} else {
-			/* no edge yet: the speed is at most one count per since_ms */
-			est = (INT)(S2_UM_PER_COUNT / p->since_ms);
-			if (p->meas > est) p->meas = (H)est;
-		}
+	} else if (p->since_ms <= 0xFFFFu - (UH)dt_ms) {
+		p->since_ms += (UH)dt_ms;
 	}
 }
 
@@ -462,9 +463,16 @@ LOCAL BOOL stalled(void)
 #if S2_DEBUG
 LOCAL void debug_print(void)
 {
-	static UB n, lv_prev, tog_l, tog_r;
+	static UB n, lv_prev, tog_l, tog_r, cl_prev, cr_prev;
+	static W  tot_l, tot_r;		/* counts since boot, for measuring CPR */
 	static UH last;
 	UB	lv;
+
+	/* Running totals (the 8-bit counters wrap every 256 counts) */
+	tot_l += (UB)(enc_prev.cnt.c[ENC_LEFT]  - cl_prev);
+	tot_r += (UB)(enc_prev.cnt.c[ENC_RIGHT] - cr_prev);
+	cl_prev = enc_prev.cnt.c[ENC_LEFT];
+	cr_prev = enc_prev.cnt.c[ENC_RIGHT];
 
 	/* Raw encoder pin levels, sampled every 20 ms: if a level toggles
 	   while the count stays 0, the signal arrives but the interrupt does
@@ -481,13 +489,12 @@ LOCAL void debug_print(void)
 	if (wh[0].duty == 0 && wh[1].duty == 0 && last == enc_prev.cnt.both &&
 	    tog_l == 0 && tog_r == 0) return;
 	last = enc_prev.cnt.both;
-	tm_printf((UB*)"s2: st=%d L(GP%d) cnt=%d pin=%d toggles=%d duty=%d v=%dmm/s"
-		  " | R(GP%d) cnt=%d pin=%d toggles=%d duty=%d v=%dmm/s\n",
+	tm_printf((UB*)"s2: st=%d L(GP%d) total=%d pin=%d toggles=%d duty=%d"
+		  " v=%dmm/s | R(GP%d) total=%d pin=%d toggles=%d duty=%d v=%dmm/s\n",
 		  mf.state,
-		  S2_PIN_ENC_L, enc_prev.cnt.c[ENC_LEFT], lv & 1u, tog_l,
-		  wh[0].duty, wh[0].meas,
-		  S2_PIN_ENC_R, enc_prev.cnt.c[ENC_RIGHT], (lv >> 1) & 1u, tog_r,
-		  wh[1].duty, wh[1].meas);
+		  S2_PIN_ENC_L, tot_l, lv & 1u, tog_l, wh[0].duty, wh[0].meas,
+		  S2_PIN_ENC_R, tot_r, (lv >> 1) & 1u, tog_r, wh[1].duty,
+		  wh[1].meas);
 	tog_l = tog_r = 0;
 }
 #endif

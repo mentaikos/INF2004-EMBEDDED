@@ -74,13 +74,20 @@
  *     (report 9.5 / testing/subsystem2/TEST_LOG.md S2-M01..S2-M04).
  * ===================================================================== */
 #define S2_WHEEL_DIAM_MM	65	/* TODO measure */
-#define S2_ENC_CPR		20	/* TODO counts per wheel rev (one edge) */
+#define S2_ENC_CPR		220	/* counts per wheel rev, rising edges of A
+				   (S2-M01 26 Oct, hand-turned: L ~220,
+				   R ~217, +-10 %; likely 11 PPR x 1:20) */
 #define S2_TRACK_MM		120	/* TODO wheel centre to wheel centre */
-#define S2_TOP_SPEED_MM_S	600	/* TODO speed at 100 % duty */
-#define S2_DEADBAND_PM		250	/* TODO duty (per mille) that just starts a wheel */
-#define S2_KFF_Q8		320	/* feed-forward: (1000-250)/600 * 256 */
-#define S2_KP_Q8		512	/* PID gains, Q8 (256 = 1.0): tune */
-#define S2_KI_Q8		64
+/* Motor model from the 27 Oct bench run (wheels lifted, no load):
+   duty ~230-300 per mille held ~200 mm/s.  Fitted as deadband 100 +
+   0.75 per mille per mm/s, i.e. ~1200 mm/s at full duty unloaded.  On
+   the floor the load needs more duty: the integrator supplies it.
+   Re-fit on the track (S2-M06) and lower KP if the speed still swings. */
+#define S2_TOP_SPEED_MM_S	1200	/* unloaded speed at 100 % duty (estimate) */
+#define S2_DEADBAND_PM		100	/* duty (per mille) where a wheel starts */
+#define S2_KFF_Q8		192	/* feed-forward: (1000-100)/1200 * 256 */
+#define S2_KP_Q8		128	/* PI gains, Q8 (256 = 1.0); was 512, which */
+#define S2_KI_Q8		32	/* swung duty 0 <-> 400 around the target */
 #define S2_I_MAX_PM		300	/* integrator clamp, per mille duty */
 
 /* Derived: micrometres travelled per encoder count (pi ~ 355/113) */
@@ -98,15 +105,27 @@
 #define S2_HEADING_K_MM_S	15	/* heading hold: mm/s per count of L/R difference */
 #define S2_STEER_FULL		64	/* steer value giving a 100 % speed split */
 #define S2_STEER_TIMEOUT_MS	100	/* no steer message -> steer 0 */
+#define S2_SPEED_WIN		5	/* speed = counts in the last 5 cycles (100 ms) */
 #define S2_STALL_MS		300	/* PWM on, no pulse -> stall */
 #define S2_STALL_ARM_MS		500	/* start-up window before stall can trip */
 #define S2_ZERO_SPEED_MS	200	/* no pulse for this long -> speed 0 */
 #define S2_REVERSE_SETTLE_MS	60	/* brake before changing direction */
 #define S2_ENC_MAX_INTERVAL_MS	40	/* Part C row 3: one missed cycle */
-#define S2_ENC_DEBOUNCE_US	300	/* ignore edges closer than this */
-/* Largest believable count change in one read interval (x2 margin) */
+#define S2_ENC_DEBOUNCE_US	500	/* ignore edges closer than this: a real
+				   edge at top speed is ~1.5 ms apart */
+/* Largest believable count change in one read interval (x2 margin).
+   The formula needs the real counts per revolution: these motors' hall
+   encoders give hundreds per wheel turn, not the placeholder 20, which
+   would make every real reading look impossible (ENC_FAULT).  Until
+   S2_ENC_CPR is measured (S2-M01), use a loose bound that only catches
+   garbage; set S2_CPR_MEASURED to 1 after measuring. */
+#define S2_CPR_MEASURED		0
+#if S2_CPR_MEASURED
 #define S2_ENC_MAX_DELTA \
 	((S2_TOP_SPEED_MM_S * S2_ENC_MAX_INTERVAL_MS) / S2_UM_PER_COUNT * 2 + 2)
+#else
+#define S2_ENC_MAX_DELTA	200
+#endif
 
 /* =====================================================================
  *  5. mbf_motion_cmd -- one 32-bit packed word (VC -> Motion)
