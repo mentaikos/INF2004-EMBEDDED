@@ -292,6 +292,17 @@ LOCAL void begin_scan(S5_SCAN *s)
 EXPORT void s5_scan_tick(S5_SCAN *s, const S5_INPUT *in, S5_OUTPUT *out)
 {
 	output_init(out);
+	/* Integration fix (VC): a latched echo fault stops pinging after
+	   S5_RETRY_LIMIT retries, and nothing else could re-arm it, because
+	   the fault also holds E-STOP and RESET was only accepted with
+	   E-STOP clear -- so START stayed refused for ever, even after the
+	   sensor was fixed.  RESET now re-arms the retry pings while in
+	   SENSOR_FAULT.  This moves nothing and clears no flag: the state
+	   leaves SENSOR_FAULT only on a valid echo (s5_scan_sample). */
+	if ((in->flags & S5_RESET) && s->state == S5_ST_SENSOR_FAULT) {
+		s->retries = 0;
+		s->retry_ms = (UH)(in->now_ms - S5_RETRY_MS);
+	}
 	if ((in->flags & S5_CANCEL) || in->estop) {
 		if (s->state != S5_ST_FORWARD_WATCH && s->state != S5_ST_SENSOR_FAULT)
 			s->state = S5_ST_OBSTACLE_DETECTED;

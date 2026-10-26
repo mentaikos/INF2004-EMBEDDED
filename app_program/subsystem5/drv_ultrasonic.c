@@ -22,6 +22,29 @@ LOCAL UH echo_rise_us, echo_width_us;
 LOCAL UB echo_phase;                    /* 0 idle, 1 await rise, 2 await fall */
 LOCAL BOOL driver_ready;
 
+/* TEMPORARY bring-up aid (integration): once per 16 pings (~1 s) print
+   what the echo line did, so "no echo" can be told apart:
+     high = ECHO already high before the trigger (stuck high / wiring)
+     norise = no rising edge after the trigger (sensor not answering:
+              no power, TRIG/ECHO swapped, wrong Grove port)
+     nofall = rose but never fell inside 30 ms (nothing in range)
+     ok = complete echoes; w = last echo width in us (58 us per cm)
+   Set S5_DEBUG_PING to 0 once the sensor works. */
+#ifndef S5_DEBUG_PING
+#define S5_DEBUG_PING		1
+#endif
+#if S5_DEBUG_PING
+LOCAL UH dbg_pings, dbg_high, dbg_norise, dbg_nofall, dbg_ok, dbg_w;
+
+LOCAL void dbg_report(void)
+{
+	if (++dbg_pings < 16) return;
+	tm_printf((UB*)"s5: pings=%d ok=%d norise=%d nofall=%d high=%d w=%dus\n",
+		  dbg_pings, dbg_ok, dbg_norise, dbg_nofall, dbg_high, dbg_w);
+	dbg_pings = dbg_high = dbg_norise = dbg_nofall = dbg_ok = 0;
+}
+#endif
+
 LOCAL void echo_callback(UINT pin, UINT events)
 {
 	UINT mask;
@@ -99,6 +122,9 @@ EXPORT UB drv_us_ping(void)
 	out_w(S5_ECHO_INTR, S5_ECHO_EDGE_BITS);
 	if (gpio_get_val(S5_PIN_ECHO)) {
 		ISpinUnlock(&echo_lock, mask);
+#if S5_DEBUG_PING
+		dbg_high++; dbg_report();
+#endif
 		return S5_RANGE_NO_ECHO;         /* stuck/old high is not a new echo */
 	}
 	start = in_w(TIMER_TIMERAWL);
@@ -114,8 +140,16 @@ EXPORT UB drv_us_ping(void)
 	er = tk_wai_sem(sem_echo, 1, 30);
 	ISpinLock(&echo_lock, &mask);
 	width = echo_width_us;
+#if S5_DEBUG_PING
+	if (er == E_OK) { dbg_ok++; dbg_w = width; }
+	else if (echo_phase == 1) dbg_norise++;
+	else dbg_nofall++;
+#endif
 	echo_phase = 0;
 	ISpinUnlock(&echo_lock, mask);
+#if S5_DEBUG_PING
+	dbg_report();
+#endif
 	/* Timeout rounding may return late: enforce the physical time window. */
 	if (er != E_OK || (UW)(in_w(TIMER_TIMERAWL) - start) > S5_ECHO_TIMEOUT_US)
 		return S5_RANGE_NO_ECHO;

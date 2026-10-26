@@ -286,8 +286,13 @@ EXPORT UINT vc_start_check(BOOL verbose)
 	}
 	if (s5_sts_state(s5) == S5_ST_SENSOR_FAULT) {
 		why = VC_R_HAZARD;
-		if (verbose) tm_printf((UB*)"vc: START refused: ultrasonic fault"
-				       " (no echo)\n");
+		if (verbose) {
+			/* re-test the sensor: a valid echo clears the fault */
+			s5_reset();
+			tm_printf((UB*)"vc: START refused: ultrasonic fault (no"
+				  " echo); re-testing it, send START again in"
+				  " 3 s\n");
+		}
 	}
 	if (vc_range_hazard(s5)) {
 		why = VC_R_HAZARD;
@@ -327,6 +332,7 @@ LOCAL void do_reset(void)
 	INT	s4 = s4_sts_state(s4_get_status_w0());
 
 	cmd_stop();		/* also clears Motion's STALL / ENC latch */
+	if (s5_sts_state(s5) == S5_ST_SENSOR_FAULT) s5_reset();	/* re-test */
 	if ((VC_REQUIRE_IMU && s4 == S4_ST_FAULT) ||
 	    s5_sts_state(s5) == S5_ST_SENSOR_FAULT) {
 		vc.reason = VC_R_FAULT_ACTIVE;
