@@ -440,11 +440,42 @@ LOCAL BOOL stalled(void)
 	for (w = 0; w < 2; w++) {
 		if (wh[w].duty > 0 && wh[w].active_ms >= S2_STALL_ARM_MS &&
 		    wh[w].since_ms >= S2_STALL_MS) {
+			tm_printf((UB*)"s2: STALL %s wheel: duty %d/1000 for %d ms,"
+				  " no encoder pulse for %d ms (counts L=%d R=%d)\n",
+				  w ? "RIGHT" : "LEFT", wh[w].duty, wh[w].active_ms,
+				  wh[w].since_ms, enc_prev.cnt.c[ENC_LEFT],
+				  enc_prev.cnt.c[ENC_RIGHT]);
 			return TRUE;
 		}
 	}
 	return FALSE;
 }
+
+/* TEMPORARY bring-up aid: once a second while a wheel is driven (or
+   turned by hand), print
+   the raw 8-bit encoder counters, duty and measured speed.  If duty is
+   high but the counts do not move, the wheel is not turning (power) or
+   the encoder is not reaching GP0 / GP7.  Set S2_DEBUG to 0 afterwards. */
+#ifndef S2_DEBUG
+#define S2_DEBUG		1
+#endif
+#if S2_DEBUG
+LOCAL void debug_print(void)
+{
+	static UB n;
+	static UH last;
+
+	if (++n < 1000 / S2_PERIOD_MS) return;
+	n = 0;
+	/* quiet while stopped, unless a wheel was turned by hand */
+	if (wh[0].duty == 0 && wh[1].duty == 0 && last == enc_prev.cnt.both) return;
+	last = enc_prev.cnt.both;
+	tm_printf((UB*)"s2: st=%d L cnt=%d duty=%d v=%dmm/s | R cnt=%d duty=%d"
+		  " v=%dmm/s\n", mf.state,
+		  enc_prev.cnt.c[ENC_LEFT], wh[0].duty, wh[0].meas,
+		  enc_prev.cnt.c[ENC_RIGHT], wh[1].duty, wh[1].meas);
+}
+#endif
 
 /* ---------------------------------------------------------------------
  *  Status word (one aligned 32-bit store, single writer)
@@ -540,6 +571,9 @@ LOCAL void motion_cycle(void)
 
 	/* 6. status */
 	publish_status();
+#if S2_DEBUG
+	debug_print();
+#endif
 }
 
 /* ---------------------------------------------------------------------
