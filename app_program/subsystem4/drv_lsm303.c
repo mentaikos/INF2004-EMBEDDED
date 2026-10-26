@@ -1,6 +1,7 @@
 /*
  *	drv_lsm303.c
- *	Subsystem 4 -- LSM303DLHC driver on RP2040 I2C1 (GP26/GP27).
+ *	Subsystem 4 -- LSM303DLHC / LSM303AGR / LSM303D driver on RP2040 I2C1
+ *	(GP26/GP27).  lsm303_init() finds which chip the board carries.
  *
  *	APIs shown: in_w / out_w / set_w / clr_w (RP2040 registers)
  *
@@ -87,8 +88,25 @@
 #define AGR_CFG_REG_C_M		0x62	/* BDU */
 #define AGR_OUTX_L_REG_M	0x68	/* X, Y, Z, little endian, auto-increment */
 
+/* LSM303D (Grove 6-Axis Accelerometer&Compass V2): accel AND mag in one
+   chip at ONE address, 0x1E (SA0 high) or 0x1D; WHO_AM_I (0x0F) = 0x49.
+   Nothing answers at 0x19 on this board. */
+#define D_ADDR_HI		0x1E
+#define D_ADDR_LO		0x1D
+#define D_WHO_AM_I		0x0F
+#define D_WHO_AM_I_VALUE	0x49
+#define D_OUT_X_L_M		0x08	/* X, Y, Z, little endian */
+#define D_CTRL1			0x20
+#define D_CTRL2			0x21
+#define D_CTRL5			0x24
+#define D_CTRL6			0x25
+#define D_CTRL7			0x26
+#define D_OUT_X_L_A		0x28	/* X, Y, Z, little endian, 16 bits */
+
 LOCAL UB	chip;			/* LSM303_CHIP_xxx, IMU task only */
+LOCAL UB	d_addr;			/* LSM303D: its one address */
 LOCAL UB	last_ira, last_agr_id, last_acc_id;	/* for the fault log */
+LOCAL UB	last_d_id;		/* 0x1E reg 0x0F (LSM303D = 0x49) */
 
 LOCAL UH	i2c_errors;		/* IMU task only */
 
@@ -305,16 +323,39 @@ EXPORT BOOL lsm303_probe(UB addr)
  * If no known magnetometer answers but the accelerometer does, run
  * accelerometer-only: everything works except heading / turn rate.
  */
+/* LSM303D at addr: check WHO_AM_I, then accel 100 Hz +-4 g, mag 50 Hz */
+LOCAL BOOL init_d(UB addr)
+{
+	UB	v = 0;
+
+	if (!read_regs(addr, D_WHO_AM_I, &v, 1)) return FALSE;
+	if (addr == D_ADDR_HI) last_d_id = v;
+	if (v != D_WHO_AM_I_VALUE) return FALSE;
+	if (!(write_reg(addr, D_CTRL1, 0x6F) &&	/* accel 100 Hz, BDU, XYZ on */
+	      write_reg(addr, D_CTRL2, 0x08) &&	/* +-4 g (0.122 mg/LSB) */
+	      write_reg(addr, D_CTRL5, 0x70) &&	/* mag high res, 50 Hz */
+	      write_reg(addr, D_CTRL6, 0x20) &&	/* mag +-4 gauss */
+	      write_reg(addr, D_CTRL7, 0x00))) {	/* mag continuous */
+		return FALSE;
+	}
+	d_addr = addr;
+	chip = LSM303_CHIP_D;
+	return TRUE;
+}
+
 EXPORT BOOL lsm303_init(void)
 {
 	UB	v;
 
 	chip = LSM303_CHIP_NONE;
-	last_ira = last_agr_id = last_acc_id = 0;
+	last_ira = last_agr_id = last_acc_id = last_d_id = 0;
 	lsm303_bus_init();
 
-	/* The accelerometer must answer and take its settings */
-	if (!read_regs(LSM303_ACC_ADDR, ACC_WHO_AM_I_A, &v, 1)) return FALSE;
+	/* DLHC / AGR: the accelerometer answers at 0x19.  If nothing does,
+	   it may be an LSM303D (one chip at 0x1E or 0x1D). */
+	if (!read_regs(LSM303_ACC_ADDR, ACC_WHO_AM_I_A, &v, 1)) {
+		return init_d(D_ADDR_HI) || init_d(D_ADDR_LO);
+	}
 	last_acc_id = v;
 	if (!write_reg(LSM303_ACC_ADDR, ACC_CTRL_REG1_A, 0x57) ||
 	    !write_reg(LSM303_ACC_ADDR, ACC_CTRL_REG4_A, 0x98)) return FALSE;
@@ -353,16 +394,26 @@ EXPORT const char *lsm303_chip_name(void)
 	switch (chip) {
 	case LSM303_CHIP_DLHC:		return "LSM303DLHC";
 	case LSM303_CHIP_AGR:		return "LSM303AGR";
+	case LSM303_CHIP_D:		return "LSM303D";
 	case LSM303_CHIP_ACC_ONLY:	return "accelerometer only (no known magnetometer, heading off)";
 	default:			return "none";
 	}
 }
 
-EXPORT void lsm303_last_ids(UB *acc_id, UB *ira, UB *agr_id)
+EXPORT void lsm303_last_ids(UB *acc_id, UB *ira, UB *agr_id, UB *d_id)
 {
 	*acc_id = last_acc_id;
 	*ira    = last_ira;
 	*agr_id = last_agr_id;
+	*d_id   = last_d_id;
+}
+
+/* LSM303D accel, 16 bits at +-4 g = 0.122 mg/LSB -> mg, rounded */
+LOCAL H d_acc_mg(UB lo, UB hi)
+{
+	W	raw = (H)(UH)(lo | (hi << 8));
+
+	return (H)((raw * 122 + (raw >= 0 ? 500 : -500)) / 1000);
 }
 
 EXPORT void lsm303_read(IMU_SAMPLE *s)
@@ -370,7 +421,21 @@ EXPORT void lsm303_read(IMU_SAMPLE *s)
 	UB	a[6], m[6];
 	H	sx, sy, sz, mx, my, mz;
 
-	s->ok = read_regs(LSM303_ACC_ADDR, ACC_OUT_X_L_A | ACC_AUTO_INC, a, 6);
+	if (chip == LSM303_CHIP_D) {
+		s->ok = read_regs(d_addr, D_OUT_X_L_A | ACC_AUTO_INC, a, 6) &&
+			read_regs(d_addr, D_OUT_X_L_M | ACC_AUTO_INC, m, 6);
+		if (!s->ok) return;
+		sx = d_acc_mg(a[0], a[1]);
+		sy = d_acc_mg(a[2], a[3]);
+		sz = d_acc_mg(a[4], a[5]);
+		mx = (H)(UH)(m[0] | (m[1] << 8));
+		my = (H)(UH)(m[2] | (m[3] << 8));
+		mz = (H)(UH)(m[4] | (m[5] << 8));
+		goto robot_axes;
+	}
+
+	s->ok = (chip != LSM303_CHIP_NONE) &&
+		read_regs(LSM303_ACC_ADDR, ACC_OUT_X_L_A | ACC_AUTO_INC, a, 6);
 	if (s->ok && chip == LSM303_CHIP_DLHC) {
 		s->ok = read_regs(LSM303_MAG_ADDR, MAG_OUT_X_H_M, m, 6);
 	} else if (s->ok && chip == LSM303_CHIP_AGR) {
@@ -396,6 +461,7 @@ EXPORT void lsm303_read(IMU_SAMPLE *s)
 		mx = my = mz = 0;
 	}
 
+robot_axes:
 	s->ax = LSM303_ROBOT_X(sx, sy, sz);
 	s->ay = LSM303_ROBOT_Y(sx, sy, sz);
 	s->az = LSM303_ROBOT_Z(sx, sy, sz);

@@ -237,6 +237,22 @@ LOCAL void test_logic(INT *pass, INT *fail)
 	TEST_CHECK("S4-U12", sizeof(S4_STS_FIELDS) == 32 && sizeof(m.hump_sum_cmm) == 2,
 		   "status 32 B -> 8 B, height sum int16");
 
+	/* S4-U15: 44-bit telemetry slot for Buddy 1 (S1_SLOT_B4) */
+	a.state = S4_ST_LEVEL; a.pitch_dd = -1; a.heading_deg = 0;
+	a.rate_dps = 0; a.calibrated = 1; a.hump_mm = 31;
+	a.hump_count = 15; a.fail_count = 0;
+	w0 = s4_pack_w0(&a);
+	w1 = s4_pack_w1(&a);
+	{
+		UD	slot = s4_tlm_slot(w0, w1, TRUE);
+
+		ok = (slot >> 44) == 0 &&
+		     (UW)(slot >> 13) == w0 && (UW)((slot >> 2) & 0x7FFu) == w1 &&
+		     ((slot >> 1) & 1u) == 1 && (slot & 1u) == 0 &&
+		     ((s4_tlm_slot(w0, w1, FALSE) >> 1) & 1u) == 0;
+	}
+	TEST_CHECK("S4-U15", ok, "44-bit telemetry slot: words 0/1 + shock bit");
+
 	*pass += test_pass_;
 	*fail += test_fail_;
 }
