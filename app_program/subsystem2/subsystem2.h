@@ -8,7 +8,7 @@
  *	What Motion Control does (report section 6.2, statechart 6.2):
  *	  - the ONLY code that drives the motor pins GP8..GP11;
  *	  - runs every 20 ms (NFR14), checks E-STOP every cycle (NFR9/NFR10);
- *	  - counts the wheel encoders (GP0 left, GP7 right) in an ISR;
+ *	  - counts the wheel encoders (GP7 left, GP0 right) in an ISR;
  *	  - per-wheel speed PID, MOVE(follow, v), MOVE(d), TURN(angle), STOP,
  *	    SPEED_LIMIT(v); MOTION_DONE when a MOVE(d)/TURN finishes;
  *	  - stall detection (PWM on, no pulse for 300 ms) -> STALL_FAULT;
@@ -57,8 +57,10 @@
 #define S2_PIN_MR_B		9	/* right motor M1B (PWM slice 4 B) */
 #define S2_PIN_ML_A		10	/* left motor  M2A (PWM slice 5 A) */
 #define S2_PIN_ML_B		11	/* left motor  M2B (PWM slice 5 B) */
-#define S2_PIN_ENC_L		0	/* left encoder  (never build CRASH_REPORT=1) */
-#define S2_PIN_ENC_R		7	/* right encoder (Grove 7 split cable) */
+#define S2_PIN_ENC_L		7	/* left encoder  (Grove 7 split cable; swapped
+				   26 Oct to match the robot's wiring) */
+#define S2_PIN_ENC_R		0	/* right encoder (Grove 1; never build
+				   CRASH_REPORT=1) */
 
 /* Set to 1 if bench testing shows a motor turns backwards on "forward" */
 #define S2_INVERT_LEFT		0
