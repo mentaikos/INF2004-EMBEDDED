@@ -170,6 +170,10 @@ IMPORT void	vc_test(void);
 IMPORT ER	vc_post(UINT type, UW payload);
 
 IMPORT UW	vc_get_status(void);	/* = g_vc_status */
+
+/* START guards; VC_R_NONE = START would be accepted.  verbose prints
+   each failing guard on the console. */
+IMPORT UINT	vc_start_check(BOOL verbose);
 IMPORT UINT	vc_get_faults(void);	/* SENSOR_FAULT bits of the last fault */
 
 typedef struct {

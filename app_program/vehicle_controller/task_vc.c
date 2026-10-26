@@ -259,34 +259,58 @@ LOCAL void enter_obstacle_scan(void)
 	set_state(VC_ST_OBSTACLE_SCAN);
 }
 
-/* Hazard cleared: no shock, nothing within 20 cm, no sensor in fault */
-LOCAL BOOL hazard_cleared(void)
+/* START guards (design 7.3): IR and IMU calibrated, hazard cleared (no
+   shock, nothing within 20 cm, no sensor in fault, no stall).  Returns
+   VC_R_NONE or the reason; with verbose, prints every guard that fails,
+   so the console says exactly why START was refused.  Reads only status
+   words, so Buddy 1's Command Handler may call it too (vc_s1_hooks.c). */
+EXPORT UINT vc_start_check(BOOL verbose)
 {
 	UW	s5 = s5_status();
 	INT	s4 = s4_sts_state(s4_get_status_w0());
+	UINT	why = VC_R_NONE;
 
-	if (s4 == S4_ST_SHOCK) return FALSE;
-	if (VC_REQUIRE_IMU && s4 == S4_ST_FAULT) return FALSE;
-	if (s5_sts_state(s5) == S5_ST_SENSOR_FAULT) return FALSE;
-	if (vc_range_hazard(s5)) return FALSE;
-	if (s2_sts_state(motion_get_status()) == S2_ST_STALL_FAULT) return FALSE;
-	return TRUE;
+	if (!s3_is_calibrated()) {
+		why = VC_R_NOT_CALIBRATED;
+		if (verbose) tm_printf((UB*)"vc: START refused: IR not calibrated"
+				       " (put the barcode sensor over white)\n");
+	}
+	if (VC_REQUIRE_IMU && !s4_is_calibrated()) {
+		why = VC_R_NOT_CALIBRATED;
+		if (verbose) tm_printf((UB*)"vc: START refused: IMU not calibrated"
+				       " (state %d; 5 = FAULT)\n", s4);
+	}
+	if (s4 == S4_ST_SHOCK) {
+		why = VC_R_HAZARD;
+		if (verbose) tm_printf((UB*)"vc: START refused: IMU shock active\n");
+	}
+	if (s5_sts_state(s5) == S5_ST_SENSOR_FAULT) {
+		why = VC_R_HAZARD;
+		if (verbose) tm_printf((UB*)"vc: START refused: ultrasonic fault"
+				       " (no echo)\n");
+	}
+	if (vc_range_hazard(s5)) {
+		why = VC_R_HAZARD;
+		if (verbose) tm_printf((UB*)"vc: START refused: obstacle within"
+				       " 20 cm (range code %d)\n", (s5 >> 11) & 127u);
+	}
+	if (s2_sts_state(motion_get_status()) == S2_ST_STALL_FAULT) {
+		why = VC_R_HAZARD;
+		if (verbose) tm_printf((UB*)"vc: START refused: wheel stall latched"
+				       " (send STOP first)\n");
+	}
+	return why;
 }
 
-/* START from IDLE or E_STOPPED.  Guards: IR & IMU calibrated, hazard
-   cleared.  Action: clear E_STOP (only the VC does this), reset Obstacle
-   Scan, then STARTING waits until it is watching forward. */
+/* START from IDLE or E_STOPPED.  Guards: vc_start_check().  Action:
+   clear E_STOP (only the VC does this), reset Obstacle Scan, then
+   STARTING waits until it is watching forward. */
 LOCAL void do_start(void)
 {
-	if (!s3_is_calibrated() || (VC_REQUIRE_IMU && !s4_is_calibrated())) {
-		vc.reason = VC_R_NOT_CALIBRATED;
-		tm_printf((UB*)"vc: START refused, IR %d IMU %d calibrated\n",
-			  s3_is_calibrated(), s4_is_calibrated());
-		return;
-	}
-	if (!hazard_cleared()) {
-		vc.reason = VC_R_HAZARD;
-		tm_printf((UB*)"vc: START refused, hazard still present\n");
+	UINT	why = vc_start_check(TRUE);
+
+	if (why != VC_R_NONE) {
+		vc.reason = (UB)why;
 		return;
 	}
 	cmd_stop();				/* Motion: E_STOP_BRAKE -> STOPPED */
@@ -464,11 +488,18 @@ LOCAL void handle_event(UW w)
 
 	switch (type) {
 	case EVT_START:
-		if (st == VC_ST_IDLE || st == VC_ST_E_STOPPED) do_start();
-		else dg.evt_ignored++;
+		tm_printf((UB*)"vc: START received in %s\n", st_name[st]);
+		if (st == VC_ST_IDLE || st == VC_ST_E_STOPPED) {
+			do_start();
+		} else {
+			dg.evt_ignored++;
+			tm_printf((UB*)"vc: START ignored (only from IDLE or"
+				  " E_STOPPED; send STOP first)\n");
+		}
 		return;
 
 	case EVT_STOP:
+		tm_printf((UB*)"vc: STOP received in %s\n", st_name[st]);
 		if (run || st == VC_ST_E_STOPPED || st == VC_ST_COMPLETE) {
 			enter_idle(VC_R_STOP);
 		} else if (st == VC_ST_FAULT) {
@@ -611,6 +642,9 @@ LOCAL void tick(void)
 		    since(vc.t_state) >= VC_S5_SETTLE_MS) {
 			enter_follow();
 		} else if (since(vc.t_state) > VC_S5_READY_MS) {
+			tm_printf((UB*)"vc: START abandoned: obstacle scan not"
+				  " watching forward (S5 state %d)\n",
+				  s5_sts_state(s5));
 			enter_idle(VC_R_SCAN_NOT_READY);
 		}
 		break;
