@@ -283,7 +283,7 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
  * --------------------------------------------------------------------- */
 
 #define S3_JUNCTION_SAMPLES	2	/* both black this many cycles */
-#define S3_LINE_LOST_MS		500	/* both white for MORE than this (> 150 ms,
+#define S3_LINE_LOST_MS	 2000	/* both white for MORE than this (> 150 ms,
 					   NFR21): longer than one weave across
 					   the gap between the sensors */
 #define S3_LINE_GAP_MS		150	/* both white this long: gap = 1 */
@@ -297,7 +297,7 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    hard left and right.  Tune on the track. */
 #define S3_STEER_KP		10
 #define S3_STEER_KD		2
-#define S3_STEER_SEEK		3	/* both white: ~5 % split */
+#define S3_STEER_SEEK		8	/* both white: ~5 % split */
 
 /* Events returned by s3_line_step() */
 #define S3_LEV_NONE		0
