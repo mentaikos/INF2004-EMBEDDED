@@ -288,13 +288,16 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
 					   the gap between the sensors */
 #define S3_LINE_GAP_MS		150	/* both white this long: gap = 1 */
 
-/* Steering = KP * position + KD * change in position, in Motion
-   Control's units (S2_STEER_FULL = 64 = full split).  Position: +-2 =
-   the line under one sensor (about a 30 % speed split), +-1 = both white,
-   drifting gently towards the side the line was last touched.  Tune on
-   the track. */
+/* Steering in Motion Control's units (S2_STEER_FULL = 64 = full split).
+   Line under one sensor: KP * 2 + KD * change in position (about a 30 %
+   speed split).  Both white: a fixed, small drift (SEEK) towards the
+   side the line was last touched, just enough to touch an edge again.
+   KD was 6: touching the opposite edge after a drift changes the
+   position by 3, so it kicked the split to ~60 % and the robot swung
+   hard left and right.  Tune on the track. */
 #define S3_STEER_KP		10
-#define S3_STEER_KD		6
+#define S3_STEER_KD		2
+#define S3_STEER_SEEK		3	/* both white: ~5 % split */
 
 /* Events returned by s3_line_step() */
 #define S3_LEV_NONE		0

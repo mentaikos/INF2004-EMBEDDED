@@ -315,6 +315,8 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	pos = line_position(left, center, lt->side_left);
 	if (lt->state == S3_LINE_JUNCTION) {
 		steer = 0;
+	} else if (!left && !center) {
+		steer = (W)S3_STEER_SEEK * pos;		/* pos = +-1: gentle */
 	} else {
 		steer = (W)S3_STEER_KP * pos + (W)S3_STEER_KD * (pos - lt->pos);
 	}
