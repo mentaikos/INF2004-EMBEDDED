@@ -292,54 +292,58 @@ LOCAL void test_line(INT *pass, INT *fail)
 	INT	ev1, ev2, ev3, i, lost_at;
 	TEST_INIT();
 
-	/* S3-U11: left only -> DRIFTING and steer left; centre -> ON_LINE,
-	   steering 0 */
+	/* S3-U11: line BETWEEN the sensors.  Line under the left sensor ->
+	   DRIFTING, steer left; under the right (centre) sensor -> steer
+	   right; both white -> ON_LINE, gentle steer towards the last side */
 	s3_line_init(&lt);
-	s3_line_step(&lt, 0, 1, 30);
-	s3_line_step(&lt, 1, 0, 30);
+	s3_line_step(&lt, 1, 0, 20);
 	ev1 = (lt.state == S3_LINE_DRIFTING && lt.steer < 0);
-	s3_line_step(&lt, 0, 1, 30);
-	TEST_CHECK("S3-U11", ev1 && lt.state == S3_LINE_ON_LINE && lt.steer == 0,
-		   "drift left of line -> steer left, back on line -> 0");
+	s3_line_step(&lt, 0, 1, 20);
+	ev2 = (lt.state == S3_LINE_DRIFTING && lt.steer > 0);
+	s3_line_step(&lt, 0, 0, 20);
+	TEST_CHECK("S3-U11", ev1 && ev2 && lt.state == S3_LINE_ON_LINE &&
+		   lt.steer > 0 && lt.steer < 2 * S3_STEER_KP,
+		   "line between sensors: steer towards the sensor on the line");
 
 	/* S3-U12: both black once is not a junction; twice is, reported
-	   once; it ends when the left sensor leaves the crossing line */
+	   once; both white again -> back ON_LINE */
 	s3_line_init(&lt);
-	ev1 = s3_line_step(&lt, 1, 1, 30);
-	ev2 = s3_line_step(&lt, 1, 1, 30);
-	ev3 = s3_line_step(&lt, 1, 1, 30);
-	s3_line_step(&lt, 0, 1, 30);
+	ev1 = s3_line_step(&lt, 1, 1, 20);
+	ev2 = s3_line_step(&lt, 1, 1, 20);
+	ev3 = s3_line_step(&lt, 1, 1, 20);
+	s3_line_step(&lt, 0, 0, 20);
 	TEST_CHECK("S3-U12", ev1 == S3_LEV_NONE && ev2 == S3_LEV_JUNCTION &&
 		   ev3 == S3_LEV_NONE && lt.state == S3_LINE_ON_LINE,
 		   "JUNCTION after 2 samples, reported once");
 
-	/* S3-U13: both white for 150 ms is a gap, for more is LINE_LOST
-	   (NFR21); centre black again -> LINE_FOUND */
+	/* S3-U13: both white is normal for 500 ms; LINE_LOST only after
+	   more than S3_LINE_LOST_MS; either sensor black -> LINE_FOUND */
 	s3_line_init(&lt);
-	s3_line_step(&lt, 0, 1, 30);
+	s3_line_step(&lt, 1, 0, 20);
 	lost_at = -1;
-	for (i = 1; i <= 8 && lost_at < 0; i++) {
-		if (s3_line_step(&lt, 0, 0, 30) == S3_LEV_LINE_LOST) lost_at = i * 30;
+	for (i = 1; i <= 30 && lost_at < 0; i++) {
+		if (s3_line_step(&lt, 0, 0, 20) == S3_LEV_LINE_LOST) lost_at = i * 20;
 	}
-	ev1 = s3_line_step(&lt, 0, 1, 30);
-	TEST_CHECK("S3-U13", lost_at == 180 && ev1 == S3_LEV_LINE_FOUND &&
-		   lt.state == S3_LINE_ON_LINE,
-		   "LINE_LOST only after > 150 ms white, then LINE_FOUND");
+	ev1 = s3_line_step(&lt, 0, 1, 20);
+	TEST_CHECK("S3-U13", lost_at == 520 && ev1 == S3_LEV_LINE_FOUND &&
+		   lt.state == S3_LINE_DRIFTING,
+		   "LINE_LOST only after > 500 ms white, then LINE_FOUND");
 
-	/* S3-U18: right-curve mitigation: both white straight from ON_LINE
-	   -> gap, limited right steer, still ON_LINE; after a left drift
-	   -> steer left (8.3) */
-	s3_line_init(&lt);
-	s3_line_step(&lt, 0, 1, 20);
-	s3_line_step(&lt, 0, 0, 20);
-	s3_line_step(&lt, 0, 0, 20);
-	ev1 = (lt.gap && lt.state == S3_LINE_ON_LINE && lt.steer > 0 &&
-	       lt.steer < 2 * S3_STEER_KP);
+	/* S3-U18: after the left sensor touched the line, both white drifts
+	   gently LEFT (smaller than an edge correction); gap only after
+	   150 ms; a lost line keeps steering to that side for the VC */
 	s3_line_init(&lt);
 	s3_line_step(&lt, 1, 0, 20);
 	s3_line_step(&lt, 0, 0, 20);
-	TEST_CHECK("S3-U18", ev1 && lt.gap && lt.steer < 0,
-		   "white from ON_LINE -> gap, limited right steer");
+	s3_line_step(&lt, 0, 0, 20);
+	ev1 = (lt.steer < 0 && lt.steer > -2 * S3_STEER_KP && !lt.gap &&
+	       lt.state == S3_LINE_ON_LINE);
+	for (i = 0; i < 6; i++) s3_line_step(&lt, 0, 0, 20);
+	ev2 = lt.gap;
+	for (i = 0; i < 20; i++) s3_line_step(&lt, 0, 0, 20);
+	TEST_CHECK("S3-U18", ev1 && ev2 && lt.state == S3_LINE_LOST &&
+		   lt.steer < 0 && !lt.gap,
+		   "both white: gentle drift to the last side, gap after 150 ms");
 
 	*pass += test_pass_;
 	*fail += test_fail_;

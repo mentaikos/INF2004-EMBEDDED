@@ -222,22 +222,26 @@ EXPORT UH drv_ir_overflow_count(void)
 /*  2. Line tracker (6.3 region A)                                    */
 /* ------------------------------------------------------------------ */
 /*
- *	  L C   meaning (1 = black)          state
- *	  0 1   line under the centre        ON_LINE
- *	  1 0   line under the left sensor   DRIFTING  (steer left)
- *	  1 1   two cycles in a row          JUNCTION  -> VC
- *	  0 0   more than 150 ms             LINE_LOST -> VC
- *	A shorter white gap keeps the current state (NFR21).  LINE_LOST ends
- *	only when the centre sensor sees the line again (LINE_FOUND -> VC),
- *	matching the VC's LINE_SEARCH, which sweeps until IR_CENTER is black.
+ *	The line runs BETWEEN the two sensors (IR_LEFT left of the tape,
+ *	IR_CENTER right of it):
  *
- *	With no right-hand line sensor, "both white" means the line has moved
- *	right of the centre sensor or has gone.  While the 150 ms filter runs
- *	(gap = 1) the tracker steers back towards where the line was last
- *	seen.  Coming straight from ON_LINE that is usually a right curve, so
- *	it steers right with a limited correction (right-curve mitigation,
- *	8.3).  gap is in the status for the VC; Motion Control's steering
- *	byte has no "slow down" input, so the reduced speed is [DECIDE].
+ *	  L C   meaning (1 = black)                 state      steering
+ *	  0 0   line between the sensors (normal)   ON_LINE    gentle, towards
+ *	                                                       the last side
+ *	  1 0   robot drifted right: line under L   DRIFTING   left
+ *	  0 1   robot drifted left:  line under C   DRIFTING   right
+ *	  1 1   two cycles in a row: crossing line  JUNCTION   0  -> VC
+ *	  0 0   more than 500 ms                    LINE_LOST  -> VC
+ *
+ *	Both white is the normal centred case, so "lost" cannot be read from
+ *	one sample.  Instead the tracker always drifts gently towards the
+ *	side the line was last touched: if the line is between the sensors
+ *	the robot weaves and touches an edge again within a few hundred ms,
+ *	and if the line slipped outside it is brought back under that sensor.
+ *	Only when nothing is touched for > S3_LINE_LOST_MS (well over the
+ *	150 ms of NFR21) is the line lost; the steering sign then tells the
+ *	VC's LINE_SEARCH which side to sweep first.  LINE_FOUND: either
+ *	sensor sees the line again.
  */
 
 EXPORT void s3_line_init(S3_LINE *lt)
@@ -247,18 +251,17 @@ EXPORT void s3_line_init(S3_LINE *lt)
 	lt->white_ms   = 0;
 	lt->pos        = 0;
 	lt->steer      = 0;
-	lt->gap        = FALSE;
+	lt->gap        = 0;
+	lt->side_left  = 0;	/* no side yet: drift right first */
 }
 
 /* Coarse line position from the two sensors (FR9): - = left, + = right */
-LOCAL B line_position(UINT left, UINT center, B last_pos)
+LOCAL B line_position(UINT left, UINT center, UINT side_left)
 {
-	if (left && !center) return -2;		/* well to the left */
-	if (left && center)  return -1;		/* centre and a bit left */
-	if (center)          return 0;		/* centred */
-	if (last_pos < 0)    return -2;		/* white: went off to the left */
-	if (last_pos > 0)    return last_pos;	/* ... or to the right */
-	return 1;		/* white straight from centred: limited right */
+	if (left && !center) return -2;		/* line under the left sensor */
+	if (center && !left) return 2;		/* line under the right sensor */
+	if (left && center)  return 0;		/* crossing line */
+	return side_left ? -1 : 1;		/* between: towards the last side */
 }
 
 EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
@@ -266,15 +269,21 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	INT	ev = S3_LEV_NONE;
 	B	pos;
 	W	steer;
+	UW	white;
 
 	left   = left   ? 1 : 0;
 	center = center ? 1 : 0;
 
+	if (left != center) lt->side_left = left;	/* which edge touched */
+
 	if (!left && !center) {
-		/* Both white: only a gap until it lasts more than 150 ms */
+		/* Both white: centred, unless nothing is touched for long */
 		lt->both_black = 0;
-		lt->white_ms = (UB)((lt->white_ms + dt_ms > 255) ?
-				    255 : lt->white_ms + dt_ms);
+		white = lt->white_ms + dt_ms;
+		lt->white_ms = (UH)((white > 0xFFFF) ? 0xFFFF : white);
+		if (lt->state == S3_LINE_DRIFTING || lt->state == S3_LINE_JUNCTION) {
+			lt->state = S3_LINE_ON_LINE;	/* back between the sensors */
+		}
 		if (lt->white_ms > S3_LINE_LOST_MS && lt->state != S3_LINE_LOST) {
 			lt->state = S3_LINE_LOST;
 			ev = S3_LEV_LINE_LOST;
@@ -283,11 +292,11 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 		lt->white_ms = 0;
 
 		if (lt->state == S3_LINE_LOST) {
-			if (center) {
-				lt->state      = S3_LINE_ON_LINE;
-				lt->both_black = left;
-				ev = S3_LEV_LINE_FOUND;
-			}
+			/* Either sensor on the line again */
+			lt->state      = (left && center) ? S3_LINE_JUNCTION
+							  : S3_LINE_DRIFTING;
+			lt->both_black = (left && center) ? 1 : 0;
+			ev = S3_LEV_LINE_FOUND;
 		} else if (left && center) {
 			if (lt->both_black < 3) lt->both_black++;
 			if (lt->both_black >= S3_JUNCTION_SAMPLES &&
@@ -297,16 +306,14 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 			}
 		} else {
 			lt->both_black = 0;
-			lt->state = center ? S3_LINE_ON_LINE : S3_LINE_DRIFTING;
+			lt->state = S3_LINE_DRIFTING;
 		}
 	}
 
-	/* PD steering on the coarse position.  No correction when centred
-	   (6.3: steering = 0), nor at a junction, where the left sensor is
-	   on the crossing line rather than on ours. */
-	pos = line_position(left, center, lt->pos);
-	if ((lt->state == S3_LINE_ON_LINE && pos == 0) ||
-	    lt->state == S3_LINE_JUNCTION) {
+	/* PD steering on the coarse position.  None at a junction, where
+	   both sensors are on the crossing line. */
+	pos = line_position(left, center, lt->side_left);
+	if (lt->state == S3_LINE_JUNCTION) {
 		steer = 0;
 	} else {
 		steer = (W)S3_STEER_KP * pos + (W)S3_STEER_KD * (pos - lt->pos);
@@ -316,7 +323,8 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 
 	lt->pos   = pos;
 	lt->steer = (B)steer;
-	lt->gap   = (!left && !center && lt->state != S3_LINE_LOST) ? 1 : 0;
+	lt->gap   = (!left && !center && lt->white_ms > S3_LINE_GAP_MS &&
+		     lt->state != S3_LINE_LOST) ? 1 : 0;
 	return ev;
 }
 

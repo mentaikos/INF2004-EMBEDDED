@@ -20,14 +20,14 @@ Define a test here before running it. Test IDs never change.
 | S3-U08 | ADC trace `*D*` → U_TURN; repeat within 0.5 s ignored | FR12, NFR23 | auto | `subsystem3_test.c` | `[TEST] S3-U08 PASS` |
 | S3-U09 | barcode read again after the cool-down | NFR23 | auto | `subsystem3_test.c` | `[TEST] S3-U09 PASS` |
 | S3-U10 | partial read discarded after 200 ms without an edge | NFR22 | auto | `subsystem3_test.c` | `[TEST] S3-U10 PASS` |
-| S3-U11 | left-only → DRIFTING, steer left; centre → ON_LINE, steer 0 | FR10 | auto | `subsystem3_test.c` | `[TEST] S3-U11 PASS` |
+| S3-U11 | line between the sensors: line under left → steer left; under centre (right) → steer right; both white → ON_LINE, gentle steer to last side | FR10 | auto | `subsystem3_test.c` | `[TEST] S3-U11 PASS` |
 | S3-U12 | JUNCTION after 2 both-black samples, reported once | FR10 | auto | `subsystem3_test.c` | `[TEST] S3-U12 PASS` |
-| S3-U13 | LINE_LOST only after > 150 ms white, then LINE_FOUND | FR30, NFR21 | auto | `subsystem3_test.c` | `[TEST] S3-U13 PASS` |
+| S3-U13 | both white is normal; LINE_LOST only after > 500 ms white (≥ NFR21's 150 ms), then LINE_FOUND on either sensor | FR30, NFR21 | auto | `subsystem3_test.c` | `[TEST] S3-U13 PASS` |
 | S3-U14 | ~~binary MQTT status frame~~ **dropped**: Buddy 1 owns the telemetry payload; S3 no longer writes `mbf_tx` | — | — | — | — |
 | S3-U15 | task every 20 ms, ISR every 1 ms, bc_ring never overflows | NFR8, NFR16, A6 | auto | `subsystem3_test.c` | `[TEST] S3-U15 PASS` |
 | S3-U16 | bc_ring overflow mid-barcode → that barcode discarded, no NAV_CMD, next one read | 8.3 (Part C row 4) | auto | `subsystem3_test.c` | `[TEST] S3-U16 PASS` |
 | S3-U17 | edge detector: hysteresis ignores noise; white baseline follows a lighting change | FR9 | auto | `subsystem3_test.c` | `[TEST] S3-U17 PASS` |
-| S3-U18 | both white straight from ON_LINE → gap flag, limited right steer, not yet LINE_LOST | 8.3 right-curve mitigation, NFR21 | auto | `subsystem3_test.c` | `[TEST] S3-U18 PASS` |
+| S3-U18 | both white after a left touch → gentle left drift (smaller than an edge correction); gap only after 150 ms; lost line keeps the last side for the VC | FR10, 8.3 | auto | `subsystem3_test.c` | `[TEST] S3-U18 PASS` |
 | S3-U19 | packed status word `g_s3_status`: round-trip at range limits, negative pos/steer sign-extended, out-of-range clamped, bits 31:24 unused | minimum-bit (Week 8) | auto | `subsystem3_test.c` | `[TEST] S3-U19 PASS` |
 | S3-U20 | MQTT slot for Buddy 1 (`S1_SLOT_B3`): 8 bits = line(2) bc(2) nav(2) err(1) overflow(1) | minimum-bit, FR3 | auto | `subsystem3_test.c` | `[TEST] S3-U20 PASS` |
 | S3-M01 | white calibration on the track | FR9, A3 | manual | power up with IR_RIGHT on white, read console | `s3: calibrated, white=…` |

@@ -72,7 +72,7 @@
  *	[7]     calibrated  IR calibration done (VC's START guard)
  *	[8]     ir_left     1 = black
  *	[9]     ir_center   1 = black
- *	[10]    gap         both white, line not lost yet
+ *	[10]    gap         both white > 150 ms, line not lost yet
  *	[13:11] line_pos    -2..+2, signed
  *	[21:14] steer       -127..+127, signed (the byte sent to Motion)
  *	[22]    bc_err      a barcode read failed in the last second (FR31)
@@ -276,15 +276,23 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
  *
  *	Pure logic, no hardware: the task feeds it one IR_LEFT/IR_CENTER
  *	reading per cycle, so the tests can feed it made-up readings.
+ *
+ *	Sensor layout: the line runs BETWEEN the two sensors.  IR_LEFT sits
+ *	left of the tape and IR_CENTER right of it, so both see white when
+ *	the robot is centred.
  * --------------------------------------------------------------------- */
 
 #define S3_JUNCTION_SAMPLES	2	/* both black this many cycles */
-#define S3_LINE_LOST_MS		150	/* NFR21: both white for MORE than this */
+#define S3_LINE_LOST_MS		500	/* both white for MORE than this (> 150 ms,
+					   NFR21): longer than one weave across
+					   the gap between the sensors */
+#define S3_LINE_GAP_MS		150	/* both white this long: gap = 1 */
 
 /* Steering = KP * position + KD * change in position, in Motion
-   Control's units (S2_STEER_FULL = 64 = full split).  Position -2..+2,
-   so the line at one side gives about a 30 % speed split.  Tune on the
-   track. */
+   Control's units (S2_STEER_FULL = 64 = full split).  Position: +-2 =
+   the line under one sensor (about a 30 % speed split), +-1 = both white,
+   drifting gently towards the side the line was last touched.  Tune on
+   the track. */
 #define S3_STEER_KP		10
 #define S3_STEER_KD		6
 
@@ -298,11 +306,12 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
 typedef struct {
 	UB	state : 2;	/* S3_LINE_xxx */
 	UB	both_black : 2;	/* cycles with L = C = black, saturates at 3 */
-	UB	gap : 1;	/* both white, not lost yet */
+	UB	gap : 1;	/* both white > S3_LINE_GAP_MS, not lost yet */
+	UB	side_left : 1;	/* line last touched by IR_LEFT (else IR_CENTER) */
 	B	pos : 3;	/* coarse line position, -2..+2 */
-	UB	white_ms;	/* both white this long, saturates at 255 */
+	UH	white_ms;	/* both white this long, saturates */
 	B	steer;		/* steering byte for this cycle */
-} S3_LINE;		/* 3 bytes */
+} S3_LINE;
 
 IMPORT void	s3_line_init(S3_LINE *lt);
 
