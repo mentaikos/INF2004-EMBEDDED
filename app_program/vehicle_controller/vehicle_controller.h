@@ -44,7 +44,8 @@
 /* =====================================================================
  *  2. Mission behaviour (PLACEHOLDERS: tune on the track)
  * ===================================================================== */
-#define VC_CRUISE_CM_S		15	/* line following speed (27 Oct: 20 lost the line, slowed for stability) */
+#define VC_CRUISE_CM_S		20	/* line following speed (27 Oct: 20 lost the line, slowed to 15;
+					   back to 20 after the start-up / sensor-wiring fixes) */
 #define VC_SLOW_CM_S		10	/* NFR12: <= 10 cm/s near an obstacle */
 #define VC_TURN_CM_S		10	/* wheel speed while turning (27 Oct: was 15) */
 #define VC_JUNCTION_ADV_CM	5	/* sensors are ahead of the axle */
