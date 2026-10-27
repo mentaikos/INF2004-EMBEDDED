@@ -64,7 +64,9 @@
 
 /* Set to 1 if bench testing shows a motor turns backwards on "forward" */
 #define S2_INVERT_LEFT		0
-#define S2_INVERT_RIGHT		0
+#define S2_INVERT_RIGHT		1	/* 27 Oct: right motor is mirror-mounted and ran
+				   backwards (robot spun on the spot; inverting
+				   the left instead drove it backwards) */
 
 /* PWM: 125 MHz / (6249 + 1) = 20 kHz (Robo Pico limit is 20 kHz) */
 #define S2_PWM_WRAP		6249
@@ -73,7 +75,7 @@
  *  3. Measured constants.  PLACEHOLDERS until measured on the robot
  *     (report 9.5 / testing/subsystem2/TEST_LOG.md S2-M01..S2-M04).
  * ===================================================================== */
-#define S2_WHEEL_DIAM_MM	65	/* TODO measure */
+#define S2_WHEEL_DIAM_MM	43	/* measured 27 Oct */
 #define S2_ENC_CPR		220	/* counts per wheel rev, rising edges of A
 				   (S2-M01 26 Oct, hand-turned: L ~220,
 				   R ~217, +-10 %; likely 11 PPR x 1:20) */
@@ -83,11 +85,11 @@
    0.75 per mille per mm/s, i.e. ~1200 mm/s at full duty unloaded.  On
    the floor the load needs more duty: the integrator supplies it.
    Re-fit on the track (S2-M06) and lower KP if the speed still swings. */
-#define S2_TOP_SPEED_MM_S	1200	/* unloaded speed at 100 % duty (estimate) */
+#define S2_TOP_SPEED_MM_S	800	/* unloaded speed at 100 % duty (1200 x 43/65: the fit used the 65 mm placeholder) */
 #define S2_DEADBAND_PM		100	/* duty (per mille) where a wheel starts */
-#define S2_KFF_Q8		192	/* feed-forward: (1000-100)/1200 * 256 */
-#define S2_KP_Q8		128	/* PI gains, Q8 (256 = 1.0); was 512, which */
-#define S2_KI_Q8		32	/* swung duty 0 <-> 400 around the target */
+#define S2_KFF_Q8		288	/* feed-forward: (1000-100)/800 * 256 */
+#define S2_KP_Q8		96	/* PI gains, Q8 (256 = 1.0); was 512, which */
+#define S2_KI_Q8		16	/* swung duty 0 <-> 400 around the target */
 #define S2_I_MAX_PM		300	/* integrator clamp, per mille duty */
 
 /* Derived: micrometres travelled per encoder count (pi ~ 355/113) */
@@ -102,7 +104,7 @@
 #define S2_SLOW_MM_S		80	/* last 10 % of a MOVE(d)/TURN */
 #define S2_DEFAULT_MM_S		150	/* MOVE(d)/TURN with speed field 0 */
 #define S2_ACCEL_MM_S_PER_CYC	10	/* target ramp (500 mm/s^2) */
-#define S2_HEADING_K_MM_S	15	/* heading hold: mm/s per count of L/R difference */
+#define S2_HEADING_K_MM_S	4	/* heading hold: mm/s per count of L/R difference (15 made the robot weave, 27 Oct) */
 #define S2_STEER_FULL		64	/* steer value giving a 100 % speed split */
 #define S2_STEER_TIMEOUT_MS	100	/* no steer message -> steer 0 */
 #define S2_SPEED_WIN		5	/* speed = counts in the last 5 cycles (100 ms) */

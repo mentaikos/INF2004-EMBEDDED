@@ -57,6 +57,7 @@ LOCAL UW	script[VC_SCRIPT_MAX];
 LOCAL UB	script_len, script_idx;
 LOCAL UH	t_step;
 
+LOCAL UB		bench_move;	/* VC_BENCH_MOVE_CM run in progress */
 LOCAL S5_PROFILE	plan_profile;	/* profile of the approved plan */
 LOCAL VC_DIAG		dg;
 
@@ -214,6 +215,7 @@ LOCAL void enter_follow(void)
 
 LOCAL void enter_idle(UINT reason)
 {
+	bench_move = 0;
 	script_clear();
 	cmd_stop();
 	s5_cancel();
@@ -223,6 +225,7 @@ LOCAL void enter_idle(UINT reason)
 
 LOCAL void enter_fault(UINT reason, UINT bits)
 {
+	bench_move = 0;
 	script_clear();
 	cmd_stop();
 	s5_cancel();
@@ -235,6 +238,7 @@ LOCAL void enter_fault(UINT reason, UINT bits)
 
 LOCAL void enter_complete(void)
 {
+	bench_move = 0;
 	script_clear();
 	cmd_stop();
 	s5_cancel();
@@ -369,7 +373,13 @@ LOCAL void script_done(void)
 
 	switch (vc.state) {
 	case VC_ST_EXECUTE_NAV_CMD:
-		enter_follow();
+		if (bench_move) {			/* VC_BENCH_MOVE_CM */
+			bench_move = 0;
+			tm_printf((UB*)"vc: BENCH move done\n");
+			enter_idle(VC_R_NONE);
+		} else {
+			enter_follow();
+		}
 		break;
 
 	case VC_ST_LINE_SEARCH:
@@ -636,6 +646,7 @@ LOCAL void tick(void)
 
 	/* E-STOP seen: Motion has already braked; just follow it */
 	if (VC_IS_RUNNING(st) && estop_set()) {
+		bench_move = 0;
 		script_clear();
 		set_state(VC_ST_E_STOPPED);
 		return;
@@ -660,7 +671,19 @@ LOCAL void tick(void)
 		s5 = s5_status();
 		if (s5_sts_state(s5) == S5_ST_FORWARD_WATCH &&
 		    since(vc.t_state) >= VC_S5_SETTLE_MS) {
+#if VC_BENCH_MOVE_CM
+			{
+				UW c = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_CRUISE_CM_S,
+						   0, VC_BENCH_MOVE_CM);
+				tm_printf((UB*)"vc: BENCH straight move %d cm\n",
+					  VC_BENCH_MOVE_CM);
+				bench_move = 1;
+				set_state(VC_ST_EXECUTE_NAV_CMD);
+				script_run(&c, 1);
+			}
+#else
 			enter_follow();
+#endif
 		} else if (since(vc.t_state) > VC_S5_READY_MS) {
 			tm_printf((UB*)"vc: START abandoned: obstacle scan not"
 				  " watching forward (S5 state %d)\n",

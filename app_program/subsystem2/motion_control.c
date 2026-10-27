@@ -61,6 +61,7 @@ typedef struct {
 	UH	progress;	/* counts since the current MOVE(d)/TURN */
 	UB	want_dir;	/* direction wanted by the state */
 	UB	hist[S2_SPEED_WIN];	/* counts in each of the last cycles */
+	UB	hdt[S2_SPEED_WIN];	/* length of each of those cycles, ms */
 	UB	hi;		/* next slot in hist */
 } WHEEL;
 
@@ -257,24 +258,35 @@ LOCAL void handle_cmd(UW w)
 /* ---------------------------------------------------------------------
  *  Encoders -> speed, distance, progress, encoder fault
  * --------------------------------------------------------------------- */
+/* TEMPORARY bring-up prints (see debug_print below); 0 when done */
+#ifndef S2_DEBUG
+#define S2_DEBUG		1
+#endif
+#if S2_DEBUG
+LOCAL UH	dbg_maxdt, dbg_late, dbg_mindt = 0xFFFFu;	/* cycle timing */
+#endif
 LOCAL ENC_SNAPSHOT	enc_prev;
 LOCAL UW		cycle_prev_us;
 
 LOCAL void update_speed(UINT w, UINT d, UINT period_us, INT dt_ms)
 {
 	WHEEL	*p = &wh[w];
-	UINT	k, sum = 0;
+	UINT	k, sum = 0, tsum = 0;
 
-	/* Speed = counts in the last S2_SPEED_WIN cycles (100 ms).  With
-	   ~220 counts per turn that is ~20 counts at 20 cm/s, so the reading
-	   is steady.  (The single edge period, used before, jumped to tens of
-	   m/s on one short or noisy pulse.) */
+	/* Speed = counts in the last S2_SPEED_WIN cycles divided by the time
+	   those cycles REALLY took (~100 ms).  Dividing by the nominal 20 ms
+	   per cycle gave wrong speeds whenever a cycle ran early or late. */
 	(void)period_us;
 	p->hist[p->hi] = (UB)(d > 255u ? 255u : d);
+	p->hdt[p->hi]  = (UB)(dt_ms > 255 ? 255 : (dt_ms < 1 ? 1 : dt_ms));
 	p->hi = (UB)((p->hi + 1u) % S2_SPEED_WIN);
-	for (k = 0; k < S2_SPEED_WIN; k++) sum += p->hist[k];
-	p->meas = (H)s2_clamp((INT)(sum * S2_UM_PER_COUNT) /
-			      (S2_SPEED_WIN * dt_ms), 0, 2 * S2_TOP_SPEED_MM_S);
+	for (k = 0; k < S2_SPEED_WIN; k++) {
+		sum  += p->hist[k];
+		tsum += p->hdt[k];
+	}
+	if (tsum == 0) tsum = S2_SPEED_WIN * S2_PERIOD_MS;
+	p->meas = (H)s2_clamp((INT)(sum * S2_UM_PER_COUNT / tsum),
+			      0, 2 * S2_TOP_SPEED_MM_S);
 
 	/* time since the last pulse, for the stall check */
 	if (d > 0) {
@@ -306,6 +318,11 @@ LOCAL void read_encoders(void)
 
 	cycle_prev_us = now;
 	if (dt_ms <= 0) dt_ms = 1;
+#if S2_DEBUG
+	if (dt_ms > dbg_maxdt) dbg_maxdt = (UH)dt_ms;
+	if (dt_ms < dbg_mindt) dbg_mindt = (UH)dt_ms;
+	if (dt_ms > S2_ENC_MAX_INTERVAL_MS && dbg_late < 0xFFFFu) dbg_late++;
+#endif
 
 	encoder_snapshot(&s);
 	dl = encoder_delta(enc_prev.cnt.c[ENC_LEFT],  s.cnt.c[ENC_LEFT]);
@@ -327,11 +344,11 @@ LOCAL void read_encoders(void)
 	if (mf.dir_r == wh[1].want_dir) wh[1].progress += (UH)dr;
 
 	/* ...but a speed from an over-long interval is not used. */
+	/* A late cycle (> 40 ms) is reported as ENC_FAULT (Part C row 3),
+	   but the speed is still updated from the counts and the real time:
+	   skipping it left a stale speed and the PI control then swung. */
 	late = (dt_ms > S2_ENC_MAX_INTERVAL_MS);
-	if (late) {
-		raise_fault(FAULT_ENC);
-		return;
-	}
+	if (late) raise_fault(FAULT_ENC);
 	update_speed(ENC_LEFT,  dl, s.period_us[ENC_LEFT],  dt_ms);
 	update_speed(ENC_RIGHT, dr, s.period_us[ENC_RIGHT], dt_ms);
 }
@@ -457,9 +474,6 @@ LOCAL BOOL stalled(void)
    the raw 8-bit encoder counters, duty and measured speed.  If duty is
    high but the counts do not move, the wheel is not turning (power) or
    the encoder is not reaching GP0 / GP7.  Set S2_DEBUG to 0 afterwards. */
-#ifndef S2_DEBUG
-#define S2_DEBUG		1
-#endif
 #if S2_DEBUG
 LOCAL void debug_print(void)
 {
@@ -490,11 +504,14 @@ LOCAL void debug_print(void)
 	    tog_l == 0 && tog_r == 0) return;
 	last = enc_prev.cnt.both;
 	tm_printf((UB*)"s2: st=%d L(GP%d) total=%d pin=%d toggles=%d duty=%d"
-		  " v=%dmm/s | R(GP%d) total=%d pin=%d toggles=%d duty=%d v=%dmm/s\n",
+		  " v=%dmm/s | R(GP%d) total=%d pin=%d toggles=%d duty=%d v=%dmm/s"
+		  " | cycle %d..%dms late=%d faults=0x%x\n",
 		  mf.state,
 		  S2_PIN_ENC_L, tot_l, lv & 1u, tog_l, wh[0].duty, wh[0].meas,
 		  S2_PIN_ENC_R, tot_r, (lv >> 1) & 1u, tog_r, wh[1].duty,
-		  wh[1].meas);
+		  wh[1].meas, dbg_mindt, dbg_maxdt, dbg_late, faults);
+	dbg_maxdt = 0;
+	dbg_mindt = 0xFFFFu;
 	tog_l = tog_r = 0;
 }
 #endif

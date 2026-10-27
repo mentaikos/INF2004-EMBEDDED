@@ -58,7 +58,7 @@
 /* Console log task: prints the IMU status (no %f: fixed point).
    0 = no log task. */
 #define S4_PRI_LOG		19
-#define S4_LOG_MS		1000
+#define S4_LOG_MS		0
 
 /* =====================================================================
  *  2. Pins
@@ -184,7 +184,7 @@ IMPORT void	s4_test_inject_shock(void);
  *     flg_events (IF-03).  REMOVE together with subsystem 3's
  *     consumer_task; nothing in the IMU uses it.
  * ===================================================================== */
-#define S4_EXAMPLE_MONITOR	1	/* 0 = objects only, no monitor task */
+#define S4_EXAMPLE_MONITOR	0	/* 0 = objects only, no monitor task */
 #define S4_PRI_MONITOR		18
 #define S4_ALARM_MS		2000	/* report anyway if nothing for 2 s */
 #define S4_LED_TOGGLE_REPORTS	6	/* pause/resume the LED every N reports */

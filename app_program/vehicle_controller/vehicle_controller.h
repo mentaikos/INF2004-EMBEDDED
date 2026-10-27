@@ -44,9 +44,9 @@
 /* =====================================================================
  *  2. Mission behaviour (PLACEHOLDERS: tune on the track)
  * ===================================================================== */
-#define VC_CRUISE_CM_S		20	/* line following speed */
+#define VC_CRUISE_CM_S		15	/* line following speed (27 Oct: 20 lost the line, slowed for stability) */
 #define VC_SLOW_CM_S		10	/* NFR12: <= 10 cm/s near an obstacle */
-#define VC_TURN_CM_S		15	/* wheel speed while turning */
+#define VC_TURN_CM_S		10	/* wheel speed while turning (27 Oct: was 15) */
 #define VC_JUNCTION_ADV_CM	5	/* sensors are ahead of the axle */
 #define VC_JUNCTION_COOLDOWN_MS	800	/* same junction is not counted twice */
 #define VC_LINE_SEARCH_MS	3000	/* NFR18: LINE_SEARCH timeout */
@@ -60,7 +60,8 @@
 #define VC_APPROVE_WAIT_MS	500	/* approval -> S5 BYPASSING */
 #define VC_S5_READY_MS		1000	/* START -> S5 FORWARD_WATCH */
 #define VC_S5_SETTLE_MS		120	/* >= 2 S5 periods after s5_reset() */
-#define VC_STEP_TIMEOUT_MS	6000	/* one MOVE(d)/TURN without MOTION_DONE */
+#define VC_STEP_TIMEOUT_MS	15000	/* one MOVE(d)/TURN without MOTION_DONE:
+				   127 cm at 10-20 cm/s needs ~7-13 s */
 #define VC_OBSTACLE_DEPTH_CM	15	/* assumed obstacle depth (not measurable) */
 #define VC_REJOIN_EXTRA_CM	15	/* drive this far past the expected line */
 #define VC_BYPASS_MIN_CM	10
@@ -78,6 +79,12 @@
    For testing line following and motion while the ultrasonic is being
    fixed.  Never 0 on the track with people or obstacles, or in a demo. */
 #define VC_USE_ULTRASONIC	0
+
+/* Bench test of straight driving (S2-M03), independent of the line
+   sensors: 0 = normal.  N (1..127) = on START, drive straight N cm with
+   heading hold, then stop and go back to IDLE.  Line events are ignored
+   during the move.  Keep 0 for normal runs. */
+#define VC_BENCH_MOVE_CM	0
 
 /* Finish condition (assumption A9, still open): 0 = only EVT_MISSION_END
    ends the mission; N = the N-th junction ends it. */
