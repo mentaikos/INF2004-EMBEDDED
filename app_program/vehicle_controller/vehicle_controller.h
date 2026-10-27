@@ -52,7 +52,10 @@
 #define VC_LINE_SEARCH_MS	3000	/* NFR18: LINE_SEARCH timeout */
 #define VC_SEARCH_STEP_DEG	30	/* sweep: +30, -60, +90, -120 ... */
 #define VC_SEARCH_STEPS		6
-#define VC_LOST_CHECK_MS	300	/* LINE_FOLLOW: still LOST this long after entry */
+#define VC_LOST_CHECK_MS	2500	/* LINE_FOLLOW: still LOST this long after entry
+					   (27 Oct: was 300.  > S3_LINE_LOST_MS, since S3
+					   is already LOST after idling centred: give the
+					   seek drift time to touch an edge first) */
 #define VC_HUMP_MAX_MS		5000	/* HUMP_END never came: carry on */
 #define VC_REVERSE_CM		10	/* NO_CLEAR: back off and rescan */
 #define VC_MAX_RESCANS		2	/* then FAULT (obstacle not passable) */
