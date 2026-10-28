@@ -32,7 +32,12 @@ LOCAL INT sin_deg(INT deg)
 	INT sign = deg < 0 ? -1 : 1;
 	if (deg < 0) deg = -deg;
 	if (deg > 90) deg = 180 - deg;
-	return sign * sin5[clamp(deg / 5, 0, 18)];
+	deg = clamp(deg, 0, 90);
+	/* Linear between the 5-degree entries: exact on multiples of 5, and
+	   bins that are not (S5_SWEEP_HALF_DEG != 60) are not rounded down */
+	if (deg >= 90) return sign * sin5[18];
+	return sign * (sin5[deg / 5] +
+		((INT)sin5[deg / 5 + 1] - (INT)sin5[deg / 5]) * (deg % 5) / 5);
 }
 
 LOCAL INT project(INT mm, INT degrees)
@@ -55,7 +60,10 @@ EXPORT UB s5_range_from_echo(UW width_us)
 
 EXPORT UINT s5_angle_deg(UINT index)
 {
-	return 30u + 5u * (UINT)clamp((INT)index, 0, S5_ANGLES - 1);
+	/* 90 - half .. 90 + half over bins 0..24, rounded to whole degrees */
+	return (90u - S5_SWEEP_HALF_DEG) +
+		(2u * S5_SWEEP_HALF_DEG * (UINT)clamp((INT)index, 0, S5_ANGLES - 1) +
+		 (S5_ANGLES - 1) / 2u) / (S5_ANGLES - 1);
 }
 
 EXPORT UINT s5_servo_pulse_us(UINT index)
@@ -161,7 +169,8 @@ LOCAL UINT side_clearance(const UB *scan, UINT edge, BOOL left, UINT band)
 			return 0;
 		if (measured(r) && r * 10u < radius) radius = r * 10u;
 	}
-	span = (left ? 24u - edge : edge) * 5u;
+	span = left ? s5_angle_deg(24) - s5_angle_deg(edge)
+		    : s5_angle_deg(edge) - s5_angle_deg(0);
 	if (span <= S5_BEAM_ALLOW_DEG) return 0;
 	span -= S5_BEAM_ALLOW_DEG;
 	radius = radius > S5_RANGE_ERROR_MM ? radius - S5_RANGE_ERROR_MM : 0;

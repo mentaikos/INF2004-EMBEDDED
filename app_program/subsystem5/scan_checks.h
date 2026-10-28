@@ -51,9 +51,14 @@ LOCAL BOOL s5_check_profile(void)
 	S5_PROFILE p;
 	UINT i;
 	s5_test_fill(scan, S5_RANGE_FAR);
-	for (i = 10; i <= 14; i++) s5_scan_set(scan, i, 18);
+	/* board 18 cm ahead covering 80..100 degrees (bins 10..14 with the
+	   original 60-degree half sweep) */
+	for (i = 0; i < S5_ANGLES; i++)
+		if (s5_angle_deg(i) >= 80 && s5_angle_deg(i) <= 100)
+			s5_scan_set(scan, i, 18);
 	p = s5_make_profile(scan);
-	return s5_profile_closest(p) == 18 && s5_profile_width(p) == 6 &&
+	return s5_profile_closest(p) == 18 && s5_profile_width(p) >= 5 &&
+		s5_profile_width(p) <= 6 &&
 		s5_profile_valid(p) && s5_profile_action(p) == S5_ACT_LEFT &&
 		s5_profile_left(p) >= 24 && s5_profile_right(p) >= 24 &&
 		(p.w0 >> 30) == 0 && (p.w1 >> 28) == 0;
@@ -326,7 +331,7 @@ LOCAL BOOL s5_check_unknown_foreground(void)
 	S5_CHECK("S5-U03", s5_range_from_echo(1166) == 20 && s5_range_from_echo(0) == S5_RANGE_NO_ECHO, "time of flight and absent echo"); \
 	S5_CHECK("S5-U04", s5_range_from_echo(285) == S5_RANGE_NEAR && s5_range_from_echo(6000) == S5_RANGE_FAR && s5_range_from_echo(30001) == S5_RANGE_NO_ECHO, "near/far/no-echo are distinct"); \
 	S5_CHECK("S5-U05", s5_check_packing(), "all 25 packed bins preserve neighbours and guards"); \
-	S5_CHECK("S5-U06", s5_angle_deg(0) == 30 && s5_angle_deg(24) == 150 && s5_servo_pulse_us(12) == 1500 && s5_servo_settle_ms(0, 24) >= 240, "servo angles, centre pulse and settling"); \
+	S5_CHECK("S5-U06", s5_angle_deg(0) == 90 - S5_SWEEP_HALF_DEG && s5_angle_deg(24) == 90 + S5_SWEEP_HALF_DEG && s5_angle_deg(S5_CENTRE) == 90 && s5_servo_pulse_us(12) == 1500 && s5_servo_settle_ms(0, 24) >= 4 * S5_SWEEP_HALF_DEG, "servo angles, centre pulse and settling"); \
 	S5_CHECK("S5-U07", s5_check_adaptive(), "fine scan refines occupied coarse intervals only"); \
 	S5_CHECK("S5-U08", s5_check_profile(), "polar width and footprint-aware side clearance"); \
 	S5_CHECK("S5-U09", s5_check_side(), "unknown echoes block affected sides"); \

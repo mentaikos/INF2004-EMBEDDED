@@ -5,7 +5,14 @@
 #include "scan_types.h"
 
 #define S5_ANGLES              25
-#define S5_CENTRE              12       /* 30 + 5*12 = 90 degrees */
+#define S5_CENTRE              12       /* index 12 = 90 degrees (straight ahead) */
+/* Sweep: 90 +- S5_SWEEP_HALF_DEG, spread over the 25 bins.  Coarse scan
+ * = bins 0, 6, 12, 18, 24.  60 = 30..150 deg (original, 5-deg bins,
+ * coarse every 30 deg).  45 = 45..135 (3.75-deg bins, coarse every
+ * 22.5 deg).  30 = 60..120 (2.5-deg bins, coarse every 15 deg).
+ * Narrower = less servo swing, but less of each side is seen, so a
+ * bypass is approved less often (more REVERSE / NO_CLEAR). */
+#define S5_SWEEP_HALF_DEG      60
 #define S5_SCAN_BYTES          22       /* 25 * 7 = 175 bits */
 #define S5_ALL_ANGLES          0x01ffffffu
 #define S5_RANGE_NEAR          0        /* returned echo below 5 cm */
@@ -23,7 +30,7 @@
 #define S5_RETRY_LIMIT         3
 #define S5_RETRY_MS            1000
 #define S5_PLAN_TTL_MS         1000
-#define S5_RECOVERY_MS         3000
+#define S5_RECOVERY_MS         10000
 #define S5_LINE_FRESH_MS       120
 #define S5_LINE_CONFIRM_MS     120
 #define S5_PROFILE_BAND_CM     10

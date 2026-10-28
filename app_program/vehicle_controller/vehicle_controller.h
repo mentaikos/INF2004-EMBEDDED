@@ -47,10 +47,10 @@
 #define VC_CRUISE_CM_S		15	/* line following speed (27 Oct: 20 lost the line, slowed to 15;
 					   back to 20 after the start-up / sensor-wiring fixes) */
 #define VC_SLOW_CM_S		10	/* NFR12: <= 10 cm/s near an obstacle */
-#define VC_TURN_CM_S		10	/* wheel speed while turning (27 Oct: was 15) */
+#define VC_TURN_CM_S		15	/* wheel speed while turning (27 Oct: was 15) */
 #define VC_JUNCTION_ADV_CM	5	/* sensors are ahead of the axle */
 #define VC_JUNCTION_COOLDOWN_MS	800	/* same junction is not counted twice */
-#define VC_LINE_SEARCH_MS	3000	/* NFR18: LINE_SEARCH timeout */
+#define VC_LINE_SEARCH_MS	6000	/* NFR18: LINE_SEARCH timeout */
 #define VC_SEARCH_STEP_DEG	30	/* sweep: +30, -60, +90, -120 ... */
 #define VC_SEARCH_STEPS		6
 #define VC_LOST_CHECK_MS	2500	/* LINE_FOLLOW: still LOST this long after entry
@@ -66,9 +66,10 @@
 #define VC_S5_SETTLE_MS		120	/* >= 2 S5 periods after s5_reset() */
 #define VC_STEP_TIMEOUT_MS	15000	/* one MOVE(d)/TURN without MOTION_DONE:
 				   127 cm at 10-20 cm/s needs ~7-13 s */
-#define VC_OBSTACLE_DEPTH_CM	15	/* assumed obstacle depth (not measurable) */
+#define VC_OBSTACLE_DEPTH_CM	25	/* assumed obstacle depth (not measurable) */
 #define VC_REJOIN_EXTRA_CM	15	/* drive this far past the expected line */
-#define VC_BYPASS_MIN_CM	10
+#define VC_BYPASS_MIN_CM	20
+#define VC_BYPASS_EXTRA_CM	8
 #define VC_BYPASS_MAX_CM	60
 
 /* START needs the IMU calibrated and an IMU fault stops the mission

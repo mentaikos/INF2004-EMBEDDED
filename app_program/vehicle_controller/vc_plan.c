@@ -57,7 +57,8 @@ EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm)
 	side = (side < 0) ? -1 : 1;
 	edge = (side > 0) ? x + w : -(x - w);
 	if (edge < 0) edge = 0;
-	lat = vc_clamp(edge + S5_ROBOT_WIDTH_MM / 20 + S5_CLEARANCE_MARGIN_MM / 10,
+	lat = vc_clamp(edge + S5_ROBOT_WIDTH_MM / 20 + S5_CLEARANCE_MARGIN_MM / 10 +
+		       VC_BYPASS_EXTRA_CM,
 		       VC_BYPASS_MIN_CM, VC_BYPASS_MAX_CM);
 	fwd = vc_clamp(y + VC_OBSTACLE_DEPTH_CM + S5_ROBOT_LENGTH_MM / 10,
 		       VC_BYPASS_MIN_CM, S2_DIST_MAX_CM);

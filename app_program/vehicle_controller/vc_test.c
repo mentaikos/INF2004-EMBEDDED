@@ -70,8 +70,9 @@ EXPORT void vc_test(void)
 	/* VC-U03: bypass geometry, both sides, and clamping */
 	p = make_profile(20, 10, 0, 20);
 	n = vc_bypass_script(p, 1, c, &lat);
-	ok = n == 5 && lat == 10 + S5_ROBOT_WIDTH_MM / 20 + S5_CLEARANCE_MARGIN_MM / 10 &&
-	     is_cmd(c[0], S2_CMD_TURN, 90, 0) &&
+	ok = n == 5 && lat == 10 + S5_ROBOT_WIDTH_MM / 20 + S5_CLEARANCE_MARGIN_MM / 10 +
+	     VC_BYPASS_EXTRA_CM &&
+		 is_cmd(c[0], S2_CMD_TURN, 90, 0) &&
 	     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, lat) &&
 	     is_cmd(c[2], S2_CMD_TURN, -90, 0) &&
 	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0,

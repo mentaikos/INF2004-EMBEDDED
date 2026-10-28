@@ -27,7 +27,8 @@ LOCAL BOOL driver_ready;
      high = ECHO already high before the trigger (stuck high / wiring)
      norise = no rising edge after the trigger (sensor not answering:
               no power, TRIG/ECHO swapped, wrong Grove port)
-     nofall = rose but never fell inside 30 ms (nothing in range)
+     nofall = rose but never fell inside 30 ms (nothing in range:
+              reported as FAR, not as a missing echo)
      ok = complete echoes; w = last echo width in us (58 us per cm)
    Set S5_DEBUG_PING to 0 once the sensor works. */
 #ifndef S5_DEBUG_PING
@@ -111,6 +112,7 @@ EXPORT UB drv_us_ping(void)
 	UINT mask, pulse_mask;
 	UW start, pulse;
 	UH width;
+	UB phase;
 	ER er;
 	if (!driver_ready) return S5_RANGE_NO_ECHO;
 	/* Task and GPIO dispatcher run on core 0: late ISR signals cannot race
@@ -149,9 +151,10 @@ EXPORT UB drv_us_ping(void)
 	er = tk_wai_sem(sem_echo, 1, 30);
 	ISpinLock(&echo_lock, &mask);
 	width = echo_width_us;
+	phase = echo_phase;		/* 1 = never rose, 2 = rose, never fell */
 #if S5_DEBUG_PING
 	if (er == E_OK) { dbg_ok++; dbg_w = width; }
-	else if (echo_phase == 1) dbg_norise++;
+	else if (phase == 1) dbg_norise++;
 	else dbg_nofall++;
 #endif
 	echo_phase = 0;
@@ -159,6 +162,14 @@ EXPORT UB drv_us_ping(void)
 #if S5_DEBUG_PING
 	dbg_report();
 #endif
+	/* Rose but did not fall inside the window: the sensor answered and is
+	   still timing, i.e. nothing within its range (the HC-SR04 holds ECHO
+	   high for ~38 ms when no sound comes back).  That is open space, not
+	   a fault: it was NO_ECHO, so 3 in a row (e.g. facing out of the track
+	   on a bend) raised a sensor fault and E-STOP.  A sensor that does not
+	   answer at all (norise) or is stuck high (high) is still NO_ECHO. */
+	if (er != E_OK && phase == 2)
+		return S5_RANGE_FAR;
 	/* Timeout rounding may return late: enforce the physical time window. */
 	if (er != E_OK || (UW)(in_w(TIMER_TIMERAWL) - start) > S5_ECHO_TIMEOUT_US)
 		return S5_RANGE_NO_ECHO;
