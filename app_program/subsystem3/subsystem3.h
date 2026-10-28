@@ -295,7 +295,7 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    KD was 6: touching the opposite edge after a drift changes the
    position by 3, so it kicked the split to ~60 % and the robot swung
    hard left and right.  Tune on the track. */
-#define S3_STEER_KP		10
+#define S3_STEER_KP		7
 #define S3_STEER_KD		2
 #define S3_STEER_SEEK		8	/* both white: ~12 % split */
 
@@ -307,7 +307,7 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    the task whenever Motion Control is not in SPEED_FOLLOW (stopped,
    turning, E-STOP), so each line-follow starts from 0. */
 #define S3_TRIM_STEP		2
-#define S3_TRIM_MAX		16	/* +-25 % split at most */
+#define S3_TRIM_MAX		6	/* +-25 % split at most */
 
 #define S3_DEBUG_LINE		1	/* 1: print sensors/steer every 0.5 s */
 
