@@ -283,8 +283,7 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
  * --------------------------------------------------------------------- */
 
 #define S3_JUNCTION_SAMPLES	2	/* both black this many cycles */
-#define S3_LINE_LOST_MS	 5
-00	/* both white for MORE than this (> 150 ms,
+#define S3_LINE_LOST_MS	 500	/* both white for MORE than this (> 150 ms,
 					   NFR21): longer than one weave across
 					   the gap between the sensors */
 #define S3_LINE_GAP_MS		150	/* both white this long: gap = 1 */
@@ -307,6 +306,21 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    often.  Added to every correction except at a junction.  Cleared by
    the task whenever Motion Control is not in SPEED_FOLLOW (stopped,
    turning, E-STOP), so each line-follow starts from 0. */
+/* Bend (integration fix, 28 Oct): on a curve the line stays under one
+   sensor, or slips outside it, for a long time, but the corrections
+   above are sized for a straight and could not hold an arc: the robot
+   ran off, LINE_LOST, and the VC's stop-and-sweep LINE_SEARCH made
+   the turns jerky.  The bend grows by S3_BEND_STEP every cycle the
+   line stays under the same sensor (none on the first cycle, so a
+   brief touch on a straight is unchanged), keeps growing towards the
+   last side once both sensors have been white for S3_BEND_WHITE_MS
+   (line slipped outside on the curve), and restarts from 0 when the
+   OTHER sensor touches.  KP*2 + trim + S3_BEND_MAX ~ 64 = the inner
+   wheel stops: the tightest arc the robot can follow. */
+#define S3_BEND_STEP		2	/* per 20 ms cycle */
+#define S3_BEND_MAX		40
+#define S3_BEND_WHITE_MS	200
+
 #define S3_TRIM_STEP		2
 #define S3_TRIM_MAX		6	/* +-25 % split at most */
 
@@ -328,6 +342,7 @@ typedef struct {
 	UH	white_ms;	/* both white this long, saturates */
 	B	steer;		/* steering byte for this cycle */
 	B	trim;		/* learnt drift correction, +-S3_TRIM_MAX */
+	B	bend;		/* curve correction, +-S3_BEND_MAX */
 } S3_LINE;
 
 IMPORT void	s3_line_init(S3_LINE *lt);

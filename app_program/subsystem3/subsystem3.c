@@ -257,6 +257,7 @@ EXPORT void s3_line_init(S3_LINE *lt)
 	lt->gap        = 0;
 	lt->side_left  = 0;	/* no side yet: drift right first */
 	lt->trim       = 0;
+	lt->bend       = 0;
 }
 
 /* Coarse line position from the two sensors (FR9): - = left, + = right */
@@ -326,13 +327,26 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 		lt->trim = (B)(lt->trim + S3_TRIM_STEP);
 	}
 
+	/* Bend: grows while the curve keeps the line on one side */
+	if (lt->state == S3_LINE_JUNCTION) {
+		lt->bend = 0;
+	} else if ((pos == 2 && lt->bend < 0) || (pos == -2 && lt->bend > 0)) {
+		lt->bend = 0;			/* other edge: overshoot, restart */
+	} else if ((pos == 2 || pos == -2) && pos == lt->pos) {
+		lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP : -S3_BEND_STEP));
+	} else if (!left && !center && lt->white_ms > S3_BEND_WHITE_MS) {
+		lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP : -S3_BEND_STEP));
+	}
+	if (lt->bend >  S3_BEND_MAX) lt->bend =  S3_BEND_MAX;
+	if (lt->bend < -S3_BEND_MAX) lt->bend = -S3_BEND_MAX;
+
 	if (lt->state == S3_LINE_JUNCTION) {
 		steer = 0;
 	} else if (!left && !center) {
-		steer = (W)S3_STEER_SEEK * pos + lt->trim;	/* pos = +-1 */
+		steer = (W)S3_STEER_SEEK * pos + lt->trim + lt->bend; /* pos = +-1 */
 	} else {
 		steer = (W)S3_STEER_KP * pos + (W)S3_STEER_KD * (pos - lt->pos)
-			+ lt->trim;
+			+ lt->trim + lt->bend;
 	}
 	if (steer >  S3_STEER_MAX) steer =  S3_STEER_MAX;
 	if (steer < -S3_STEER_MAX) steer = -S3_STEER_MAX;

@@ -132,6 +132,7 @@ LOCAL void line_cycle(UW dt_ms, S3_STS_FIELDS *f)
 	   it is cleared there and every new line-follow starts from 0. */
 	if (s2_sts_state(motion_get_status()) != S2_ST_SPEED_FOLLOW) {
 		lt.trim = 0;
+		lt.bend = 0;	/* integration fix 28 Oct */
 	}
 
 	switch (s3_line_step(&lt, left, center, dt_ms)) {
