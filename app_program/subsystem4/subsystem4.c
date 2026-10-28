@@ -50,7 +50,7 @@ EXPORT ER subsystem4_start(void)
 	er = tk_sta_cyc(cyc_imu);
 	if (er < E_OK) return er;
 
-#if S4_LOG_MS > 0
+#if S4_LOG_MS > 0 || S4_LOG_TILT
 	tid = app_start_task(imu_log_task, S4_PRI_LOG, 0, "imu_log_task");
 	if (tid < E_OK) return tid;
 #endif

@@ -55,6 +55,47 @@ LOCAL volatile ID	fault_flg;
 LOCAL volatile UB	inject_shock;	/* set by the test, cleared by the task */
 #endif
 
+#if S4_LOG_TILT
+/* Tilt trace queue (subsystem4.h S4_LOG_TILT).  One writer per index,
+   like Buddy 3's bc_ring: the IMU task writes entries and tilt_head,
+   the log task reads them and writes tilt_tail.  Entry, 32 bits:
+	[15:0]  pitch, 0.1 deg (signed)    [18:16] S4_ST_xxx
+	[31:19] IMU cycle number, 13 bits (time = cycles x 10 ms) */
+#define TILT_RING		64	/* 0.64 s of samples; power of two */
+#define MEMORY_BARRIER()	__asm__ volatile ("dmb" ::: "memory")
+
+LOCAL UW		tilt_ring[TILT_RING];
+LOCAL volatile UB	tilt_head;	/* IMU task only */
+LOCAL volatile UB	tilt_tail;	/* log task only */
+LOCAL volatile UH	tilt_lost;	/* IMU task only: queue was full */
+LOCAL UB		tilt_was_on;	/* IMU task only */
+
+/* IMU task, every cycle: queue the sample while tilted, plus the first
+   level one after it (so the trace shows the return to flat) */
+LOCAL void tilt_record(void)
+{
+	W	p = imu.pitch_mdeg;
+	INT	pitch_dd = (INT)((p >= 0 ? p + 50 : p - 50) / 100);
+	INT	st = imu.state;
+	BOOL	on = (st == S4_ST_CLIMBING || st == S4_ST_DESCENDING ||
+		      pitch_dd >= S4_TILT_MIN_DD || pitch_dd <= -S4_TILT_MIN_DD);
+	UB	head = tilt_head;
+
+	if (on || tilt_was_on) {
+		if ((UB)(head - tilt_tail) >= TILT_RING) {
+			tilt_lost++;		/* log task behind: drop, never wait */
+		} else {
+			tilt_ring[head & (TILT_RING - 1)] =
+				((UW)(UH)(H)pitch_dd) | (((UW)st & 7u) << 16) |
+				(((UW)dg.cycles & 0x1FFFu) << 19);
+			MEMORY_BARRIER();	/* entry before the index */
+			tilt_head = (UB)(head + 1);
+		}
+	}
+	tilt_was_on = on ? 1 : 0;
+}
+#endif
+
 /*
  * Cyclic handler, every S4_PERIOD_MS.  Interrupt context: just wake the
  * task.
@@ -337,6 +378,10 @@ EXPORT void imu_task(INT stacd, void *exinf)
 
 		/* 5. timing and status */
 		dg.cycles++;
+#if S4_LOG_TILT
+		tilt_record();
+#endif
+		dg.last_peak_dd = (H)((imu.last_peak_mdeg + 50) / 100);
 		dg.i2c_errors = lsm303_error_count();
 		used = in_w(TIMER_TIMERAWL) - t0;
 		dg.last_us = used;
@@ -358,6 +403,59 @@ LOCAL const char *s4_state_name(INT st)
 	return (st >= 0 && st <= S4_ST_FAULT) ? name[st] : "?";
 }
 
+/* Print a pitch in 0.1 deg as +d.d */
+LOCAL void print_deg(INT dd)
+{
+	INT	a = dd < 0 ? -dd : dd;
+
+	tm_printf((UB*)"%c%d.%d", dd < 0 ? '-' : '+', a / 10, a % 10);
+}
+
+#if S4_LOG_TILT
+/* Log task: print every queued tilt sample.  t counts from the first
+   tilted sample of this tilt, in 10 ms IMU cycles. */
+LOCAL void tilt_print(void)
+{
+	static UH	t_start;
+	static UB	in_tilt;
+	static UH	lost_seen;
+	UB		tail = tilt_tail;
+	UW		e;
+	UH		cyc;
+	INT		pitch_dd, st;
+
+	while (tail != tilt_head) {
+		MEMORY_BARRIER();		/* index before the entry */
+		e = tilt_ring[tail & (TILT_RING - 1)];
+		MEMORY_BARRIER();		/* entry read before freeing it */
+		tail = (UB)(tail + 1);
+		tilt_tail = tail;
+
+		pitch_dd = (INT)(H)(UH)(e & 0xFFFFu);
+		st  = (INT)((e >> 16) & 7u);
+		cyc = (UH)((e >> 19) & 0x1FFFu);
+		if (!in_tilt) {
+			in_tilt = 1;
+			t_start = cyc;
+		}
+		tm_printf((UB*)"s4: tilt t=+%dms pitch=",
+			  (INT)((UH)(cyc - t_start) & 0x1FFFu) * S4_PERIOD_MS);
+		print_deg(pitch_dd);
+		tm_printf((UB*)" deg %s\n", s4_state_name(st));
+
+		if (st != S4_ST_CLIMBING && st != S4_ST_DESCENDING &&
+		    pitch_dd < S4_TILT_MIN_DD && pitch_dd > -S4_TILT_MIN_DD) {
+			in_tilt = 0;		/* back to flat: next tilt restarts t */
+		}
+	}
+	if (tilt_lost != lost_seen) {
+		tm_printf((UB*)"s4: tilt trace skipped %d samples (console too slow)\n",
+			  (INT)(UH)(tilt_lost - lost_seen));
+		lost_seen = tilt_lost;
+	}
+}
+#endif
+
 EXPORT void imu_log_task(INT stacd, void *exinf)
 {
 	S4_STS_FIELDS	f;
@@ -365,21 +463,32 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 	UW		w0, w1;
 	INT		last_state = -1, last_count = 0, ticks = 0, a;
 	UB		last_seq = 0;
+	/* With the tilt trace on, wake every IMU period so the queue
+	   (0.64 s deep) is drained long before it fills */
+	const INT	step = S4_LOG_TILT ? S4_PERIOD_MS : 100;
 
 	(void)stacd; (void)exinf;
 
 	while (1) {
-		tk_dly_tsk(100);		/* changes: 100 ms, full line: S4_LOG_MS */
+		tk_dly_tsk(step);
+#if S4_LOG_TILT
+		tilt_print();
+#endif
 		s4_get_status(&w0, &w1);
 		s4_sts_unpack(w0, w1, &f);
 
 		if (f.state != last_state) {
-			tm_printf((UB*)"s4: state %s\n", s4_state_name(f.state));
+			tm_printf((UB*)"s4: state %s (pitch ", s4_state_name(f.state));
+			print_deg(f.pitch_dd);
+			tm_printf((UB*)" deg)\n");
 			last_state = f.state;
 		}
 		if (f.hump_count != last_count) {
-			tm_printf((UB*)"s4: HUMP_END height=%d mm (humps=%d)\n",
-				  f.hump_mm, f.hump_count);
+			s4_get_diag(&d);
+			tm_printf((UB*)"s4: HUMP_END height=%d mm, peak pitch ",
+				  f.hump_mm);
+			print_deg(d.last_peak_dd);
+			tm_printf((UB*)" deg (humps=%d)\n", f.hump_count);
 			last_count = f.hump_count;
 		}
 		if (s4_shock_seq() != last_seq) {
@@ -387,8 +496,8 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 			last_seq = s4_shock_seq();
 		}
 
-		ticks += 100;
-		if (ticks >= S4_LOG_MS) {
+		ticks += step;
+		if (S4_LOG_MS > 0 && ticks >= S4_LOG_MS) {
 			ticks = 0;
 			s4_get_diag(&d);
 			a = f.pitch_dd < 0 ? -f.pitch_dd : f.pitch_dd;

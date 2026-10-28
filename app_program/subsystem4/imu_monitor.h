@@ -124,6 +124,7 @@ typedef struct {
 	W	hump_peak_mdeg;
 	UB	last_hump_mm;		/* 0..31 */
 	UB	hump_count;		/* saturates at 255, packed to 4 bits */
+	W	last_peak_mdeg;		/* peak pitch of the last hump (console log) */
 
 	/* shock and faults */
 	UW	shock_until_ms;

@@ -328,6 +328,7 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 					abort_hump(m, out, &n);	/* false trigger */
 				} else {
 					m->last_hump_mm = hump_result_mm(m);
+					m->last_peak_mdeg = m->hump_peak_mdeg;
 					if (m->hump_count < 255) m->hump_count++;
 					push(out, &n, IMU_EV_HUMP_END, m->last_hump_mm);
 					reset_hump(m);

@@ -60,6 +60,15 @@
 #define S4_PRI_LOG		19
 #define S4_LOG_MS		0
 
+/* Tilt trace on the console (bench / tuning aid): while the robot is
+   tilted (|pitch| >= S4_TILT_MIN_DD or on a hump) print EVERY 10 ms
+   IMU sample, e.g.  s4: tilt t=+120ms pitch=+5.3 deg CLIMBING
+   10 ms is the fastest: the IMU reads the sensor every 10 ms.  The IMU
+   task only queues the samples; the low-priority log task prints them,
+   so printing never delays the 10 ms loop.  0 = off (before the demo). */
+#define S4_LOG_TILT		1
+#define S4_TILT_MIN_DD		10	/* 1.0 deg, in 0.1 deg */
+
 /* =====================================================================
  *  2. Pins
  * ===================================================================== */
@@ -158,6 +167,7 @@ typedef struct {
 	UH	i2c_errors;	/* failed transfers (wraps) */
 	UH	evt_drops;	/* events mbf_vc_evt refused, or not bound */
 	UB	sensor_found;	/* LSM303DLHC answered at start-up */
+	H	last_peak_dd;	/* peak pitch of the last hump, 0.1 deg */
 } S4_DIAG;
 
 IMPORT void	s4_get_diag(S4_DIAG *d);
