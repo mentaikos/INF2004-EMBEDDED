@@ -284,6 +284,17 @@ LOCAL void rejoin_follow(void)
 	tm_printf((UB*)"vc: line seen after the obstacle, following it\n");
 }
 
+/* Obstacle Scan stays in LINE_RECOVERY until it has seen the line for a
+   while, and faults (E-STOP) if it never does.  When the VC has already
+   moved on (LINE_FOLLOW, or LINE_SEARCH after losing the line again),
+   keep feeding it line samples so it can still confirm. */
+LOCAL void relay_recovery(void)
+{
+	if (s5_sts_state(s5_status()) == S5_ST_LINE_RECOVERY) {
+		s5_line_observe(line_seen());
+	}
+}
+
 LOCAL void enter_obstacle_scan(void)
 {
 	script_clear();
@@ -718,6 +729,7 @@ LOCAL void tick(void)
 
 	case VC_ST_LINE_FOLLOW:
 	case VC_ST_HUMP_TRAVERSE:
+		relay_recovery();
 		track_line_side();
 		/* Line & Barcode reports LINE_LOST only on the change; after a
 		   turn or a bypass it may already be LOST, so check the state */
@@ -737,6 +749,7 @@ LOCAL void tick(void)
 		break;
 
 	case VC_ST_LINE_SEARCH:
+		relay_recovery();
 		if (line_seen()) {
 			enter_follow();
 		} else if (since(vc.t_state) >= VC_LINE_SEARCH_MS) {
@@ -791,9 +804,25 @@ LOCAL void tick(void)
 			BOOL found = line_seen();
 			s5_line_observe(found);
 			if (vc.phase == PH_APPROACH && found) {
-				/* Line found: follow it from here (no 90 degree
-				   realign turn back to the original heading) */
-				rejoin_follow();
+				/* Met the line head-on: both IR sensors on the
+				   tape reads as a crossing (steer 0), so following
+				   at once drove straight over it (28 Oct).  Bring
+				   the axle onto the line, turn along it (back to
+				   the original heading), then follow
+				   (script_done: PH_REALIGN -> PH_CONFIRM). */
+				UW t[2];
+				t[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S,
+						   0, VC_JUNCTION_ADV_CM);
+				t[1] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S,
+						   vc.side_right ? 90 : -90, 0);
+				vc.phase = PH_REALIGN;
+				script_run(t, 2);	/* pre-empts the MOVE */
+				tm_printf((UB*)"vc: line found, turning onto it\n");
+			} else if (vc.phase == PH_CONFIRM) {
+				/* Following it: lost it again -> search for it
+				   (relay_recovery keeps S5 fed) */
+				track_line_side();
+				if (line_lost_now()) enter_search();
 			}
 		}
 		break;

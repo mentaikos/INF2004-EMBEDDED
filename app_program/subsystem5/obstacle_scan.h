@@ -21,12 +21,15 @@
 #define S5_RANGE_UNSCANNED     3
 #define S5_RANGE_MIN_CM        5
 #define S5_RANGE_MAX_CM        100
-#define S5_DETECT_CM           20
+#define S5_DETECT_CM           20       /* 28 Oct: was 20; the robot coasted to
+					   ~16 cm, inside its own turning circle
+					   (16.8 cm), so every first scan said
+					   REVERSE */
 /* After a stop, an obstacle IN THE ROBOT'S PATH (within half the required
  * width of the centre line) this close is planned around, not driven
  * into: without this, the rescan after a 10 cm reverse saw it beyond
  * S5_DETECT_CM, answered CONTINUE, and the robot drove back into it. */
-#define S5_PLAN_CM             40
+#define S5_PLAN_CM             50       /* > detect + 2 reverses of 10 cm */
 /* While going around (BYPASSING), stop for something this close only.
  * The bypass turns sweep the sensor across the obstacle being passed
  * (~19 cm away): with S5_DETECT_CM that re-detected it mid-turn, the VC
@@ -46,6 +49,12 @@
 #define S5_LINE_CONFIRM_MS     120
 #define S5_PROFILE_BAND_CM     10
 #define S5_BEAM_ALLOW_DEG      15
+/* Side gap check (side_clearance): only things within the strip the robot
+ * drives through while passing count -- up to the obstacle face band +
+ * this far ahead (obstacle depth + robot length).  Nothing there: the side
+ * is taken as this wide (more than any bypass needs). */
+#define S5_PASS_DEPTH_MM       450
+#define S5_SIDE_FREE_MM        600
 
 /* PLACEHOLDERS: measure assembled footprint and motion/sensing errors. */
 #define S5_ROBOT_WIDTH_MM      160
@@ -54,7 +63,7 @@
 #define S5_RANGE_ERROR_MM      10
 #define S5_SERVO_MIN_US        1000     /* calibrate 0/180-degree pulses */
 #define S5_SERVO_MAX_US        2000
-#define S5_SERVO_REVERSED      0        /* 0: 30 degrees points right */
+#define S5_SERVO_REVERSED      1        /* 0: 30 degrees points right */
 #define S5_SERVO_BASE_MS       20
 #define S5_SERVO_MS_PER_DEG    2        /* conservative; measure */
 

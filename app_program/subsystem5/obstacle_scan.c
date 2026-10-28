@@ -153,28 +153,41 @@ LOCAL UINT required_width_mm(void)
 	return S5_ROBOT_WIDTH_MM + 2 * (S5_CLEARANCE_MARGIN_MM + S5_RANGE_ERROR_MM);
 }
 
-/* Free wedge outside a visible edge. Missing echoes invalidate that side.
- * Unscanned fine bins are covered only by their measured coarse endpoints;
- * no coarse bin may be absent. A 15-degree beam allowance shrinks the fan.
- * Chord = 2*r*sin(fan/2); floor to 5 degrees is conservative. */
-LOCAL UINT side_clearance(const UB *scan, UINT edge, BOOL left, UINT band)
+/* Free gap beside the obstacle on one side, mm: the sideways distance
+ * from the obstacle's outer edge (edge_mm, measured from the robot's
+ * centre line) to the nearest thing on that side that lies within the
+ * strip the robot drives through while passing it (forward up to the
+ * obstacle face + S5_PASS_DEPTH_MM).  Readings further ahead do not
+ * matter for the bypass.  Missing echoes or a very near return on that
+ * side make it 0 (unknown is not clear); an unscanned coarse bin too.
+ * Nothing in the strip: S5_SIDE_FREE_MM (the sweep saw open space).
+ *
+ * 28 Oct: this replaced a "free wedge chord" that only credited the
+ * angle left over beyond the obstacle's edges, minus a 15-degree beam
+ * allowance.  A 30 cm box 22 cm away fills 60..125 degrees, so that
+ * gave 14..17 cm with nothing at all beside the box, and the robot
+ * reversed until NO_CLEAR. */
+LOCAL UINT side_clearance(const UB *scan, UINT edge, BOOL left, UINT band,
+			  INT edge_mm)
 {
-	INT i, step = left ? 1 : -1;
-	UINT r, radius = 1000, span;
+	INT i, step = left ? 1 : -1, lat, fwd, gap;
+	UINT r, free_mm = S5_SIDE_FREE_MM;
 	if ((!left && edge == 0) || (left && edge == 24)) return 0;
+	if (edge_mm < 0) edge_mm = 0;
 	for (i = (INT)edge + step; i >= 0 && i < S5_ANGLES; i += step) {
 		r = s5_scan_get(scan, (UINT)i);
 		if (r == S5_RANGE_UNSCANNED && i % 6 != 0) continue;
-		if (uncertain(r) || r == S5_RANGE_NEAR || (measured(r) && r <= band))
-			return 0;
-		if (measured(r) && r * 10u < radius) radius = r * 10u;
+		if (uncertain(r) || r == S5_RANGE_NEAR) return 0;
+		if (!measured(r)) continue;            /* FAR: open */
+		lat = project((INT)r * 10, 90 - (INT)s5_angle_deg((UINT)i));
+		if (lat < 0) lat = -lat;
+		fwd = project((INT)r * 10, (INT)s5_angle_deg((UINT)i));
+		if (fwd > (INT)band * 10 + S5_PASS_DEPTH_MM) continue;
+		gap = lat - edge_mm - S5_RANGE_ERROR_MM;
+		if (gap <= 0) return 0;
+		if ((UINT)gap < free_mm) free_mm = (UINT)gap;
 	}
-	span = left ? s5_angle_deg(24) - s5_angle_deg(edge)
-		    : s5_angle_deg(edge) - s5_angle_deg(0);
-	if (span <= S5_BEAM_ALLOW_DEG) return 0;
-	span -= S5_BEAM_ALLOW_DEG;
-	radius = radius > S5_RANGE_ERROR_MM ? radius - S5_RANGE_ERROR_MM : 0;
-	return (UINT)(2 * project((INT)radius, (INT)(span / 2u)));
+	return free_mm;
 }
 
 EXPORT S5_PROFILE s5_make_profile(const UB *scan)
@@ -218,8 +231,10 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 		/* An unknown forward/foreground return cannot establish a clear
 		 * turning envelope, even when one outer side fan looks open. */
 		if (uncertain(s5_scan_get(scan, S5_CENTRE))) foreground_known = FALSE;
-		left = side_clearance(scan, hi, TRUE, closest + S5_PROFILE_BAND_CM);
-		right = side_clearance(scan, lo, FALSE, closest + S5_PROFILE_BAND_CM);
+		left = side_clearance(scan, hi, TRUE, closest + S5_PROFILE_BAND_CM,
+				      -xmin);
+		right = side_clearance(scan, lo, FALSE, closest + S5_PROFILE_BAND_CM,
+				       xmax);
 		/* All measured bearings must clear the in-place turning envelope. */
 		if (foreground_known && closest * 10u > turn_radius_mm()) {
 			if (left >= required_width_mm() || right >= required_width_mm()) {
