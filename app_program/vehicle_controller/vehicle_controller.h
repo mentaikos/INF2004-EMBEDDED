@@ -44,7 +44,7 @@
 /* =====================================================================
  *  2. Mission behaviour (PLACEHOLDERS: tune on the track)
  * ===================================================================== */
-#define VC_CRUISE_CM_S		30	/* line following speed (27 Oct: 20 lost the line, slowed to 15;
+#define VC_CRUISE_CM_S		15	/* line following speed (27 Oct: 20 lost the line, slowed to 15;
 					   back to 20 after the start-up / sensor-wiring fixes) */
 #define VC_SLOW_CM_S		10	/* NFR12: <= 10 cm/s near an obstacle */
 #define VC_TURN_CM_S		10	/* wheel speed while turning (27 Oct: was 15) */
@@ -82,7 +82,7 @@
    detection, NO stop for an obstacle (NFR1, NFR10, NFR12 not met).
    For testing line following and motion while the ultrasonic is being
    fixed.  Never 0 on the track with people or obstacles, or in a demo. */
-#define VC_USE_ULTRASONIC	0
+#define VC_USE_ULTRASONIC	1
 
 /* Bench test of straight driving (S2-M03), independent of the line
    sensors: 0 = normal.  N (1..127) = on START, drive straight N cm with

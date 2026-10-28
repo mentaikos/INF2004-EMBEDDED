@@ -11,20 +11,20 @@
 *----------------------------------------------------------------------
 */
 
-#include <sys/machine.h>
-#ifdef PICO_RP2040
+#include <sys/machine.h>
+#ifdef PICO_RP2040
 
 /*
 * cpu_clock.c (RaspberryPi Pico)
 * Clock Setting
 */
 
-#include <tk/tkernel.h>
-#include "sysdepend.h"
+#include <tk/tkernel.h>
+#include "sysdepend.h"
 
 /* RP2040 datasheet 4.7.6: WATCHDOG TICK register */
-#define WATCHDOG_TICK (0x40058000 + 0x2C)
-#define WATCHDOG_TICK_ENABLE (1u << 9)
+#define WATCHDOG_TICK (0x40058000 + 0x2C)
+#define WATCHDOG_TICK_ENABLE (1u << 9)
 
 /* 
 * PLL initialization
