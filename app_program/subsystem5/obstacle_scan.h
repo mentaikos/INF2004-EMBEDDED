@@ -21,7 +21,7 @@
 #define S5_RANGE_UNSCANNED     3
 #define S5_RANGE_MIN_CM        5
 #define S5_RANGE_MAX_CM        100
-#define S5_DETECT_CM           20       /* 28 Oct: was 20; the robot coasted to
+#define S5_DETECT_CM           25       /* 28 Oct: was 20; the robot coasted to
 					   ~16 cm, inside its own turning circle
 					   (16.8 cm), so every first scan said
 					   REVERSE */
@@ -44,7 +44,8 @@
 #define S5_RETRY_LIMIT         3
 #define S5_RETRY_MS            1000
 #define S5_PLAN_TTL_MS         1000
-#define S5_RECOVERY_MS         10000    /* rejoin: up to 75 cm at 10 cm/s + turn */
+#define S5_RECOVERY_MS         20000    /* rejoin drive (up to 127 cm at 10 cm/s)
+					   + a line search; < 32 s (16-bit ms) */
 #define S5_LINE_FRESH_MS       120
 #define S5_LINE_CONFIRM_MS     120
 #define S5_PROFILE_BAND_CM     10
@@ -55,6 +56,21 @@
  * is taken as this wide (more than any bypass needs). */
 #define S5_PASS_DEPTH_MM       450
 #define S5_SIDE_FREE_MM        600
+/* Forward watch on curves (task_scan.c): while following, point the
+ * sensor into the bend, so a box placed on a curve is seen ahead of the
+ * robot instead of beside the straight-ahead beam.  The bend is taken
+ * from Line & Barcode's steering, averaged over ~0.5 s: look angle =
+ * (|average| - S5_WATCH_DEADBAND) x S5_WATCH_GAIN degrees, at most
+ * S5_WATCH_MAX_DEG; inside the deadband the sensor stays centred, so
+ * normal weaving on a straight does not move it.
+ * Geometry: on a circle of radius R, a box on the line d cm ahead is
+ * asin(d / 2R) off the robot's heading -- 30 deg for R = 25 cm and
+ * d = 25 cm, 39 deg for R = 20 cm.  The beam is about +-15 deg wide.
+ * Tune on the track: tight circle -> raise GAIN; the sensor jumping
+ * about on straights -> raise DEADBAND. */
+#define S5_WATCH_MAX_DEG       40
+#define S5_WATCH_DEADBAND      8
+#define S5_WATCH_GAIN          3
 
 /* PLACEHOLDERS: measure assembled footprint and motion/sensing errors. */
 #define S5_ROBOT_WIDTH_MM      160
@@ -63,7 +79,7 @@
 #define S5_RANGE_ERROR_MM      10
 #define S5_SERVO_MIN_US        1000     /* calibrate 0/180-degree pulses */
 #define S5_SERVO_MAX_US        2000
-#define S5_SERVO_REVERSED      1        /* 0: 30 degrees points right */
+#define S5_SERVO_REVERSED      0        /* 0: 30 degrees points right */
 #define S5_SERVO_BASE_MS       20
 #define S5_SERVO_MS_PER_DEG    2        /* conservative; measure */
 

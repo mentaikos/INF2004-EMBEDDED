@@ -43,7 +43,7 @@ EXPORT INT vc_nav_script(UINT nav, UW *cmds)
  *	2. MOVE lat: edge + half robot width + margin
  *	3. TURN back                         heading 0
  *	4. MOVE past: y + obstacle depth + robot length
- *	5. TURN towards the line             heading -+90
+ *	5. TURN towards the line             heading -+VC_REJOIN_TURN_DEG
  * Then REJOIN_LINE drives towards the line (lat + extra) and turns back
  * along it when Line & Barcode sees it.
  */
@@ -67,7 +67,7 @@ EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm)
 	cmds[1] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, lat);
 	cmds[2] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, -90 * side, 0);
 	cmds[3] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, fwd);
-	cmds[4] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, -90 * side, 0);
+	cmds[4] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, -VC_REJOIN_TURN_DEG * side, 0);
 	if (lat_cm != NULL) *lat_cm = lat;
 	return 5;
 }

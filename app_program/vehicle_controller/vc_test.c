@@ -77,10 +77,11 @@ EXPORT void vc_test(void)
 	     is_cmd(c[2], S2_CMD_TURN, -90, 0) &&
 	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0,
 		    20 + VC_OBSTACLE_DEPTH_CM + S5_ROBOT_LENGTH_MM / 10) &&
-	     is_cmd(c[4], S2_CMD_TURN, -90, 0);
+	     is_cmd(c[4], S2_CMD_TURN, -VC_REJOIN_TURN_DEG, 0);
 	n = vc_bypass_script(p, -1, c, &lat);
 	ok = ok && n == 5 && is_cmd(c[0], S2_CMD_TURN, -90, 0) &&
-	     is_cmd(c[2], S2_CMD_TURN, 90, 0) && is_cmd(c[4], S2_CMD_TURN, 90, 0);
+	     is_cmd(c[2], S2_CMD_TURN, 90, 0) &&
+	     is_cmd(c[4], S2_CMD_TURN, VC_REJOIN_TURN_DEG, 0);
 	p = make_profile(20, 120, 30, 100);
 	vc_bypass_script(p, 1, c, &lat);
 	ok = ok && lat == VC_BYPASS_MAX_CM && s2_cmd_dist(c[3]) == S2_DIST_MAX_CM;

@@ -67,10 +67,17 @@
 #define VC_STEP_TIMEOUT_MS	15000	/* one MOVE(d)/TURN without MOTION_DONE:
 				   127 cm at 10-20 cm/s needs ~7-13 s */
 #define VC_OBSTACLE_DEPTH_CM	25	/* assumed obstacle depth (not measurable) */
-#define VC_REJOIN_EXTRA_CM	10	/* drive this far past the expected line */
+#define VC_REJOIN_EXTRA_CM	3	/* drive this far past the expected line */
 #define VC_BYPASS_MIN_CM	20
 #define VC_BYPASS_EXTRA_CM	12
 #define VC_BYPASS_MAX_CM	60
+/* Rejoin after a bypass (28 Oct, curved track): the last bypass turn is
+   only this many degrees towards the line (not 90), so the robot meets
+   it at an angle and can turn onto it; the approach is up to
+   2 x sideways distance + VC_REJOIN_EXTRA_CM (a curve may have moved
+   the line further away), and if the line is still not found a normal
+   LINE_SEARCH follows instead of waiting for Obstacle Scan's time-out. */
+#define VC_REJOIN_TURN_DEG	60
 
 /* START needs the IMU calibrated and an IMU fault stops the mission
    (design).  0 = bench mode ONLY: drive without a working IMU (no hump

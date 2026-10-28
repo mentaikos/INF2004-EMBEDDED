@@ -3,6 +3,7 @@
 #include "drv_ultrasonic.h"
 #include "../subsystem2/subsystem2.h"
 #include "../subsystem4/subsystem4.h"
+#include "../subsystem3/subsystem3.h"
 #include <tk/syslib.h>
 
 EXPORT ID tid_s5_scan;
@@ -190,6 +191,47 @@ LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns)
 	tk_unl_mtx(mtx_s5_status);
 }
 
+/* Forward watch on curves: the angle index to watch while following.
+   Line & Barcode's steering (+ = right), averaged over ~0.5 s (one call
+   per 60 ms cycle, 1/8 per call, Q4), says which way and how sharply
+   the track bends; look up to S5_WATCH_MAX_DEG that way (obstacle_scan.h).
+   Prints the look angle when it changes, for tuning.  Index 12 is straight ahead and
+   lower indices point right (S5_SERVO_REVERSED handles the mounting). */
+LOCAL W steer_avg_q4;
+
+LOCAL UINT watch_index(BOOL moving)
+{
+	S3_STS_FIELDS f;
+	W avg, deg;
+	INT bins;
+	if (!moving) {
+		steer_avg_q4 = 0;
+		return S5_CENTRE;
+	}
+	s3_sts_unpack(s3_get_status(), &f);
+	steer_avg_q4 += ((W)f.steer * 16 - steer_avg_q4) / 8;
+	avg = steer_avg_q4 / 16;
+	if (avg > S5_WATCH_DEADBAND) deg = (avg - S5_WATCH_DEADBAND) * S5_WATCH_GAIN;
+	else if (avg < -S5_WATCH_DEADBAND) deg = (avg + S5_WATCH_DEADBAND) * S5_WATCH_GAIN;
+	else deg = 0;
+	if (deg > S5_WATCH_MAX_DEG) deg = S5_WATCH_MAX_DEG;
+	if (deg < -S5_WATCH_MAX_DEG) deg = -S5_WATCH_MAX_DEG;
+	bins = (INT)(deg * (S5_ANGLES - 1) / (2 * S5_SWEEP_HALF_DEG));
+#if S5_DEBUG_SCAN
+	{
+		static INT last_bins;
+		if (bins != last_bins) {
+			tm_printf((UB*)"s5: watch %s %d deg (steer avg %d)\n",
+				  bins > 0 ? "right" : bins < 0 ? "left" : "ahead",
+				  (bins < 0 ? -bins : bins) * 2 * S5_SWEEP_HALF_DEG /
+				  (S5_ANGLES - 1), (INT)avg);
+			last_bins = bins;
+		}
+	}
+#endif
+	return (UINT)(S5_CENTRE - bins);	/* + steer (right) -> lower index */
+}
+
 EXPORT void s5_scan_task(INT stacd, void *exinf)
 {
 	S5_SCAN scan;
@@ -220,6 +262,9 @@ EXPORT void s5_scan_task(INT stacd, void *exinf)
 		inputs(&in);
 		s5_scan_tick(&scan, &in, &out);
 		deliver(&out, &scan, &drops, overruns);
+		/* Following the line: look into the bend (curves) */
+		if (scan.state == S5_ST_FORWARD_WATCH)
+			scan.index = (UB)watch_index(!in.stopped);
 		if (scan.index != pointed) {
 			settle_ms = s5_servo_settle_ms(pointed, scan.index);
 			er = drv_us_point(scan.index);

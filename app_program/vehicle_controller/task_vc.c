@@ -378,24 +378,17 @@ LOCAL void do_start(void)
 	set_state(VC_ST_STARTING);
 }
 
-/* STOP while in FAULT = the reset.  Guard: the fault is gone. */
+/* STOP while in FAULT = the reset: always back to IDLE.  Every fault
+   bit is cleared and the ultrasonic is told to re-test itself.  A
+   sensor that is still faulty is caught by START (vc_start_check
+   refuses it and says why), so the robot still cannot drive with it. */
 LOCAL void do_reset(void)
 {
-	UW	s5 = s5_status();
-	INT	s4 = s4_sts_state(s4_get_status_w0());
-
 	cmd_stop();		/* also clears Motion's STALL / ENC latch */
-	if (s5_sts_state(s5) == S5_ST_SENSOR_FAULT) s5_reset();	/* re-test */
-	if ((VC_REQUIRE_IMU && s4 == S4_ST_FAULT) ||
-	    s5_sts_state(s5) == S5_ST_SENSOR_FAULT) {
-		vc.reason = VC_R_FAULT_ACTIVE;
-		tm_printf((UB*)"vc: reset refused, sensor still in fault\n");
-		return;
-	}
-	if (flg_fault > 0) {
-		tk_clr_flg(flg_fault, ~(UINT)(FAULT_LINE_TIMEOUT | FAULT_NO_ECHO));
-	}
+	if (s5_sts_state(s5_status()) == S5_ST_SENSOR_FAULT) s5_reset();
+	if (flg_fault > 0) tk_clr_flg(flg_fault, 0);
 	vc.faults = 0;
+	tm_printf((UB*)"vc: fault reset\n");
 	enter_idle(VC_R_NONE);
 }
 
@@ -436,11 +429,16 @@ LOCAL void script_done(void)
 		break;
 
 	case VC_ST_BYPASS_OBSTACLE:
-		/* Now facing the line: start recovery (Obstacle Scan's 3 s
-		   watchdog), drive towards the line slowly */
+		/* Now angled towards the line: start recovery (Obstacle Scan's
+		   watchdog), drive towards the line slowly.  Up to twice the
+		   sideways distance: at VC_REJOIN_TURN_DEG the path to the line
+		   is longer than lat, and on a curve the line may be further */
 		s5_rejoin_line();
-		c = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0,
-				vc.lat_cm + VC_REJOIN_EXTRA_CM);
+		{
+			INT d = 2 * (INT)vc.lat_cm + VC_REJOIN_EXTRA_CM;
+			if (d > S2_DIST_MAX_CM) d = S2_DIST_MAX_CM;
+			c = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, d);
+		}
 		set_state(VC_ST_REJOIN_LINE);
 		vc.phase = PH_APPROACH;
 		script_run(&c, 1);
@@ -451,8 +449,15 @@ LOCAL void script_done(void)
 			vc.phase = PH_CONFIRM;
 			cmd_follow(VC_SLOW_CM_S);	/* follow while S5 confirms */
 		}
-		/* PH_APPROACH done without the line: hold; Obstacle Scan's
-		   watchdog reports LINE_TIMEOUT */
+		else if (vc.phase == PH_APPROACH) {
+			/* Drove the whole approach without seeing the line (a
+			   curve took it away): search for it, first on the side
+			   it was left on.  relay_recovery keeps S5 fed. */
+			line_side = vc.side_right ? -1 : 1;
+			tm_printf((UB*)"vc: line not found after the obstacle,"
+				  " searching\n");
+			enter_search();
+		}
 		break;
 
 	default:
@@ -804,17 +809,19 @@ LOCAL void tick(void)
 			BOOL found = line_seen();
 			s5_line_observe(found);
 			if (vc.phase == PH_APPROACH && found) {
-				/* Met the line head-on: both IR sensors on the
-				   tape reads as a crossing (steer 0), so following
-				   at once drove straight over it (28 Oct).  Bring
-				   the axle onto the line, turn along it (back to
-				   the original heading), then follow
+				/* Met the line at an angle (VC_REJOIN_TURN_DEG):
+				   following at once can read both IR sensors on the
+				   tape as a crossing (steer 0) and drive straight
+				   over it (28 Oct).  Bring the axle onto the line,
+				   turn along it (back to the original heading),
+				   then follow
 				   (script_done: PH_REALIGN -> PH_CONFIRM). */
 				UW t[2];
 				t[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S,
 						   0, VC_JUNCTION_ADV_CM);
 				t[1] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S,
-						   vc.side_right ? 90 : -90, 0);
+						   vc.side_right ? VC_REJOIN_TURN_DEG
+								 : -VC_REJOIN_TURN_DEG, 0);
 				vc.phase = PH_REALIGN;
 				script_run(t, 2);	/* pre-empts the MOVE */
 				tm_printf((UB*)"vc: line found, turning onto it\n");
