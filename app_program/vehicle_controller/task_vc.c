@@ -71,6 +71,12 @@ LOCAL VC_DIAG		dg;
 #define PH_REALIGN		1
 #define PH_CONFIRM		2
 
+/* Bypass script step from which a line under the IR sensors is followed
+   at once (vc_bypass_script: 0 turn out, 1 sideways, 2 turn back,
+   3 past the obstacle, 4 turn towards the line).  Not earlier: on steps
+   0..3 the robot is still beside the obstacle. */
+#define VC_BYPASS_FOLLOW_STEP	4
+
 LOCAL const char *const st_name[] = {
 	"INIT", "IDLE", "STARTING", "LINE_FOLLOW", "EXECUTE_NAV_CMD",
 	"HUMP_TRAVERSE", "LINE_SEARCH", "OBSTACLE_SCAN", "BYPASS_OBSTACLE",
@@ -258,6 +264,24 @@ LOCAL void enter_search(void)
 		script_run(&c, 1);
 	}
 	set_state(VC_ST_LINE_SEARCH);
+}
+
+/* After the obstacle: the IR sensors see a line, so follow it from here
+   instead of finishing the scripted rejoin (approach + 90 degree turn).
+   Obstacle Scan still has to confirm the line (its LINE_RECOVERY, with a
+   watchdog), so follow slowly in REJOIN_LINE/PH_CONFIRM, keep relaying
+   line samples (tick), and REJOIN_LINE_CONFIRMED then gives LINE_FOLLOW
+   at cruise speed. */
+LOCAL void rejoin_follow(void)
+{
+	if (vc.state == VC_ST_BYPASS_OBSTACLE) {
+		s5_rejoin_line();		/* S5: BYPASSING -> LINE_RECOVERY */
+		set_state(VC_ST_REJOIN_LINE);
+	}
+	script_clear();				/* a late MOTION_DONE is now stale */
+	vc.phase = PH_CONFIRM;
+	cmd_follow(VC_SLOW_CM_S);		/* replaces the TURN / MOVE */
+	tm_printf((UB*)"vc: line seen after the obstacle, following it\n");
 }
 
 LOCAL void enter_obstacle_scan(void)
@@ -751,17 +775,25 @@ LOCAL void tick(void)
 		}
 		break;
 
+	case VC_ST_BYPASS_OBSTACLE:
+		/* Past the obstacle and turning towards the line: a line under
+		   the sensors is followed now (28 Oct: it was seen here, then the
+		   rejoin drove on past it and timed out) */
+		if (script_len > 0 && script_idx >= VC_BYPASS_FOLLOW_STEP &&
+		    line_seen()) {
+			rejoin_follow();
+		}
+		break;
+
 	case VC_ST_REJOIN_LINE:
 		/* Relay a fresh line sample every <= 60 ms (Buddy 5) */
 		{
 			BOOL found = line_seen();
 			s5_line_observe(found);
 			if (vc.phase == PH_APPROACH && found) {
-				/* Turn back along the original direction */
-				UW t = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S,
-						   vc.side_right ? 90 : -90, 0);
-				vc.phase = PH_REALIGN;
-				script_run(&t, 1);	/* pre-empts the MOVE */
+				/* Line found: follow it from here (no 90 degree
+				   realign turn back to the original heading) */
+				rejoin_follow();
 			}
 		}
 		break;

@@ -66,7 +66,7 @@
    10 ms is the fastest: the IMU reads the sensor every 10 ms.  The IMU
    task only queues the samples; the low-priority log task prints them,
    so printing never delays the 10 ms loop.  0 = off (before the demo). */
-#define S4_LOG_TILT		1
+#define S4_LOG_TILT		0
 #define S4_TILT_MIN_DD		10	/* 1.0 deg, in 0.1 deg */
 
 /* =====================================================================

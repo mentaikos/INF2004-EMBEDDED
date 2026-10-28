@@ -126,7 +126,7 @@ EXPORT UW s5_fine_mask(const UB *scan)
 		a = s5_scan_get(scan, i);
 		b = s5_scan_get(scan, i + 6);
 		if (uncertain(a) || uncertain(b) || a == S5_RANGE_NEAR ||
-		    b == S5_RANGE_NEAR || (nearest <= 30 &&
+		    b == S5_RANGE_NEAR || (nearest <= S5_PLAN_CM &&
 		    ((measured(a) && a <= nearest + S5_PROFILE_BAND_CM) ||
 		     (measured(b) && b <= nearest + S5_PROFILE_BAND_CM)))) {
 			for (j = i; j <= i + 6; j++)
@@ -183,18 +183,24 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 	UINT i, r, closest = 101, nearest_i = S5_CENTRE, lo, hi;
 	UINT left = 0, right = 0, width = 0, action = S5_ACT_STOP, valid = 0;
 	INT x = 0, y = 0, xmin = 1001, xmax = -1001, px;
+	UINT path = 101;			/* nearest range in the robot's path */
 	BOOL unknown = FALSE, near = FALSE, foreground_known = TRUE;
 	for (i = 0; i < S5_ANGLES; i++) {
 		r = s5_scan_get(scan, i);
 		if (r == S5_RANGE_NEAR) near = TRUE;
 		if (r == S5_RANGE_NO_ECHO || (i % 6 == 0 && uncertain(r))) unknown = TRUE;
 		if (measured(r) && r < closest) { closest = r; nearest_i = i; }
+		if (measured(r) && r < path) {
+			px = project((INT)r * 10, 90 - (INT)s5_angle_deg(i));
+			if (px < 0) px = -px;
+			if ((UINT)px <= required_width_mm() / 2u) path = r;
+		}
 	}
 	lo = hi = nearest_i;
-	if (!near && !unknown && closest > S5_DETECT_CM) {
+	if (!near && !unknown && closest > S5_DETECT_CM && path > S5_PLAN_CM) {
 		action = S5_ACT_CONTINUE;
 		valid = 1;
-	} else if (!near && closest <= S5_DETECT_CM) {
+	} else if (!near && (closest <= S5_DETECT_CM || path <= S5_PLAN_CM)) {
 		/* Foreground is the nearest range band; extrema are visible surface
 		 * points only. Hidden depth is deliberately not inferred. */
 		for (i = 0; i < S5_ANGLES; i++) {
@@ -458,7 +464,9 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 			if (s->pending & ((UW)1u << i)) { s->index = (UB)i; break; }
 	} else if (s->state == S5_ST_FORWARD_WATCH || s->state == S5_ST_BYPASSING ||
 		   s->state == S5_ST_LINE_RECOVERY) {
-		if (range == S5_RANGE_NO_ECHO || !measured(range) || range > S5_DETECT_CM)
+		UINT detect = s->state == S5_ST_BYPASSING ? S5_BYPASS_DETECT_CM
+							   : S5_DETECT_CM;
+		if (range == S5_RANGE_NO_ECHO || !measured(range) || range > detect)
 			s->near_count = 0;
 		else {
 			/* Reject a short hump reflection, never mask a persistent hazard

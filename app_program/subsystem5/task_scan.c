@@ -119,6 +119,38 @@ LOCAL void inputs(S5_INPUT *in)
 
 LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns);
 
+/* TEMPORARY tuning aid: after every finished scan print what each angle
+   saw and the decision, so a REVERSE / NO_CLEAR can be explained from the
+   log.  Range codes: 0 = under 5 cm, 1 = over 100 cm (clear), 2 = no
+   echo, 3 = not scanned, else cm.  Set S5_DEBUG_SCAN to 0 when done. */
+#ifndef S5_DEBUG_SCAN
+#define S5_DEBUG_SCAN		1
+#endif
+#if S5_DEBUG_SCAN
+LOCAL void print_scan(const S5_SCAN *scan, INT event)
+{
+	static const char *act[] = { "STOP", "CONTINUE", "LEFT", "RIGHT",
+				     "REVERSE", "?", "?", "?" };
+	S5_PROFILE p = scan->profile;
+	UINT i;
+
+	tm_printf((UB*)"s5: scan");
+	for (i = 0; i < S5_ANGLES; i++) {
+		tm_printf((UB*)" %d:%d", s5_angle_deg(i), s5_scan_get(scan->scan, i));
+	}
+	tm_printf((UB*)"\ns5: -> %s %s closest=%dcm width=%dcm x=%d y=%d"
+		  " clearL=%dcm clearR=%dcm (need %dcm) edges %d..%d\n",
+		  act[s5_profile_action(p) & 7u],
+		  event == EVT_OBSTACLE_PROFILE ? "(plan)" : "(NO_CLEAR)",
+		  s5_profile_closest(p), s5_profile_width(p),
+		  s5_profile_x(p), s5_profile_y(p),
+		  s5_profile_left(p), s5_profile_right(p),
+		  (S5_ROBOT_WIDTH_MM + 2 * (S5_CLEARANCE_MARGIN_MM +
+					    S5_RANGE_ERROR_MM)) / 10,
+		  s5_angle_deg((p.w1 >> 14) & 31u), s5_angle_deg((p.w1 >> 19) & 31u));
+}
+#endif
+
 LOCAL void deliver(const S5_OUTPUT *out, const S5_SCAN *scan, UH *drops, UH overruns)
 {
 	UW payload = out->payload, word;
@@ -128,6 +160,10 @@ LOCAL void deliver(const S5_OUTPUT *out, const S5_SCAN *scan, UH *drops, UH over
 	if (out->estop || fault) CHECK(tk_set_flg(flg_safety, S2_FLG_ESTOP), "S5 safety");
 	if (fault && vc_faults > 0) CHECK(tk_set_flg(vc_faults, fault), "S5 fault");
 	if (out->event < 0) return;
+#if S5_DEBUG_SCAN
+	if (out->event == EVT_OBSTACLE_PROFILE || out->event == EVT_NO_CLEAR)
+		print_scan(scan, out->event);
+#endif
 	/* The higher-priority VC can run immediately after tk_snd_mbf.
 	 * Publish first so that its event and profile describe the same scan. */
 	publish(scan, *drops, overruns);

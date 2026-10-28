@@ -12,7 +12,7 @@
  * 22.5 deg).  30 = 60..120 (2.5-deg bins, coarse every 15 deg).
  * Narrower = less servo swing, but less of each side is seen, so a
  * bypass is approved less often (more REVERSE / NO_CLEAR). */
-#define S5_SWEEP_HALF_DEG      60
+#define S5_SWEEP_HALF_DEG      60       /* 28 Oct: 45 never cleared a 30 cm box */
 #define S5_SCAN_BYTES          22       /* 25 * 7 = 175 bits */
 #define S5_ALL_ANGLES          0x01ffffffu
 #define S5_RANGE_NEAR          0        /* returned echo below 5 cm */
@@ -22,6 +22,17 @@
 #define S5_RANGE_MIN_CM        5
 #define S5_RANGE_MAX_CM        100
 #define S5_DETECT_CM           20
+/* After a stop, an obstacle IN THE ROBOT'S PATH (within half the required
+ * width of the centre line) this close is planned around, not driven
+ * into: without this, the rescan after a 10 cm reverse saw it beyond
+ * S5_DETECT_CM, answered CONTINUE, and the robot drove back into it. */
+#define S5_PLAN_CM             40
+/* While going around (BYPASSING), stop for something this close only.
+ * The bypass turns sweep the sensor across the obstacle being passed
+ * (~19 cm away): with S5_DETECT_CM that re-detected it mid-turn, the VC
+ * re-planned from a half-turned heading and the robot clipped the box.
+ * Anything within S5_CRITICAL_MM still E-STOPs. */
+#define S5_BYPASS_DETECT_CM    10
 #define S5_CRITICAL_MM         50       /* TODO validate brake distance */
 #define S5_ECHO_TIMEOUT_US     30000u
 #define S5_ECHO_MIN_US         100u     /* < 1.7 cm: below the HC-SR04P's 2 cm
@@ -30,7 +41,7 @@
 #define S5_RETRY_LIMIT         3
 #define S5_RETRY_MS            1000
 #define S5_PLAN_TTL_MS         1000
-#define S5_RECOVERY_MS         10000
+#define S5_RECOVERY_MS         10000    /* rejoin: up to 75 cm at 10 cm/s + turn */
 #define S5_LINE_FRESH_MS       120
 #define S5_LINE_CONFIRM_MS     120
 #define S5_PROFILE_BAND_CM     10

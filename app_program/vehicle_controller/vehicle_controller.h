@@ -67,9 +67,9 @@
 #define VC_STEP_TIMEOUT_MS	15000	/* one MOVE(d)/TURN without MOTION_DONE:
 				   127 cm at 10-20 cm/s needs ~7-13 s */
 #define VC_OBSTACLE_DEPTH_CM	25	/* assumed obstacle depth (not measurable) */
-#define VC_REJOIN_EXTRA_CM	15	/* drive this far past the expected line */
+#define VC_REJOIN_EXTRA_CM	10	/* drive this far past the expected line */
 #define VC_BYPASS_MIN_CM	20
-#define VC_BYPASS_EXTRA_CM	8
+#define VC_BYPASS_EXTRA_CM	12
 #define VC_BYPASS_MAX_CM	60
 
 /* START needs the IMU calibrated and an IMU fault stops the mission

@@ -283,8 +283,7 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
  * --------------------------------------------------------------------- */
 
 #define S3_JUNCTION_SAMPLES	2	/* both black this many cycles */
-#define S3_LINE_LOST_MS	 5
-00	/* both white for MORE than this (> 150 ms,
+#define S3_LINE_LOST_MS	 500	/* both white for MORE than this (> 150 ms,
 					   NFR21): longer than one weave across
 					   the gap between the sensors */
 #define S3_LINE_GAP_MS		150	/* both white this long: gap = 1 */
