@@ -135,7 +135,6 @@ out_w(CLK_SYS+CLK_x_DIV, div);
 if(clkatr & CLKATR_PREI) {
 clock_config(
 
-Ashley Yutang:
 CLK_KIND_PERI, CLK_PERI_SRC, CLK_PLL_SYS_FREQ, CLK_PERI_FREQ);
 }
 
