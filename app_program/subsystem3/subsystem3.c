@@ -242,6 +242,9 @@ EXPORT UH drv_ir_overflow_count(void)
  *	150 ms of NFR21) is the line lost; the steering sign then tells the
  *	VC's LINE_SEARCH which side to sweep first.  LINE_FOUND: either
  *	sensor sees the line again.
+ *
+ *	A learnt trim cancels the robot's own pull to one side, so the
+ *	corrections themselves can stay gentle (see S3_TRIM_STEP).
  */
 
 EXPORT void s3_line_init(S3_LINE *lt)
@@ -253,6 +256,7 @@ EXPORT void s3_line_init(S3_LINE *lt)
 	lt->steer      = 0;
 	lt->gap        = 0;
 	lt->side_left  = 0;	/* no side yet: drift right first */
+	lt->trim       = 0;
 }
 
 /* Coarse line position from the two sensors (FR9): - = left, + = right */
@@ -313,12 +317,22 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	/* PD steering on the coarse position.  None at a junction, where
 	   both sensors are on the crossing line. */
 	pos = line_position(left, center, lt->side_left);
+
+	/* Learn the robot's own pull: a NEW touch of one edge moves the
+	   trim towards that side (left edge = it drifted right) */
+	if (pos == -2 && lt->pos != -2 && lt->trim > -S3_TRIM_MAX) {
+		lt->trim = (B)(lt->trim - S3_TRIM_STEP);
+	} else if (pos == 2 && lt->pos != 2 && lt->trim < S3_TRIM_MAX) {
+		lt->trim = (B)(lt->trim + S3_TRIM_STEP);
+	}
+
 	if (lt->state == S3_LINE_JUNCTION) {
 		steer = 0;
 	} else if (!left && !center) {
-		steer = (W)S3_STEER_SEEK * pos;		/* pos = +-1: gentle */
+		steer = (W)S3_STEER_SEEK * pos + lt->trim;	/* pos = +-1 */
 	} else {
-		steer = (W)S3_STEER_KP * pos + (W)S3_STEER_KD * (pos - lt->pos);
+		steer = (W)S3_STEER_KP * pos + (W)S3_STEER_KD * (pos - lt->pos)
+			+ lt->trim;
 	}
 	if (steer >  S3_STEER_MAX) steer =  S3_STEER_MAX;
 	if (steer < -S3_STEER_MAX) steer = -S3_STEER_MAX;

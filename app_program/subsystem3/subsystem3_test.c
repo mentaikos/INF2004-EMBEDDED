@@ -321,13 +321,13 @@ LOCAL void test_line(INT *pass, INT *fail)
 	s3_line_init(&lt);
 	s3_line_step(&lt, 1, 0, 20);
 	lost_at = -1;
-	for (i = 1; i <= 30 && lost_at < 0; i++) {
+	for (i = 1; i <= S3_LINE_LOST_MS / 20 + 5 && lost_at < 0; i++) {
 		if (s3_line_step(&lt, 0, 0, 20) == S3_LEV_LINE_LOST) lost_at = i * 20;
 	}
 	ev1 = s3_line_step(&lt, 0, 1, 20);
-	TEST_CHECK("S3-U13", lost_at == 520 && ev1 == S3_LEV_LINE_FOUND &&
-		   lt.state == S3_LINE_DRIFTING,
-		   "LINE_LOST only after > 500 ms white, then LINE_FOUND");
+	TEST_CHECK("S3-U13", lost_at == (S3_LINE_LOST_MS / 20 + 1) * 20 &&
+		   ev1 == S3_LEV_LINE_FOUND && lt.state == S3_LINE_DRIFTING,
+		   "LINE_LOST only after > S3_LINE_LOST_MS white, then LINE_FOUND");
 
 	/* S3-U18: after the left sensor touched the line, both white drifts
 	   gently LEFT (smaller than an edge correction); gap only after
@@ -340,10 +340,23 @@ LOCAL void test_line(INT *pass, INT *fail)
 	       lt.state == S3_LINE_ON_LINE);
 	for (i = 0; i < 6; i++) s3_line_step(&lt, 0, 0, 20);
 	ev2 = lt.gap;
-	for (i = 0; i < 20; i++) s3_line_step(&lt, 0, 0, 20);
+	for (i = 0; i < S3_LINE_LOST_MS / 20; i++) s3_line_step(&lt, 0, 0, 20);
 	TEST_CHECK("S3-U18", ev1 && ev2 && lt.state == S3_LINE_LOST &&
 		   lt.steer < 0 && !lt.gap,
 		   "both white: gentle drift to the last side, gap after 150 ms");
+
+	/* S3-U21: a robot that keeps drifting right (left edge touched again
+	   and again) learns a left trim, bounded, and a right-edge touch
+	   moves it back */
+	s3_line_init(&lt);
+	for (i = 0; i < 20; i++) {
+		s3_line_step(&lt, 1, 0, 20);
+		s3_line_step(&lt, 0, 0, 20);
+	}
+	ev1 = (lt.trim == -S3_TRIM_MAX && lt.steer < -S3_STEER_SEEK);
+	s3_line_step(&lt, 0, 1, 20);
+	TEST_CHECK("S3-U21", ev1 && lt.trim == -S3_TRIM_MAX + S3_TRIM_STEP,
+		   "trim learns the robot's pull, bounded, moves back");
 
 	*pass += test_pass_;
 	*fail += test_fail_;

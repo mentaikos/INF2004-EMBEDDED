@@ -38,6 +38,9 @@ EXPORT S3_DIAG		s3_diag;	/* guarded by mtx_s3_status */
 
 LOCAL S3_DIAG		dg;		/* the task's working copy */
 LOCAL S3_LINE		lt;
+#if S3_DEBUG_LINE
+LOCAL UB		dbg_line;	/* cycles since the last debug line */
+#endif
 LOCAL S3_BC		bc;
 LOCAL UH		bc_overflows_seen;
 
@@ -123,6 +126,14 @@ LOCAL void line_cycle(UW dt_ms, S3_STS_FIELDS *f)
 	UINT	left   = drv_ir_left();
 	UINT	center = drv_ir_center();
 
+	/* The trim only means something while Motion Control follows the
+	   line.  Turns, line search, STOP and E-STOP would teach it the
+	   wrong pull (and a slow or stalled run would leave it full), so
+	   it is cleared there and every new line-follow starts from 0. */
+	if (s2_sts_state(motion_get_status()) != S2_ST_SPEED_FOLLOW) {
+		lt.trim = 0;
+	}
+
 	switch (s3_line_step(&lt, left, center, dt_ms)) {
 	case S3_LEV_JUNCTION:
 		dg.junctions++;
@@ -142,6 +153,15 @@ LOCAL void line_cycle(UW dt_ms, S3_STS_FIELDS *f)
 		break;
 	}
 	send_steer();
+
+#if S3_DEBUG_LINE
+	if (++dbg_line >= 500 / S3_PERIOD_MS) {
+		dbg_line = 0;
+		tm_printf((UB*)"s3: L=%d C=%d state=%d steer=%d trim=%d"
+			  " (state 0 on line, 1 drifting, 2 junction, 3 lost)\n",
+			  left, center, lt.state, lt.steer, lt.trim);
+	}
+#endif
 
 	f->ir_left    = left ? TRUE : FALSE;
 	f->ir_center  = center ? TRUE : FALSE;

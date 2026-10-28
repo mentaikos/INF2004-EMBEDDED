@@ -297,7 +297,19 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    hard left and right.  Tune on the track. */
 #define S3_STEER_KP		10
 #define S3_STEER_KD		2
-#define S3_STEER_SEEK		8	/* both white: ~5 % split */
+#define S3_STEER_SEEK		8	/* both white: ~12 % split */
+
+/* Trim: cancels the robot's own pull to one side (unequal motors or
+   wheels).  Every new touch of the left edge means it drifted right, so
+   the trim moves left by one step; a right-edge touch moves it back.  On
+   a straight line it settles where the two edges are touched equally
+   often.  Added to every correction except at a junction.  Cleared by
+   the task whenever Motion Control is not in SPEED_FOLLOW (stopped,
+   turning, E-STOP), so each line-follow starts from 0. */
+#define S3_TRIM_STEP		2
+#define S3_TRIM_MAX		16	/* +-25 % split at most */
+
+#define S3_DEBUG_LINE		1	/* 1: print sensors/steer every 0.5 s */
 
 /* Events returned by s3_line_step() */
 #define S3_LEV_NONE		0
@@ -314,6 +326,7 @@ typedef struct {
 	B	pos : 3;	/* coarse line position, -2..+2 */
 	UH	white_ms;	/* both white this long, saturates */
 	B	steer;		/* steering byte for this cycle */
+	B	trim;		/* learnt drift correction, +-S3_TRIM_MAX */
 } S3_LINE;
 
 IMPORT void	s3_line_init(S3_LINE *lt);

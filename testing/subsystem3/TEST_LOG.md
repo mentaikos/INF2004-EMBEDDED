@@ -22,7 +22,7 @@ Define a test here before running it. Test IDs never change.
 | S3-U10 | partial read discarded after 200 ms without an edge | NFR22 | auto | `subsystem3_test.c` | `[TEST] S3-U10 PASS` |
 | S3-U11 | line between the sensors: line under left → steer left; under centre (right) → steer right; both white → ON_LINE, gentle steer to last side | FR10 | auto | `subsystem3_test.c` | `[TEST] S3-U11 PASS` |
 | S3-U12 | JUNCTION after 2 both-black samples, reported once | FR10 | auto | `subsystem3_test.c` | `[TEST] S3-U12 PASS` |
-| S3-U13 | both white is normal; LINE_LOST only after > 500 ms white (≥ NFR21's 150 ms), then LINE_FOUND on either sensor | FR30, NFR21 | auto | `subsystem3_test.c` | `[TEST] S3-U13 PASS` |
+| S3-U13 | both white is normal; LINE_LOST only after > S3_LINE_LOST_MS (2000 ms) white (≥ NFR21's 150 ms), then LINE_FOUND on either sensor | FR30, NFR21 | auto | `subsystem3_test.c` | `[TEST] S3-U13 PASS` |
 | S3-U14 | ~~binary MQTT status frame~~ **dropped**: Buddy 1 owns the telemetry payload; S3 no longer writes `mbf_tx` | — | — | — | — |
 | S3-U15 | task every 20 ms, ISR every 1 ms, bc_ring never overflows | NFR8, NFR16, A6 | auto | `subsystem3_test.c` | `[TEST] S3-U15 PASS` |
 | S3-U16 | bc_ring overflow mid-barcode → that barcode discarded, no NAV_CMD, next one read | 8.3 (Part C row 4) | auto | `subsystem3_test.c` | `[TEST] S3-U16 PASS` |
@@ -30,6 +30,7 @@ Define a test here before running it. Test IDs never change.
 | S3-U18 | both white after a left touch → gentle left drift (smaller than an edge correction); gap only after 150 ms; lost line keeps the last side for the VC | FR10, 8.3 | auto | `subsystem3_test.c` | `[TEST] S3-U18 PASS` |
 | S3-U19 | packed status word `g_s3_status`: round-trip at range limits, negative pos/steer sign-extended, out-of-range clamped, bits 31:24 unused | minimum-bit (Week 8) | auto | `subsystem3_test.c` | `[TEST] S3-U19 PASS` |
 | S3-U20 | MQTT slot for Buddy 1 (`S1_SLOT_B3`): 8 bits = line(2) bc(2) nav(2) err(1) overflow(1) | minimum-bit, FR3 | auto | `subsystem3_test.c` | `[TEST] S3-U20 PASS` |
+| S3-U21 | line tracker trim: repeated left-edge touches learn a left trim (bounded ±S3_TRIM_MAX); a right-edge touch moves it back; cleared outside SPEED_FOLLOW | FR10 | auto | `subsystem3_test.c` | `[TEST] S3-U21 PASS` |
 | S3-M01 | white calibration on the track | FR9, A3 | manual | power up with IR_RIGHT on white, read console | `s3: calibrated, white=…` |
 | S3-M02 | decode every official barcode 20× at three speeds | NFR24, A3 | manual | drive over each barcode, count `s3: barcode` lines | ≥ 19/20 each |
 | S3-M03 | GP28 does not follow battery voltage | A8 | manual | unplug IR_RIGHT, vary supply, read `ir_right_raw` | no change |
