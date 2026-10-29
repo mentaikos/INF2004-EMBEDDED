@@ -62,6 +62,14 @@ LOCAL volatile UH	bc_ms;		/* ISR only: ms counter, the edge clock */
 LOCAL volatile UH	bc_raw;		/* ISR only: latest sample, 12 bits */
 LOCAL volatile UB	bc_edges_on;	/* task only: detector running */
 LOCAL S3_BC_DET	bc_det;		/* ISR only while bc_edges_on */
+#if S3_DEBUG_BARCODE >= 3
+LOCAL volatile UH	cap_buf[S3_CAP_LEN];	/* ISR writes, task reads when done */
+LOCAL volatile UH	cap_trig;	/* task only */
+LOCAL volatile UB	cap_go;		/* task only: new capture number */
+LOCAL volatile UB	cap_done;	/* ISR only: last capture finished */
+LOCAL UB		cap_seen;	/* ISR only */
+LOCAL UH		cap_n, cap_dec;	/* ISR only */
+#endif
 LOCAL UW	bc_next_us;	/* ISR only: when the next alarm is due */
 
 /* Stop the compiler (and the bus) reordering ring accesses */
@@ -99,6 +107,22 @@ LOCAL void bc_alarm_handler(UINT intno)
 	while ((in_w(ADC_CS) & ADC_CS_READY) == 0) ;
 	value = (UH)(in_w(ADC_RESULT) & 0x0FFF);
 	bc_raw = value;
+#if S3_DEBUG_BARCODE >= 3
+	if (cap_go != cap_done) {
+		if (cap_seen != cap_go) {	/* new capture armed */
+			cap_seen = cap_go;
+			cap_n = 0;
+			cap_dec = S3_CAP_DECIM - 1;
+		}
+		if (cap_n > 0 || value > cap_trig) {
+			if (++cap_dec >= S3_CAP_DECIM) {
+				cap_dec = 0;
+				cap_buf[cap_n++] = value;
+				if (cap_n >= S3_CAP_LEN) cap_done = cap_go;
+			}
+		}
+	}
+#endif
 	ms = (UH)(bc_ms + 1);
 	bc_ms = ms;
 	bc_samples++;
@@ -192,6 +216,25 @@ EXPORT INT drv_ir_read_edges(UH *buf, INT max)
 	bc_tail = tail;
 	return n;
 }
+
+#if S3_DEBUG_BARCODE >= 3
+EXPORT void drv_ir_cap_arm(UH trigger)
+{
+	cap_trig = trigger;
+	MEMORY_BARRIER();		/* trigger before the go */
+	cap_go = (UB)(cap_go + 1);
+}
+
+EXPORT BOOL drv_ir_cap_ready(void)
+{
+	return cap_done == cap_go;
+}
+
+EXPORT const volatile UH *drv_ir_cap_buf(void)
+{
+	return cap_buf;
+}
+#endif
 
 EXPORT UH drv_ir_ms(void)
 {
@@ -362,10 +405,14 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 /* FR29: payload -> command, as in the project write-up (A..D).  If the
    official track barcodes differ, only this table needs to change. */
 EXPORT const S3_BC_ENTRY s3_bc_table[] = {
-	{ "A", NAV_LEFT },
-	{ "B", NAV_RIGHT },
-	{ "C", NAV_STRAIGHT },
-	{ "D", NAV_U_TURN },
+/* 29 Oct: the track's barcodes are A, F and Z; what each one means is
+   not decided yet, so all three map to S3_BC_UNDECIDED_CMD (STRAIGHT:
+   recognised and logged, the robot carries on at the junction).  Set
+   the real NAV_xxx per letter once decided.  Was A..D = L/R/S/U. */
+#define S3_BC_UNDECIDED_CMD	NAV_STRAIGHT
+	{ "A", S3_BC_UNDECIDED_CMD },
+	{ "F", S3_BC_UNDECIDED_CMD },
+	{ "Z", S3_BC_UNDECIDED_CMD },
 };
 EXPORT const INT s3_bc_table_len = sizeof(s3_bc_table) / sizeof(s3_bc_table[0]);
 
@@ -513,7 +560,7 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 	} else if (adc > d->thr_on) {
 		d->black = TRUE;
 		return S3_EDGE_TO_BLACK;
-	} else if (adc < d->thr_off) {
+	} else if ((W)adc < (W)(d->white_q8 >> 8) + S3_BC_WHITE_BAND) {
 		/* Clearly white: follow the surface brightness slowly */
 		d->white_q8 += (W)(((W)adc << 8) - (W)d->white_q8)
 			       >> S3_BC_WHITE_SHIFT;

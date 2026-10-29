@@ -32,7 +32,7 @@ LOCAL BOOL driver_ready;
      ok = complete echoes; w = last echo width in us (58 us per cm)
    Set S5_DEBUG_PING to 0 once the sensor works. */
 #ifndef S5_DEBUG_PING
-#define S5_DEBUG_PING		1
+#define S5_DEBUG_PING		0	/* 29 Oct: muted while debugging barcodes */
 #endif
 #if S5_DEBUG_PING
 LOCAL UH dbg_pings, dbg_high, dbg_norise, dbg_nofall, dbg_ok, dbg_w;

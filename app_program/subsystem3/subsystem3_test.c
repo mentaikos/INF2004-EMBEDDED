@@ -167,12 +167,13 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U02", table_is_code39(),
 		   "Code 39 table: 44 unique patterns, 3 wide each");
 
-	/* S3-U03: clean "*A*" decodes to LEFT */
+	/* 29 Oct: table is now A, F, Z, all NAV_STRAIGHT until decided */
+	/* S3-U03: clean "*A*" decodes to its table command */
 	n = make_widths("*A*", T_NARROW, T_WIDE, 0, w);
 	len = decode_text(w, n, text);
 	TEST_CHECK("S3-U03", n == 29 && len == 1 && text[0] == 'A' &&
-		   s3_bc_lookup(text) == NAV_LEFT,
-		   "decode *A* -> LEFT (FR29)");
+		   s3_bc_lookup(text) == NAV_STRAIGHT,
+		   "decode *A* -> its command (FR29)");
 
 	/* S3-U04: the same barcode read backwards (after a U-turn) */
 	for (i = 0; i < n; i++) r[i] = w[n - 1 - i];
@@ -210,23 +211,23 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 		   f.bc.state == S3_BC_WAIT_FOR_BAR,
 		   "unknown barcode -> BARCODE_ERR, back to WAIT_FOR_BAR");
 
-	/* S3-U08: ADC trace of "*D*" -> NAV_CMD U-TURN; a second barcode
+	/* S3-U08: ADC trace of "*F*" -> NAV_CMD; a second barcode
 	   within the 0.5 s cool-down is ignored (NFR23) */
 	feed_init(&f);
 	feed_level(&f, T_WHITE, 50);
-	n = make_widths("*D*", T_NARROW, T_WIDE, 10, w);
+	n = make_widths("*F*", T_NARROW, T_WIDE, 10, w);
 	feed_elements(&f, w, n, 100);
-	ok = (f.nav == 1 && f.last.cmd == NAV_U_TURN && f.last.ch == 'D');
+	ok = (f.nav == 1 && f.last.cmd == NAV_STRAIGHT && f.last.ch == 'F');
 	n = make_widths("*A*", 4, 10, 0, w);	/* ~170 ms: all inside it */
 	feed_elements(&f, w, n, 50);
 	TEST_CHECK("S3-U08", ok && f.nav == 1 && f.err == 0 && f.discard == 0,
-		   "trace *D* -> U_TURN, repeat within 0.5 s ignored");
+		   "trace *F* -> NAV_CMD, repeat within 0.5 s ignored");
 
 	/* S3-U09: after the cool-down the next barcode is read again */
 	feed_level(&f, T_WHITE, S3_BC_COOLDOWN_MS);
 	n = make_widths("*A*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, n, 300);
-	TEST_CHECK("S3-U09", f.nav == 2 && f.last.cmd == NAV_LEFT,
+	TEST_CHECK("S3-U09", f.nav == 2 && f.last.ch == 'A',
 		   "barcode read again after the cool-down");
 
 	/* S3-U10: a read that stops half way is discarded after 200 ms of
@@ -246,7 +247,7 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	   barcode, and the next barcode is read normally (8.3) */
 	feed_init(&f);
 	feed_level(&f, T_WHITE, 50);
-	n = make_widths("*B*", T_NARROW, T_WIDE, 0, w);
+	n = make_widths("*Z*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, 12, 0);
 	count(&f, s3_bc_abort(&f.bc, f.t, &res), &res);
 	ok = (f.discard == 1);
@@ -256,7 +257,7 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	feed_level(&f, T_WHITE, 300);
 	ok = ok && f.nav == 0 && f.err == 0 && f.discard == 1;
 	feed_elements(&f, w, n, 300);
-	TEST_CHECK("S3-U16", ok && f.nav == 1 && f.last.cmd == NAV_RIGHT,
+	TEST_CHECK("S3-U16", ok && f.nav == 1 && f.last.ch == 'Z',
 		   "bc_ring overflow discards that barcode only (8.3)");
 
 	/* S3-U17: edge detector: hysteresis ignores noise around the
@@ -264,16 +265,18 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	   so bars are still seen */
 	s3_bc_det_init(&f.det, T_WHITE);
 	ok = 0;
-	for (i = 0; i < 100; i++) {	/* white + 600: between thr_off/on */
-		ok += (s3_bc_detect(&f.det, T_WHITE + 600) != S3_EDGE_NONE);
+	/* 29 Oct: levels follow S3_BC_DELTA_ON/OFF and S3_BC_WHITE_BAND */
+#define T_MID	((S3_BC_DELTA_ON + S3_BC_DELTA_OFF) / 2)
+	for (i = 0; i < 100; i++) {	/* between thr_off/on */
+		ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
 	}
-	ok += (s3_bc_detect(&f.det, T_WHITE + 900) != S3_EDGE_TO_BLACK);
-	ok += (s3_bc_detect(&f.det, T_WHITE + 600) != S3_EDGE_NONE);
-	ok += (s3_bc_detect(&f.det, T_WHITE + 400) != S3_EDGE_TO_WHITE);
-	for (i = 0; i < 2000; i++) {	/* surface gets 400 darker */
-		s3_bc_detect(&f.det, T_WHITE + 400);
+	ok += (s3_bc_detect(&f.det, T_WHITE + S3_BC_DELTA_ON + 100) != S3_EDGE_TO_BLACK);
+	ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
+	ok += (s3_bc_detect(&f.det, T_WHITE + S3_BC_DELTA_OFF - 100) != S3_EDGE_TO_WHITE);
+	for (i = 0; i < 10000; i++) {	/* surface gets 200 darker */
+		s3_bc_detect(&f.det, T_WHITE + 200);
 	}
-	ok += (s3_bc_detect(&f.det, T_WHITE + 900) != S3_EDGE_NONE);
+	ok += (s3_bc_detect(&f.det, T_WHITE + S3_BC_DELTA_ON + 100) != S3_EDGE_NONE);
 	ok += (s3_bc_detect(&f.det, T_BLACK) != S3_EDGE_TO_BLACK);
 	TEST_CHECK("S3-U17", ok == 0,
 		   "edge detector: hysteresis, white baseline follows light");

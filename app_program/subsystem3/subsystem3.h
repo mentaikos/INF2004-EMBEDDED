@@ -210,9 +210,20 @@ IMPORT void	s3_bind_vc(ID mbf_vc_evt, ID flg_fault);
 
 /* Thresholds in raw ADC counts (0..4095, higher = darker).  Starting
    values: tune with the A3 logs. */
-#define S3_BC_DELTA_ON		800	/* black once > white + this */
-#define S3_BC_DELTA_OFF		500	/* white again once < white + this */
-#define S3_BC_WHITE_SHIFT	6	/* white baseline EMA: 1/64 per ms */
+/* 29 Oct (integration fix, from the ADC trace on the robot): white
+   ~270, black bars ~2500.  The old baseline followed EVERY reading
+   below thr_off, 1/64 per ms, so while the sensor slid onto a bar it
+   chased the rising edge: white climbed 264 -> 663 -> 1302 in one
+   barcode, the spaces never fell below thr_off and the bars merged.
+   Now it only follows readings within S3_BC_WHITE_BAND of white, and
+   ~16x slower; thresholds sit nearer the white/black midpoint. */
+/* 29 Oct (2): second trace, sensor re-mounted, printed barcode: white
+   ~190, printed bars peak only ~650-900 (the black track tape reads
+   ~2500; toner reflects more IR).  +1100 was never reached. */
+#define S3_BC_DELTA_ON		450	/* black once > white + this (was 800, then 1100) */
+#define S3_BC_DELTA_OFF		300	/* white again once < white + this (was 500, then 750) */
+#define S3_BC_WHITE_SHIFT	10	/* white baseline EMA: 1/1024 per ms (was 1/64) */
+#define S3_BC_WHITE_BAND	250	/* follow only readings < white + this */
 
 /* Result of s3_bc_detect() */
 #define S3_EDGE_NONE		0
@@ -265,6 +276,10 @@ IMPORT void	drv_ir_start_edges(UH white);
 IMPORT INT	drv_ir_read_edges(UH *buf, INT max);
 
 /* Times and counters are 16 bits and wrap: compare differences */
+/* S3_DEBUG_BARCODE 3 only (capture) */
+IMPORT void	drv_ir_cap_arm(UH trigger);	/* start waiting for a pass */
+IMPORT BOOL	drv_ir_cap_ready(void);		/* buffer full */
+IMPORT const volatile UH *drv_ir_cap_buf(void);
 IMPORT UH	drv_ir_ms(void);		/* ISR's ms counter (edge clock) */
 IMPORT UH	drv_ir_last_raw(void);		/* latest ADC sample, 12 bits */
 IMPORT UH	drv_ir_threshold(void);		/* current black threshold */
@@ -310,6 +325,21 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
 #define S3_TRIM_MAX		6	/* +-25 % split at most */
 
 #define S3_DEBUG_LINE		0	/* 1: print sensors/steer every 0.5 s */
+/* Barcode log (integration aid, 29 Oct):
+   0 = only good reads and BARCODE_ERR (as before)
+   1 = also dropped (partial) reads, and the element widths in ms of
+       every read that ends: shows whether the sensor saw the bars
+   2 = 1 + the barcode sensor's ADC level and threshold every 0.5 s
+       (raw rises over the threshold on black) */
+#define S3_DEBUG_BARCODE	3	/* 3 = 1 ms capture of one pass; back to 1 after */
+/* Level 3 (integration aid, 29 Oct): the ISR records the barcode ADC
+   from the first sample darker than white + S3_CAP_TRIGGER, one value
+   every S3_CAP_DECIM ms, S3_CAP_LEN values, then the task prints them
+   all ("s3: cap ...") and re-arms.  Shows the true peaks and dips the
+   detector sees, for tuning the thresholds off-line. */
+#define S3_CAP_TRIGGER		150
+#define S3_CAP_DECIM		2	/* ms per stored value */
+#define S3_CAP_LEN		1500	/* 3 s of data, 3 KB */
 
 /* Events returned by s3_line_step() */
 #define S3_LEV_NONE		0

@@ -212,6 +212,21 @@ LOCAL void calibrate(UH raw)
 	cal.n = 0;
 }
 
+#if S3_DEBUG_BARCODE
+/* Element widths (ms) of the read that just ended: bar, space, bar...
+   Code 39: narrow and wide elements, wide >= 1.5x narrow; a full
+   character is 9 elements plus a 1-element gap (29/39/49 in total). */
+LOCAL void print_widths(const S3_BC_RESULT *res)
+{
+	INT	i, n = res->elements;
+
+	if (n > S3_BC_MAX_ELEMS) n = S3_BC_MAX_ELEMS;
+	tm_printf((UB*)"s3:   widths ms:");
+	for (i = 0; i < n; i++) tm_printf((UB*)" %d", bc.elem[i]);
+	tm_printf((UB*)"\n");
+}
+#endif
+
 LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 {
 	switch (ev) {
@@ -222,6 +237,9 @@ LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 		send_vc(EVT_NAV_CMD, res->cmd);
 		tm_printf((UB*)"s3: barcode '%c' -> NAV_CMD %d\n",
 			  res->ch, res->cmd);
+#if S3_DEBUG_BARCODE
+		print_widths(res);
+#endif
 		break;
 	case S3_BEV_BARCODE_ERR:
 		dg.barcodes_err++;
@@ -229,9 +247,22 @@ LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 		set_fault(FAULT_BARCODE_ERR);
 		tm_printf((UB*)"s3: BARCODE_ERR %d (%d elements)\n",
 			  res->err, res->elements);
+#if S3_DEBUG_BARCODE
+		tm_printf((UB*)"s3:   (err 1 = not Code 39, 2 = no '*' start/stop,"
+			  " 3 = valid but not A..D)\n");
+		print_widths(res);
+#endif
 		break;
 	case S3_BEV_DISCARD:
 		dg.barcodes_discarded++;
+#if S3_DEBUG_BARCODE
+		if (res->elements > 0) {
+			tm_printf((UB*)"s3: barcode dropped: %d elements (a full read is"
+				  " 29, 39 or 49)%s\n", res->elements,
+				  s3.overflow ? ", edges lost (overflow)" : "");
+			print_widths(res);
+		}
+#endif
 		break;
 	default:
 		break;
@@ -274,6 +305,62 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 	}
 
 	if (s3.err_hold > 0) s3.err_hold--;
+
+#if S3_DEBUG_BARCODE >= 3
+	/* 1 ms capture: arm once calibrated, print when the buffer is full */
+	if (s3.calibrated) {
+		static UB	armed;
+		const volatile UH *cb;
+		INT		k;
+
+		if (!armed) {
+			drv_ir_cap_arm((UH)(drv_ir_threshold() - S3_BC_DELTA_ON +
+					      S3_CAP_TRIGGER));
+			armed = 1;
+			tm_printf((UB*)"s3: capture armed: pass the barcode sensor over"
+				  " the barcode (white=%d, on=%d, off=%d)\n",
+				  drv_ir_threshold() - S3_BC_DELTA_ON, drv_ir_threshold(),
+				  drv_ir_threshold() - S3_BC_DELTA_ON + S3_BC_DELTA_OFF);
+		} else if (drv_ir_cap_ready()) {
+			cb = drv_ir_cap_buf();
+			tm_printf((UB*)"s3: cap begin %d values, %d ms apart\n",
+				  S3_CAP_LEN, S3_CAP_DECIM);
+			for (k = 0; k < S3_CAP_LEN; k++) {
+				if (k % 25 == 0) tm_printf((UB*)"s3: cap %4d:", k);
+				tm_printf((UB*)" %d", cb[k]);
+				if (k % 25 == 24) tm_printf((UB*)"\n");
+			}
+			tm_printf((UB*)"\ns3: cap end\n");
+			armed = 0;		/* re-arm next cycle */
+		}
+	}
+#endif
+
+#if S3_DEBUG_BARCODE == 2
+	/* ADC trace: every 20 ms while the barcode sensor sees anything
+	   darker than white (raw > white + 150), else every 0.5 s.  Push
+	   the robot slowly across the barcode by hand (~1 cm/s): each bar
+	   should rise past thr_on ('B' in the bar graph) and each space
+	   fall back near white. */
+	{
+		static UB	lvl_cyc;
+		INT		thr  = drv_ir_threshold();
+		INT		white = thr - S3_BC_DELTA_ON;
+		INT		k, len;
+
+		if ((INT)raw > white + 150 || ++lvl_cyc >= 500 / S3_PERIOD_MS) {
+			lvl_cyc = 0;
+			tm_printf((UB*)"s3: bc raw=%4d white=%4d on=%4d cal=%d st=%d ",
+				  raw, white, thr, s3.calibrated, bc.state);
+			len = ((INT)raw - white) / 100;
+			if (len > 30) len = 30;
+			for (k = 0; k < len; k++) {
+				tm_printf((UB*)((white + (k + 1) * 100 > thr) ? "B" : "#"));
+			}
+			tm_printf((UB*)"\n");
+		}
+	}
+#endif
 
 	f->bc_state    = bc.state;
 	f->last_nav    = s3.last_nav;
