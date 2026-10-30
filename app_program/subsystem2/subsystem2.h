@@ -103,7 +103,10 @@
 #define S2_REVERSE_MAX_MM_S	100	/* "safe reverse" cap */
 #define S2_SLOW_MM_S		80	/* last 10 % of a MOVE(d)/TURN */
 #define S2_DEFAULT_MM_S		150	/* MOVE(d)/TURN with speed field 0 */
-#define S2_ACCEL_MM_S_PER_CYC	10	/* target ramp (500 mm/s^2) */
+#define S2_ACCEL_MM_S_PER_CYC	20	/* target ramp (1000 mm/s^2); was 10, then 15:
+					   the inner wheel took 300 ms to slow for a
+					   curve (jiahao16, Fine-Tuning 4bea17a) */
+#define S2_DECEL_MM_S_PER_CYC	40	/* slowing down (2000 mm/s^2), Fine-Tuning */
 #define S2_HEADING_K_MM_S	4	/* heading hold: mm/s per count of L/R difference (15 made the robot weave, 27 Oct) */
 #define S2_STEER_FULL		64	/* steer value giving a 100 % speed split */
 #define S2_STEER_TIMEOUT_MS	100	/* no steer message -> steer 0 */

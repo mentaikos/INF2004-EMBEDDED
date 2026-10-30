@@ -125,7 +125,7 @@ LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns);
    log.  Range codes: 0 = under 5 cm, 1 = over 100 cm (clear), 2 = no
    echo, 3 = not scanned, else cm.  Set S5_DEBUG_SCAN to 0 when done. */
 #ifndef S5_DEBUG_SCAN
-#define S5_DEBUG_SCAN		0	/* 29 Oct: muted while debugging barcodes */
+#define S5_DEBUG_SCAN		1	/* 29 Oct: muted for barcodes; 30 Oct: back on for obstacles */
 #endif
 #if S5_DEBUG_SCAN
 LOCAL void print_scan(const S5_SCAN *scan, INT event)

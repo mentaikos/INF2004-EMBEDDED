@@ -132,6 +132,7 @@ LOCAL void line_cycle(UW dt_ms, S3_STS_FIELDS *f)
 	   it is cleared there and every new line-follow starts from 0. */
 	if (s2_sts_state(motion_get_status()) != S2_ST_SPEED_FOLLOW) {
 		lt.trim = 0;
+		lt.bend = 0;	/* integration fix 28 Oct */
 	}
 
 	switch (s3_line_step(&lt, left, center, dt_ms)) {
@@ -213,7 +214,7 @@ LOCAL void calibrate(UH raw)
 }
 
 #if S3_DEBUG_BARCODE
-/* Element widths (ms) of the read that just ended: bar, space, bar...
+/* Element widths of the read that just ended: bar, space, bar...
    Code 39: narrow and wide elements, wide >= 1.5x narrow; a full
    character is 9 elements plus a 1-element gap (29/39/49 in total). */
 LOCAL void print_widths(const S3_BC_RESULT *res)
@@ -221,8 +222,11 @@ LOCAL void print_widths(const S3_BC_RESULT *res)
 	INT	i, n = res->elements;
 
 	if (n > S3_BC_MAX_ELEMS) n = S3_BC_MAX_ELEMS;
-	tm_printf((UB*)"s3:   widths ms:");
-	for (i = 0; i < n; i++) tm_printf((UB*)" %d", bc.elem[i]);
+	/* in 0.1 ms units, whatever the sample rate */
+	tm_printf((UB*)"s3:   widths 0.1ms:");
+	for (i = 0; i < n; i++) {
+		tm_printf((UB*)" %d", bc.elem[i] * 10 / S3_TICKS_PER_MS);
+	}
 	tm_printf((UB*)"\n");
 }
 #endif
@@ -249,7 +253,7 @@ LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 			  res->err, res->elements);
 #if S3_DEBUG_BARCODE
 		tm_printf((UB*)"s3:   (err 1 = not Code 39, 2 = no '*' start/stop,"
-			  " 3 = valid but not A..D)\n");
+			  " 3 = valid but not A, F or Z)\n");
 		print_widths(res);
 #endif
 		break;
@@ -273,7 +277,7 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 {
 	UH		e[S3_BC_RING_SIZE];
 	INT		n, i;
-	UH		ms, ov, t;
+	UH		now, ov, t;
 	UH		raw = drv_ir_last_raw();
 	S3_BC_RESULT	res;
 
@@ -281,33 +285,33 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 		calibrate(raw);
 	} else {
 		/* Drain first, then read the clock, so no drained edge is
-		   newer than ms */
-		n  = drv_ir_read_edges(e, S3_BC_RING_SIZE);
-		ov = drv_ir_overflow_count();
-		ms = drv_ir_ms();
+		   newer than now */
+		n   = drv_ir_read_edges(e, S3_BC_RING_SIZE);
+		ov  = drv_ir_overflow_count();
+		now = drv_ir_ticks();
 
 		if (ov != bc_overflows_seen) {
 			/* Edges were lost: these edges straddle the gap, so
 			   drop them and the barcode they belong to (8.3) */
 			bc_overflows_seen = ov;
 			s3.overflow = 1;
-			report_barcode(s3_bc_abort(&bc, ms, &res), &res);
+			report_barcode(s3_bc_abort(&bc, now, &res), &res);
 			n = 0;
 		}
 
 		for (i = 0; i < n; i++) {
-			/* 15-bit edge time -> 16-bit ms clock (< 32 s old) */
-			t = (UH)(ms - ((ms - e[i]) & S3_EDGE_TIME_MASK));
+			/* 15-bit edge time -> 16-bit tick clock (< 8 s old) */
+			t = (UH)(now - ((now - e[i]) & S3_EDGE_TIME_MASK));
 			report_barcode(s3_bc_edge(&bc, (e[i] & S3_EDGE_BLACK) != 0,
 						  t, &res), &res);
 		}
-		report_barcode(s3_bc_poll(&bc, ms, &res), &res);
+		report_barcode(s3_bc_poll(&bc, now, &res), &res);
 	}
 
 	if (s3.err_hold > 0) s3.err_hold--;
 
 #if S3_DEBUG_BARCODE >= 3
-	/* 1 ms capture: arm once calibrated, print when the buffer is full */
+	/* Capture: arm once calibrated, print when the buffer is full */
 	if (s3.calibrated) {
 		static UB	armed;
 		const volatile UH *cb;
@@ -324,7 +328,7 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 		} else if (drv_ir_cap_ready()) {
 			cb = drv_ir_cap_buf();
 			tm_printf((UB*)"s3: cap begin %d values, %d ms apart\n",
-				  S3_CAP_LEN, S3_CAP_DECIM);
+				  S3_CAP_LEN, S3_CAP_MS);
 			for (k = 0; k < S3_CAP_LEN; k++) {
 				if (k % 25 == 0) tm_printf((UB*)"s3: cap %4d:", k);
 				tm_printf((UB*)" %d", cb[k]);

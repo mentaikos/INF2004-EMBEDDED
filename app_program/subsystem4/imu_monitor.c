@@ -184,17 +184,42 @@ LOCAL void update_orientation(IMU_MONITOR *m, const IMU_SAMPLE *s, W dt_ms)
 		if (!m->mag_seen || mv[i] < m->mag_min[i]) m->mag_min[i] = mv[i];
 		if (!m->mag_seen || mv[i] > m->mag_max[i]) m->mag_max[i] = mv[i];
 	}
+
+	/* low-pass the field vector (x16 keeps the fraction), not the angle:
+	   no wrap-around problem at 0/360 */
+	if (!m->mag_seen) {
+		m->mag_f[0] = (W)s->mx * 16;
+		m->mag_f[1] = (W)s->my * 16;
+	} else {
+		m->mag_f[0] += ((W)s->mx * 16 - m->mag_f[0]) / IMU_MAG_LPF_DIV;
+		m->mag_f[1] += ((W)s->my * 16 - m->mag_f[1]) / IMU_MAG_LPF_DIV;
+	}
 	m->mag_seen = 1;
 
-	mx = (W)s->mx - ((W)m->mag_min[0] + m->mag_max[0]) / 2;
-	my = (W)s->my - ((W)m->mag_min[1] + m->mag_max[1]) / 2;
+	/* hard-iron centre only once each axis has really swung; before
+	   that the min/max centre is just the current sample */
+	mx = m->mag_f[0] / 16;
+	my = m->mag_f[1] / 16;
+	if ((W)m->mag_max[0] - m->mag_min[0] >= IMU_MAG_MIN_SPAN &&
+	    (W)m->mag_max[1] - m->mag_min[1] >= IMU_MAG_MIN_SPAN) {
+		mx -= ((W)m->mag_min[0] + m->mag_max[0]) / 2;
+		my -= ((W)m->mag_min[1] + m->mag_max[1]) / 2;
+	}
 	hdg = imu_atan2_mdeg(my, mx);
 	if (hdg < 0) hdg += 360000;
 
-	/* turn rate = heading change / time, low-pass */
-	if (m->heading_valid && dt_ms > 0) {
-		rate = wrap180(hdg - m->heading_mdeg) * 100 / dt_ms;  /* 0.01 deg/s */
-		m->rate_cdps += (rate - m->rate_cdps) / IMU_RATE_LPF_DIV;
+	/* turn rate = heading change over a 100 ms window, low-pass */
+	if (!m->heading_valid) {
+		m->rate_ref_mdeg = hdg;
+		m->rate_win_ms   = 0;
+	} else if (dt_ms > 0) {
+		m->rate_win_ms = (UH)(m->rate_win_ms + dt_ms);
+		if (m->rate_win_ms >= IMU_RATE_WINDOW_MS) {
+			rate = wrap180(hdg - m->rate_ref_mdeg) * 100 / m->rate_win_ms;
+			m->rate_cdps += (rate - m->rate_cdps) / IMU_RATE_LPF_DIV;
+			m->rate_ref_mdeg = hdg;
+			m->rate_win_ms   = 0;
+		}
 	}
 	m->heading_mdeg  = hdg;
 	m->heading_valid = 1;

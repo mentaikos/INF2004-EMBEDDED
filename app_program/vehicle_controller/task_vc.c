@@ -45,6 +45,7 @@ LOCAL struct {
 	UB	phase : 2;	/* sub-step inside OBSTACLE_SCAN / REJOIN_LINE */
 	UB	side_right : 1;	/* bypass side / search side */
 	UB	scan_sent : 1;	/* SCAN_REQ given for this stop */
+	UB	align_white : 1; /* PH_REALIGN: sensors left the line once */
 	B	lat_cm;		/* bypass sideways distance */
 	UB	search_i;	/* LINE_SEARCH sweep number */
 	UB	faults;		/* SENSOR_FAULT bits of the last fault */
@@ -75,7 +76,13 @@ LOCAL VC_DIAG		dg;
    at once (vc_bypass_script: 0 turn out, 1 sideways, 2 turn back,
    3 past the obstacle, 4 turn towards the line).  Not earlier: on steps
    0..3 the robot is still beside the obstacle. */
-#define VC_BYPASS_FOLLOW_STEP	4
+#define VC_BYPASS_FOLLOW_STEP	3	/* 30 Oct: was 4.  On a curved track the
+					   line bends towards the bypass side and
+					   was crossed (and ignored) while driving
+					   past the obstacle (step 3), video
+					   IMG_0771.  Once the robot is straight
+					   again beside the obstacle, a line under
+					   the sensors cannot lead into it. */
 
 LOCAL const char *const st_name[] = {
 	"INIT", "IDLE", "STARTING", "LINE_FOLLOW", "EXECUTE_NAV_CMD",
@@ -209,13 +216,38 @@ LOCAL void track_line_side(void)
 /* ------------------------------------------------------------------ */
 /*  State entries                                                     */
 /* ------------------------------------------------------------------ */
+/* Slow zone (VC_SLOW_ZONE_CM): 1 while the speed is capped for
+   something ahead */
+LOCAL UB	slow_zone;
+
+LOCAL void check_slow_zone(void)
+{
+#if VC_SLOW_ZONE_CM > 0
+	UINT	r = (s5_status() >> 11) & 127u;	/* obstacle_scan.h range */
+	BOOL	near = (r == S5_RANGE_NEAR) ||
+		       (r >= S5_RANGE_MIN_CM && r <= VC_SLOW_ZONE_CM);
+	BOOL	clear = (r == S5_RANGE_FAR) ||
+			(r > VC_SLOW_ZONE_CM + 10 && r <= S5_RANGE_MAX_CM);
+
+	if (near && !slow_zone) {
+		slow_zone = 1;
+		cmd_limit(VC_SLOW_CM_S);
+		tm_printf((UB*)"vc: something %d cm ahead, slowing to %d cm/s\n",
+			  (INT)r, VC_SLOW_CM_S);
+	} else if (clear && slow_zone) {
+		slow_zone = 0;
+		cmd_limit(S2_MAX_SPEED_CM_S);
+	}
+#endif
+}
+
 LOCAL void enter_follow(void)
 {
 	script_clear();
+	slow_zone = 0;
 	cmd_limit(S2_MAX_SPEED_CM_S);		/* lift any obstacle cap */
 	cmd_follow(VC_CRUISE_CM_S);
 	vc.lost_in_hump = 0;
-	vc.rescans = 0;
 	set_state(VC_ST_LINE_FOLLOW);
 }
 
@@ -274,14 +306,26 @@ LOCAL void enter_search(void)
    at cruise speed. */
 LOCAL void rejoin_follow(void)
 {
+	UW	t[2];
+
 	if (vc.state == VC_ST_BYPASS_OBSTACLE) {
 		s5_rejoin_line();		/* S5: BYPASSING -> LINE_RECOVERY */
 		set_state(VC_ST_REJOIN_LINE);
 	}
-	script_clear();				/* a late MOTION_DONE is now stale */
-	vc.phase = PH_CONFIRM;
-	cmd_follow(VC_SLOW_CM_S);		/* replaces the TURN / MOVE */
-	tm_printf((UB*)"vc: line seen after the obstacle, following it\n");
+	/* 30 Oct: line under the sensors, at an unknown angle (a curve may
+	   have brought it here).  Bring the axle onto it, then turn towards
+	   the bypass side -- the way the line continues -- until the
+	   sensors find it again (tick, PH_REALIGN), and follow from there.
+	   A fixed turn back to the original heading drove off a curved line
+	   (video IMG_0771).  VC_ALIGN_MAX_DEG without the line: search. */
+	t[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, VC_JUNCTION_ADV_CM);
+	t[1] = S2_CMD_PACK(S2_CMD_TURN, VC_ALIGN_CM_S,
+			   vc.side_right ? VC_ALIGN_MAX_DEG : -VC_ALIGN_MAX_DEG, 0);
+	vc.phase = PH_REALIGN;
+	vc.align_white = 0;
+	script_run(t, 2);			/* pre-empts the TURN / MOVE */
+	tm_printf((UB*)"vc: line found, turning %s until the sensors are on it\n",
+		  vc.side_right ? "right" : "left");
 }
 
 /* Obstacle Scan stays in LINE_RECOVERY until it has seen the line for a
@@ -375,6 +419,10 @@ LOCAL void do_start(void)
 	tk_clr_flg(flg_safety, ~(UINT)S2_FLG_ESTOP);
 	s5_reset();			/* needs E_STOP clear and Motion stopped */
 	vc.reason = VC_R_NONE;
+	vc.rescans = 0;			/* new mission */
+	vc.nav_valid = 0;		/* 29 Oct: a barcode from the last run
+					   must not turn at this run's first
+					   junction */
 	set_state(VC_ST_STARTING);
 }
 
@@ -446,8 +494,17 @@ LOCAL void script_done(void)
 
 	case VC_ST_REJOIN_LINE:
 		if (vc.phase == PH_REALIGN) {
-			vc.phase = PH_CONFIRM;
-			cmd_follow(VC_SLOW_CM_S);	/* follow while S5 confirms */
+			if (line_seen()) {
+				vc.phase = PH_CONFIRM;
+				cmd_follow(VC_SLOW_CM_S);	/* follow while S5 confirms */
+			} else {
+				/* Turned VC_ALIGN_MAX_DEG, line never under the
+				   sensors: search, first towards the bypass side */
+				line_side = vc.side_right ? 1 : -1;
+				tm_printf((UB*)"vc: turned %d deg without the line,"
+					  " searching\n", VC_ALIGN_MAX_DEG);
+				enter_search();
+			}
 		}
 		else if (vc.phase == PH_APPROACH) {
 			/* Drove the whole approach without seeing the line (a
@@ -468,6 +525,16 @@ LOCAL void script_done(void)
 /* ------------------------------------------------------------------ */
 /*  Events                                                            */
 /* ------------------------------------------------------------------ */
+LOCAL const char *nav_name(UINT nav)
+{
+	switch (nav) {
+	case NAV_LEFT:     return "LEFT";
+	case NAV_RIGHT:    return "RIGHT";
+	case NAV_STRAIGHT: return "STRAIGHT";
+	default:           return "U-TURN";
+	}
+}
+
 LOCAL void on_junction(void)
 {
 	UW	c[VC_SCRIPT_MAX];
@@ -482,7 +549,13 @@ LOCAL void on_junction(void)
 		enter_complete();
 		return;
 	}
-	if (!vc.nav_valid) return;		/* no barcode: straight on */
+	if (!vc.nav_valid) {			/* no barcode: straight on */
+		tm_printf((UB*)"vc: JUNCTION %d, no barcode: straight on\n",
+			  vc.junctions);
+		return;
+	}
+	tm_printf((UB*)"vc: JUNCTION %d, doing barcode %s\n", vc.junctions,
+		  nav_name(vc.nav));
 	n = vc_nav_script(vc.nav, c);
 	vc.nav_valid = 0;
 	if (n > 0) {
@@ -490,6 +563,11 @@ LOCAL void on_junction(void)
 		script_run(c, n);
 	}
 }
+
+LOCAL void rescan(const char *why);
+#if VC_AUTO_START_MS > 0
+LOCAL UB	auto_started;
+#endif
 
 LOCAL void on_profile(UW payload)
 {
@@ -512,6 +590,21 @@ LOCAL void on_profile(UW payload)
 		}
 	}
 	/* STOP / REVERSE_REATTEMPT / approval refused: like NO_CLEAR */
+	rescan("plan not usable or approval refused");
+}
+
+/* Every rescan counts, whatever the reason, and gives up after
+   VC_MAX_RESCANS (28 Oct: a refused plan / an approval that S5 never
+   took restarted the scan without counting, and enter_follow() cleared
+   the count after every CONTINUE: the robot scanned 20+ times). */
+LOCAL void rescan(const char *why)
+{
+	tm_printf((UB*)"vc: rescan (%s), %d done\n", why, vc.rescans);
+	if (vc.rescans >= VC_MAX_RESCANS) {
+		enter_fault(VC_R_NO_CLEAR, 0);
+		return;
+	}
+	vc.rescans++;
 	vc.phase = PH_WAIT_STOPPED;
 	vc.scan_sent = 0;
 }
@@ -526,8 +619,28 @@ LOCAL void on_no_clear(void)
 		return;
 	}
 	vc.rescans++;
-	/* Reverse is the VC's decision (Buddy 5 cannot see behind) */
-	c = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, -VC_REVERSE_CM);
+	/* Reverse is the VC's decision (Buddy 5 cannot see behind).  Far
+	   enough to get the obstacle out of the turning circle at once */
+	{
+		S5_SNAPSHOT	s;
+		INT		d = VC_REVERSE_CM;
+		UINT		cl;
+
+		if (s5_get_status(&s) == E_OK) {
+			cl = s5_profile_closest(s.profile);
+			if (cl == S5_RANGE_NEAR) {
+				d = VC_REVERSE_TO_CM;
+			} else if (cl >= S5_RANGE_MIN_CM && cl <= S5_RANGE_MAX_CM &&
+				   (INT)cl < VC_REVERSE_TO_CM) {
+				d = VC_REVERSE_TO_CM - (INT)cl;
+			}
+		}
+		if (d < VC_REVERSE_CM) d = VC_REVERSE_CM;
+		if (d > VC_REVERSE_MAX_CM) d = VC_REVERSE_MAX_CM;
+		tm_printf((UB*)"vc: no clear way round, reversing %d cm (try %d of %d)\n",
+			  d, vc.rescans, VC_MAX_RESCANS);
+		c = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, -d);
+	}
 	vc.phase = PH_REVERSING;
 	script_run(&c, 1);
 }
@@ -550,6 +663,8 @@ LOCAL void handle_event(UW w)
 		if (run) {
 			vc.nav = (UB)(pl & NAV_MASK);
 			vc.nav_valid = 1;
+			tm_printf((UB*)"vc: barcode %s stored for the next junction\n",
+				  nav_name(vc.nav));
 		}
 		break;
 	default:
@@ -665,7 +780,10 @@ LOCAL void handle_event(UW w)
 		break;
 
 	case EVT_REJOIN_LINE_CONFIRMED:
-		if (st == VC_ST_REJOIN_LINE) enter_follow();
+		if (st == VC_ST_REJOIN_LINE) {
+			vc.rescans = 0;		/* obstacle passed */
+			enter_follow();
+		}
 		break;
 
 	default:
@@ -699,6 +817,21 @@ LOCAL void tick(void)
 	}
 
 	switch (st) {
+#if VC_AUTO_START_MS > 0
+	case VC_ST_IDLE:
+		/* Bench build only: START by itself once, VC_AUTO_START_MS
+		   after reaching IDLE (no dashboard needed) */
+		/* retried every VC_AUTO_START_MS while a guard refuses (e.g.
+		   IMU still calibrating); never again after the first START */
+		if (!auto_started && since(vc.t_state) >= VC_AUTO_START_MS) {
+			tm_printf((UB*)"vc: AUTO START (bench build)\n");
+			vc.t_state = now_ms();
+			do_start();
+			if (vc.state != VC_ST_IDLE) auto_started = 1;
+		}
+		break;
+#endif
+
 	case VC_ST_INIT:
 		/* Self-test: Motion runs and is braked */
 		if (s2_sts_state(ms) == S2_ST_STOPPED ||
@@ -735,6 +868,7 @@ LOCAL void tick(void)
 	case VC_ST_LINE_FOLLOW:
 	case VC_ST_HUMP_TRAVERSE:
 		relay_recovery();
+		check_slow_zone();
 		track_line_side();
 		/* Line & Barcode reports LINE_LOST only on the change; after a
 		   turn or a bypass it may already be LOST, so check the state */
@@ -779,16 +913,18 @@ LOCAL void tick(void)
 			/* Approval is queued: move only once S5 accepted it */
 			s5 = s5_status();
 			if (s5_sts_state(s5) == S5_ST_BYPASSING) {
+				vc.rescans = 0;		/* plan taken */
 				n = vc_bypass_script(plan_profile,
 						     vc.side_right ? 1 : -1, c, &lat);
 				vc.lat_cm = (B)lat;
 				set_state(VC_ST_BYPASS_OBSTACLE);
 				script_run(c, n);
 			} else if (s5_sts_state(s5) == S5_ST_FORWARD_WATCH) {
+				/* CONTINUE: count kept, or detect -> scan ->
+				   CONTINUE could loop for ever */
 				enter_follow();		/* CONTINUE */
 			} else if (since(vc.t_state) > VC_APPROVE_WAIT_MS) {
-				vc.phase = PH_WAIT_STOPPED;	/* rescan */
-				vc.scan_sent = 0;
+				rescan("S5 did not start the bypass");
 			}
 		}
 		break;
@@ -809,22 +945,19 @@ LOCAL void tick(void)
 			BOOL found = line_seen();
 			s5_line_observe(found);
 			if (vc.phase == PH_APPROACH && found) {
-				/* Met the line at an angle (VC_REJOIN_TURN_DEG):
-				   following at once can read both IR sensors on the
-				   tape as a crossing (steer 0) and drive straight
-				   over it (28 Oct).  Bring the axle onto the line,
-				   turn along it (back to the original heading),
-				   then follow
-				   (script_done: PH_REALIGN -> PH_CONFIRM). */
-				UW t[2];
-				t[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S,
-						   0, VC_JUNCTION_ADV_CM);
-				t[1] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S,
-						   vc.side_right ? VC_REJOIN_TURN_DEG
-								 : -VC_REJOIN_TURN_DEG, 0);
-				vc.phase = PH_REALIGN;
-				script_run(t, 2);	/* pre-empts the MOVE */
-				tm_printf((UB*)"vc: line found, turning onto it\n");
+				rejoin_follow();	/* axle on it, turn until on it */
+			} else if (vc.phase == PH_REALIGN && script_idx == 1) {
+				/* Turning: the sensors must leave the line first
+				   (gap after 150 ms of white), then the first time
+				   they see it again the robot points along it */
+				if (!found) {
+					vc.align_white = 1;
+				} else if (vc.align_white) {
+					script_clear();	/* stops the TURN */
+					vc.phase = PH_CONFIRM;
+					cmd_follow(VC_SLOW_CM_S);
+					tm_printf((UB*)"vc: on the line, following it\n");
+				}
 			} else if (vc.phase == PH_CONFIRM) {
 				/* Following it: lost it again -> search for it
 				   (relay_recovery keeps S5 fed) */

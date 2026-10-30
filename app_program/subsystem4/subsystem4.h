@@ -59,6 +59,10 @@
    0 = no log task. */
 #define S4_PRI_LOG		19
 #define S4_LOG_MS		0
+/* 1 = print events only (state changes with pitch, HUMP_END height and
+   peak pitch, SHOCK, TURN measured by compass), even with S4_LOG_MS 0:
+   a few lines per hump / turn, no 1 s status line. */
+#define S4_LOG_EVENTS		1
 
 /* Tilt trace on the console (bench / tuning aid): while the robot is
    tilted (|pitch| >= S4_TILT_MIN_DD or on a hump) print EVERY 10 ms

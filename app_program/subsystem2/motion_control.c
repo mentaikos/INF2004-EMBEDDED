@@ -372,8 +372,12 @@ LOCAL void set_targets(void)
 	case S2_ST_SPEED_FOLLOW:
 		v = imin(cruise_mm_s, limit_mm_s);
 		split = v * steer / S2_STEER_FULL;	/* + steer: left faster */
-		wh[0].target = (H)s2_clamp(v + split, 0, S2_TOP_SPEED_MM_S);
-		wh[1].target = (H)s2_clamp(v - split, 0, S2_TOP_SPEED_MM_S);
+		/* 28 Oct (jiahao16, Fine-Tuning 4bea17a, merged 30 Oct): the
+		   outer wheel keeps the cruise speed and the inner one slows by
+		   twice the split (same turn rate as +-split), so the robot
+		   slows down in a curve instead of speeding up */
+		wh[0].target = (H)s2_clamp(split < 0 ? v + 2 * split : v, 0, S2_TOP_SPEED_MM_S);
+		wh[1].target = (H)s2_clamp(split > 0 ? v - 2 * split : v, 0, S2_TOP_SPEED_MM_S);
 		break;
 
 	case S2_ST_MOVE_DISTANCE:
@@ -420,8 +424,8 @@ LOCAL void drive_wheel(UINT w, INT dt_ms)
 		p->ramp = 0;
 	} else if (tgt > p->ramp + S2_ACCEL_MM_S_PER_CYC) {
 		p->ramp = (H)(p->ramp + S2_ACCEL_MM_S_PER_CYC);
-	} else if (tgt < p->ramp - S2_ACCEL_MM_S_PER_CYC) {
-		p->ramp = (H)(p->ramp - S2_ACCEL_MM_S_PER_CYC);
+	} else if (tgt < p->ramp - S2_DECEL_MM_S_PER_CYC) {
+		p->ramp = (H)(p->ramp - S2_DECEL_MM_S_PER_CYC);
 	} else {
 		p->ramp = (H)tgt;
 	}

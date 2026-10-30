@@ -210,6 +210,58 @@ int main(void)
 		CHECK(m.state == S4_ST_CALIBRATING, "after re-init the IMU calibrates again");
 	}
 
+	printf("== Heading and turn rate (28 Oct fix) ==\n");
+	{
+		/* Still robot, field (200, 50) +- 20 counts of noise: before the
+		   fix heading jumped 0..359 and rate hit +-256 deg/s */
+		IMU_MONITOR m; UW t = 0; S4_STS_FIELDS f;
+		int i, hmin = 999, hmax = -999, rmax = 0, h0 = -1;
+		calibrate(&m, &t);
+		for (i = 0; i < 500; i++) {
+			IMU_SAMPLE s = { TRUE, 0, 0, 1000,
+				(H)(200 + lroundf(noise(20.0f))), (H)(50 + lroundf(noise(20.0f))), -300 };
+			IMU_EVENT ev[IMU_MAX_EVENTS];
+			t += IMU_PERIOD_MS;
+			imu_step(&m, &s, 0, t, ev);
+			if (i < 50) continue;			/* filters settle */
+			imu_get_fields(&m, &f);
+			if (h0 < 0) h0 = f.heading_deg;
+			{ int d = f.heading_deg - h0;
+			  if (d > 180) d -= 360;
+			  if (d < -180) d += 360;
+			  if (d < hmin) hmin = d;
+			  if (d > hmax) hmax = d; }
+			if (abs(f.rate_dps) > rmax) rmax = abs(f.rate_dps);
+		}
+		CHECK(hmax - hmin <= 10, "standing still: heading moves %d deg (<= 10)", hmax - hmin);
+		CHECK(rmax <= 5, "standing still: |turn rate| <= 5 deg/s (got %d)", rmax);
+
+		/* Turning on the spot at 90 deg/s, field radius 3000 counts with a
+		   hard-iron offset (500, -300): after the first full turn the
+		   heading must step 90 deg per second and the rate read ~90 */
+		{
+			int k, steps = 300, rate_sum = 0, n = 0, h1 = 0, h2 = 0;
+			for (k = 0; k < 2 * 400; k++) {		/* 8 s = 2 turns */
+				double a = k * IMU_PERIOD_MS * 90.0 / 1000.0 * 3.14159265 / 180.0;
+				IMU_SAMPLE s = { TRUE, 0, 0, 1000,
+					(H)lround(500 + 3000 * cos(a) + noise(20.0f)),
+					(H)lround(-300 + 3000 * sin(a) + noise(20.0f)), -300 };
+				IMU_EVENT ev[IMU_MAX_EVENTS];
+				t += IMU_PERIOD_MS;
+				imu_step(&m, &s, 0, t, ev);
+				imu_get_fields(&m, &f);
+				if (k >= 400 + 50) { rate_sum += f.rate_dps; n++; }
+				if (k == 500) h1 = f.heading_deg;
+				if (k == 600) h2 = f.heading_deg;
+			}
+			(void)steps;
+			{ int d = h2 - h1; if (d < 0) d += 360;
+			  CHECK(d >= 85 && d <= 95, "turning 90 deg/s: heading moved %d deg in 1 s (85..95)", d); }
+			CHECK(n && abs(rate_sum / n - 90) <= 10, "turning 90 deg/s: mean rate %d deg/s (80..100)",
+			      n ? rate_sum / n : 0);
+		}
+	}
+
 	printf("== Packing ==\n");
 	{
 		S4_STS_FIELDS a = { S4_ST_DESCENDING, -123, 359, -180, 1, 25, 7, 2 }, b;

@@ -33,7 +33,18 @@
 
 /* Low-pass filters, written as 1/DIV (alpha = 0.25 and 0.2) */
 #define IMU_PITCH_LPF_DIV	4	/* ~35 ms time constant */
-#define IMU_RATE_LPF_DIV	5
+#define IMU_RATE_LPF_DIV	4	/* on the 100 ms turn-rate steps */
+
+/* Heading (28 Oct fix).  Standing still, the hard-iron centre was the
+   min/max of a handful of samples, i.e. the sample itself, so the
+   corrected field was pure noise: heading jumped 0..359 and turn rate
+   +-256.  Now: the field vector is low-pass filtered before atan2, the
+   hard-iron centre is used only once each axis has swung at least
+   IMU_MAG_MIN_SPAN counts (the robot has turned enough), and turn rate
+   is the heading change over IMU_RATE_WINDOW_MS, not over one 10 ms step. */
+#define IMU_MAG_LPF_DIV		8	/* field vector, alpha 0.125 (~80 ms) */
+#define IMU_MAG_MIN_SPAN	200	/* counts; ~1/4 turn on either chip */
+#define IMU_RATE_WINDOW_MS	100
 
 /* Hump thresholds.  Week 6 used +5/-5/2 deg.  The yellow hump (10 mm)
    is shorter than the wheelbase, so the body tilts only about
@@ -112,6 +123,9 @@ typedef struct {
 	W	pitch_mdeg;		/* +-180000 -> 19 bits */
 	W	heading_mdeg;		/* 0..359999 -> 19 bits */
 	W	rate_cdps;		/* turn rate, 0.01 deg/s */
+	W	mag_f[2];		/* filtered field X, Y, counts x 16 */
+	W	rate_ref_mdeg;		/* heading at the start of the window */
+	UH	rate_win_ms;		/* time in the current rate window */
 
 	/* hump tracking */
 	UW	t_condition_ms;		/* start of the current confirm wait */

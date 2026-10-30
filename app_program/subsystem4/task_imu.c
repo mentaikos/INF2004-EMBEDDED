@@ -462,6 +462,7 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 	S4_DIAG		d;
 	UW		w0, w1;
 	INT		last_state = -1, last_count = 0, ticks = 0, a;
+	INT		ms, last_ms = -1, turn_h0 = 0, turn_wait = 0, dh;
 	UB		last_seq = 0;
 	/* With the tilt trace on, wake every IMU period so the queue
 	   (0.64 s deep) is drained long before it fills */
@@ -495,6 +496,31 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 			tm_printf((UB*)"s4: SHOCK -> E-STOP set\n");
 			last_seq = s4_shock_seq();
 		}
+
+		/* Turn check, for Buddy 2's S2_TRACK_MM: how far each on-the-spot
+		   TURN really turned, by the compass.  Measured 300 ms after
+		   Motion leaves TURN (the heading filter lags ~80 ms).  Only
+		   valid once the car has turned about a quarter turn since
+		   power-up (hard-iron centre).  Sign depends on how the board is
+		   mounted: compare the SIZE with the commanded angle. */
+		ms = (INT)s2_sts_state(motion_get_status());
+		if (ms == S2_ST_TURN && last_ms != S2_ST_TURN) {
+			turn_h0 = f.heading_deg;
+			turn_wait = 0;
+		} else if (ms != S2_ST_TURN && last_ms == S2_ST_TURN) {
+			turn_wait = 300;
+		} else if (turn_wait > 0) {
+			turn_wait -= step;
+			if (turn_wait <= 0) {
+				dh = f.heading_deg - turn_h0;
+				if (dh > 180)   dh -= 360;
+				if (dh <= -180) dh += 360;
+				tm_printf((UB*)"s4: TURN measured %d deg by compass"
+					  " (heading %d -> %d)\n",
+					  dh, turn_h0, f.heading_deg);
+			}
+		}
+		last_ms = ms;
 
 		ticks += step;
 		if (S4_LOG_MS > 0 && ticks >= S4_LOG_MS) {
