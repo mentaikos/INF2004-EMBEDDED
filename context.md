@@ -342,6 +342,49 @@ Open: the state to resume in after E_STOPPED **[DECIDE]**; the finish condition 
 - FR8 encoder turns Left/Right 90°, U-Turn 180°, straight moves. A2: distance and turns accurate to ±5 %.
 - FR27 full stop on sudden impact. FR28 motors never move in a stopped state.
 
+### 7.5 Week 10 demo metrics and requirement changes (for report vetting)
+The only graded table in the Project Briefing is the **Week 10 Demonstration
+Metrics** inside the slide 8 image (Buddy 5). NFR1-NFR5 are its **A column word
+for word** and must stay unchanged in the report:
+
+| Test | A | B | C | D | F | Requirement |
+|---|---|---|---|---|---|---|
+| Obstacle detection rate | 100 % | >= 95 % | >= 90 % | >= 80 % | < 80 % | NFR1 (fix wording: "obstacles", not "robots") |
+| Width estimation error | <= 10 % | <= 20 % | <= 30 % | <= 40 % | > 40 % | NFR2 |
+| Direction selection success | 100 % | >= 95 % | >= 90 % | >= 80 % | < 80 % | NFR3 |
+| Successful line reacquisition | 100 % | >= 95 % | >= 90 % | >= 80 % | < 80 % | NFR4 |
+| Time to bypass obstacle | < 3 s | < 5 s | < 7 s | < 10 s | > 10 s | NFR5 |
+
+Slides 4-7 (Buddies 1-4) have no graded table: their FRs/NFRs are self-set.
+
+**Team decision, 30 Oct 2026 (to meet NFR5):**
+- **NFR12 changed: speed near an obstacle is now 20 cm/s (was <= 10 cm/s within
+  20 cm).** The report's NFR12 text and every place that quotes it (statechart,
+  test plan, `VC_SLOW_CM_S` comment) must say 20 cm/s. The old NFR5 vs NFR12
+  conflict note no longer applies in the same form; re-check it.
+- **Bypass fixed margins reduced** (`VC_OBSTACLE_DEPTH_CM`, `VC_BYPASS_MIN_CM`,
+  `VC_BYPASS_EXTRA_CM`, `VC_REJOIN_EXTRA_CM` in `vehicle_controller.h`), to cut
+  the bypass time. Before: depth 25, min 20, extra 12, rejoin extra 3 cm, all
+  legs at 10 cm/s (about 11-12 s + scan time = F band). Record the new values
+  and the measured times in the report.
+- When vetting the report check: NFR12 = 20 cm/s everywhere; the bypass time is
+  measured detection -> line reacquired over repeated trials; the smaller
+  margins still clear the obstacle given the width error (NFR2 <= 10 %);
+  stopping distance at 20 cm/s within NFR10's 100 ms (about 2 cm) is still safe
+  with the 60 ms ultrasonic period (NFR15).
+
+**Team decision, 30 Oct 2026 (barcode read window):**
+- **NFR22 changed:** a barcode read is no longer ended by 200 ms without an
+  edge. It stays open from its first bar until EITHER a whole barcode
+  (29/39/49 elements) is followed by a quiet gap (> 2x its widest element),
+  OR `S3_BC_READ_MAX_MS` = **3 s** (then a partial read is discarded). Reason:
+  a full driven pass measured 2.7 s first bar -> last bar. Report: rewrite
+  NFR22 and its test (S3-U10 now checks the 3 s limit; S3-U21 slow pass is a
+  2.4 s *F*).
+- **Cruise speed `VC_CRUISE_CM_S` = 20 cm/s** (was 22). Near-obstacle speed
+  `VC_SLOW_CM_S` is 15 in the code at this point; the agreed NFR12 value
+  above is 20 cm/s -- make code and report agree.
+
 ---
 
 ## 8. Minimum-bit change requirement (Week 8 injection, Week 13 evidence)

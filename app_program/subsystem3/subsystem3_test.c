@@ -230,17 +230,18 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U09", f.nav == 2 && f.last.ch == 'A',
 		   "barcode read again after the cool-down");
 
-	/* S3-U10: a read that stops half way is discarded after 200 ms of
-	   no edges, without a BARCODE_ERR (NFR22) */
+	/* S3-U10: a read that stops half way is discarded without a
+	   BARCODE_ERR; 30 Oct: only once S3_BC_READ_MAX_MS has passed
+	   since its first bar, not after 200 ms of no edges */
 	feed_init(&f);
 	feed_level(&f, T_WHITE, S3_MS(50));
 	n = make_widths("*C*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, 14, 0);		/* first 14 elements only */
-	feed_level(&f, T_WHITE, S3_MS(S3_BC_EDGE_TIMEOUT_MS - 50));
+	feed_level(&f, T_WHITE, S3_MS(S3_BC_EDGE_TIMEOUT_MS + 300));
 	ok = (f.discard == 0);			/* not yet */
-	feed_level(&f, T_WHITE, S3_MS(100));
+	feed_level(&f, T_WHITE, S3_MS(S3_BC_READ_MAX_MS));
 	TEST_CHECK("S3-U10", ok && f.discard == 1 && f.err == 0 && f.nav == 0,
-		   "partial read discarded after 200 ms (NFR22)");
+		   "partial read discarded at the read time limit");
 
 	/* S3-U16: bc_ring overflow half way through a barcode: it is
 	   discarded with no NAV_CMD, the rest of it is not read as a new
@@ -283,8 +284,9 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 
 	/* S3-U21: speed range.  Fast: 50 cm/s over 1 mm / 2.5 mm bars
 	   (narrow 2 ms, wide 5 ms) with +-15 % width jitter.  Slow:
-	   2 cm/s over 3 mm / 6 mm bars (narrow 150 ms, wide 300 ms, longer
-	   than the 200 ms base time-out).  Each 20/20 (NFR24). */
+	   narrow 50 ms, wide 150 ms (a whole *F* in ~2.4 s, inside the
+	   3 s read limit; 30 Oct, was 150/300 ms = 5.7 s).  Each 20/20
+	   (NFR24). */
 	ok = 0;
 	for (i = 0; i < 20; i++) {
 		feed_init(&f);
@@ -295,12 +297,12 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 
 		feed_init(&f);
 		feed_level(&f, T_WHITE, S3_MS(50));
-		n = make_widths("*F*", S3_MS(150), S3_MS(300), 5, w);
+		n = make_widths("*F*", S3_MS(50), S3_MS(150), 5, w);
 		feed_elements(&f, w, n, 1500);
 		ok += (f.nav == 1 && f.last.ch == 'F' && f.discard == 0);
 	}
 	TEST_CHECK("S3-U21", ok == 40,
-		   "barcode read at 50 cm/s and at 2 cm/s, 20/20 each");
+		   "barcode read fast and slow (2.4 s pass), 20/20 each");
 
 	*pass += test_pass_;
 	*fail += test_fail_;

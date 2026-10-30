@@ -44,7 +44,7 @@
 /* =====================================================================
  *  2. Mission behaviour (PLACEHOLDERS: tune on the track)
  * ===================================================================== */
-#define VC_CRUISE_CM_S		22	/* line following speed (27 Oct: 20 lost the line, slowed to 15;
+#define VC_CRUISE_CM_S		20	/* line following speed (27 Oct: 20 lost the line, slowed to 15;
 					   back to 20 after the start-up / sensor-wiring fixes;
 					   30 Oct: 30, then 25, then 22 as asked -- if it loses the line on
 					   curves, go back down or raise Buddy 3's KP) */

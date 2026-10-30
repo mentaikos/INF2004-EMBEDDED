@@ -319,9 +319,16 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    KD was 6: touching the opposite edge after a drift changes the
    position by 3, so it kicked the split to ~60 % and the robot swung
    hard left and right.  Tune on the track. */
-#define S3_STEER_KP		7
+#define S3_STEER_KP		6	/* 30 Oct: was 7 (edge touch 14 -> 12, slightly softer) */
 #define S3_STEER_KD		2
 #define S3_STEER_SEEK		8	/* both white: ~12 % split */
+/* 30 Oct (team decision): while a barcode is being read (first bar until
+   the read ends: decoded, dropped, or the 3 s limit), the steering sent
+   to Motion Control is held at the learnt trim only, so the robot drives
+   straight and the barcode sensor crosses the bars at an even speed.
+   The line tracker keeps running (junction / line lost still reported).
+   0 = off. */
+#define S3_BC_HOLD_STRAIGHT	1
 
 /* Trim: cancels the robot's own pull to one side (unequal motors or
    wheels).  Every new touch of the left edge means it drifted right, so
@@ -415,6 +422,14 @@ IMPORT INT	s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms);
 #define S3_BC_EDGE_TIMEOUT_MS	200	/* NFR22: no edge -> end of read */
 #define S3_BC_TIMEOUT_WIDTHS	4	/* ... or this x the widest element */
 #define S3_BC_SLOW_TIMEOUT_MS	2000	/* ... but never longer than this */
+/* 30 Oct (team decision): a read stays open from its first bar until
+   EITHER a whole barcode (29/39/49 elements) followed by a quiet gap
+   (> 2x its widest element), OR S3_BC_READ_MAX_MS, whichever comes
+   first.  The no-edge time-out above no longer ends a read (it only
+   sets the quiet wait after an abort).  A full pass of the track
+   barcode took 2.7 s first bar -> last bar on the robot.  Replaces
+   NFR22's 200 ms no-edge discard: update the report. */
+#define S3_BC_READ_MAX_MS	3000	/* longest a read stays open */
 #define S3_BC_COOLDOWN_MS	500	/* NFR23: ignore sensor after a command */
 #define S3_BC_MAX_ELEMS		49	/* up to 5 characters incl. '*' '*' */
 #define S3_BC_MIN_RATIO_X10	15	/* narrowest wide >= 1.5 x widest narrow */
@@ -452,7 +467,7 @@ typedef struct {
 } S3_BC_RESULT;
 
 /* Element widths are ticks between edges.  An element can never reach
-   S3_BC_SLOW_TIMEOUT_MS (8000 ticks) plus one 20 ms cycle without the
+   S3_BC_READ_MAX_MS (12000 ticks) plus one 20 ms cycle without the
    read ending, so a halfword holds every width.  Used only by the task. */
 typedef struct {
 	UB	state : 2;	/* S3_BC_xxx */
@@ -461,6 +476,7 @@ typedef struct {
 	UB	n;		/* elements stored, 0..S3_BC_MAX_ELEMS */
 	UH	run_max;	/* widest element of this read, ticks */
 	UH	last_t;		/* time of the last edge (16-bit tick clock) */
+	UH	start_t;	/* time of the first bar of this read */
 	UH	until_t;	/* end of the cool-down or of a hold */
 	UH	elem[S3_BC_MAX_ELEMS];	/* widths, ticks */
 } S3_BC;

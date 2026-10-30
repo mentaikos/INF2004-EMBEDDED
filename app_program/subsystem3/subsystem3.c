@@ -664,6 +664,7 @@ EXPORT void s3_bc_init(S3_BC *bc)
 	bc->state    = S3_BC_WAIT_FOR_BAR;
 	bc->black    = 0;
 	bc->last_t   = 0;
+	bc->start_t  = 0;
 	bc->until_t  = 0;
 	bc->hold     = 0;
 	bc->run_max  = 0;
@@ -746,6 +747,7 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t, S3_BC_RESULT *res)
 			bc->state   = S3_BC_MEASURING;
 			bc->black   = 1;
 			bc->last_t  = t;
+			bc->start_t = t;
 			bc->run_max = 0;
 			bc->n       = 0;
 		}
@@ -797,7 +799,9 @@ EXPORT INT s3_bc_poll(S3_BC *bc, UH now, S3_BC_RESULT *res)
 		    (W)quiet > 2 * (W)bc->run_max) {
 			return end_read(bc, now, res);
 		}
-		if (quiet >= (H)edge_timeout(bc)) {
+		/* 30 Oct: otherwise the read stays open S3_BC_READ_MAX_MS from
+		   its first bar, then ends (a partial read is discarded) */
+		if (t_after(now, bc->start_t) >= (H)S3_MS(S3_BC_READ_MAX_MS)) {
 			return end_read(bc, now, res);
 		}
 		return S3_BEV_NONE;

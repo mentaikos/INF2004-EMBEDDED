@@ -110,7 +110,21 @@ LOCAL void clear_fault(UINT bits)
 /* Motion Control (S2) keeps only the newest byte; never waits */
 LOCAL void send_steer(void)
 {
-	if (motion_send_steer(lt.steer) == E_OK) {
+	INT	steer = lt.steer;
+#if S3_BC_HOLD_STRAIGHT
+	static UB	held;
+
+	/* 30 Oct: drive straight while a barcode is being read */
+	if (bc.state == S3_BC_MEASURING) {
+		steer = lt.trim;
+		if (!held) tm_printf((UB*)"s3: barcode: steering held straight\n");
+		held = 1;
+	} else if (held) {
+		held = 0;
+		tm_printf((UB*)"s3: barcode: steering released\n");
+	}
+#endif
+	if (motion_send_steer(steer) == E_OK) {
 		dg.steer_sent++;
 	} else {
 		dg.send_fail++;
