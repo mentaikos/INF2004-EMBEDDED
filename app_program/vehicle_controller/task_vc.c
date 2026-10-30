@@ -46,6 +46,7 @@ LOCAL struct {
 	UB	side_right : 1;	/* bypass side / search side */
 	UB	scan_sent : 1;	/* SCAN_REQ given for this stop */
 	UB	align_white : 1; /* PH_REALIGN: sensors left the line once */
+	UB	rejoin_tries : 2; /* PH_LOOK: left/right looks so far, 0..3 */
 	B	lat_cm;		/* bypass sideways distance */
 	UB	search_i;	/* LINE_SEARCH sweep number */
 	UB	faults;		/* SENSOR_FAULT bits of the last fault */
@@ -60,6 +61,9 @@ LOCAL UH	t_step;
 
 LOCAL UB		bench_move;	/* VC_BENCH_MOVE_CM run in progress */
 LOCAL S5_PROFILE	plan_profile;	/* profile of the approved plan */
+LOCAL B			rescan_turn;	/* rescan turns so far for this obstacle, deg (+ = right) */
+LOCAL H			look_h;		/* REJOIN_LINE: heading, deg from the approach
+					   heading (+ = right), from the TURNs done */
 LOCAL VC_DIAG		dg;
 
 /* Phases inside OBSTACLE_SCAN */
@@ -71,6 +75,7 @@ LOCAL VC_DIAG		dg;
 #define PH_APPROACH		0
 #define PH_REALIGN		1
 #define PH_CONFIRM		2
+#define PH_LOOK			3	/* look left and right (+ reverse) for it */
 
 /* Bypass script step from which a line under the IR sensors is followed
    at once (vc_bypass_script: 0 turn out, 1 sideways, 2 turn back,
@@ -304,13 +309,18 @@ LOCAL void enter_search(void)
    watchdog), so follow slowly in REJOIN_LINE/PH_CONFIRM, keep relaying
    line samples (tick), and REJOIN_LINE_CONFIRMED then gives LINE_FOLLOW
    at cruise speed. */
-LOCAL void rejoin_follow(void)
+LOCAL void rejoin_follow(INT dir)	/* turn: +1 right, -1 left */
 {
 	UW	t[2];
 
 	if (vc.state == VC_ST_BYPASS_OBSTACLE) {
 		s5_rejoin_line();		/* S5: BYPASSING -> LINE_RECOVERY */
 		set_state(VC_ST_REJOIN_LINE);
+		vc.rejoin_tries = 0;
+		/* heading from the approach heading: parallel to the track
+		   on step 3, half way round the last turn on step 4 */
+		look_h = (H)((script_idx >= 4 ? VC_REJOIN_TURN_DEG / 2 :
+			      VC_REJOIN_TURN_DEG) * (vc.side_right ? 1 : -1));
 	}
 	/* 30 Oct: line under the sensors, at an unknown angle (a curve may
 	   have brought it here).  Bring the axle onto it, then turn towards
@@ -320,12 +330,85 @@ LOCAL void rejoin_follow(void)
 	   (video IMG_0771).  VC_ALIGN_MAX_DEG without the line: search. */
 	t[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, VC_JUNCTION_ADV_CM);
 	t[1] = S2_CMD_PACK(S2_CMD_TURN, VC_ALIGN_CM_S,
-			   vc.side_right ? VC_ALIGN_MAX_DEG : -VC_ALIGN_MAX_DEG, 0);
+			   dir > 0 ? VC_ALIGN_MAX_DEG : -VC_ALIGN_MAX_DEG, 0);
 	vc.phase = PH_REALIGN;
 	vc.align_white = 0;
 	script_run(t, 2);			/* pre-empts the TURN / MOVE */
 	tm_printf((UB*)"vc: line found, turning %s until the sensors are on it\n",
-		  vc.side_right ? "right" : "left");
+		  dir > 0 ? "right" : "left");
+}
+
+/* -180..180 */
+LOCAL INT norm180(INT a)
+{
+	while (a > 180) a -= 360;
+	while (a <= -180) a += 360;
+	return a;
+}
+
+/* 30 Oct: the line was not where the rejoin expected it.  Look for it:
+   turn VC_REJOIN_LOOK_DEG one way, back, the other way, back (the line
+   sensors sweep the ground round the robot; tick() stops at once if
+   they see it), first on the side the line was left on.  From the 2nd
+   try on, first reverse VC_REJOIN_BACK_CM along the approach (the
+   robot may have overshot the line).  After VC_REJOIN_TRIES looks
+   without the line: FAULT.  Turns are aimed from look_h, so the sweep
+   is always round the approach heading whatever the robot did before. */
+LOCAL void rejoin_look(BOOL reverse)
+{
+	UW	c[VC_SCRIPT_MAX];
+	INT	side = vc.side_right ? 1 : -1;
+	INT	tgt[4], i, n = 0, a, h = look_h;
+
+	if (vc.rejoin_tries >= VC_REJOIN_TRIES) {
+		tm_printf((UB*)"vc: line not found after %d tries, giving up\n",
+			  VC_REJOIN_TRIES);
+		enter_fault(VC_R_LINE_TIMEOUT, FAULT_LINE_TIMEOUT);
+		return;
+	}
+	vc.rejoin_tries++;
+	if (reverse) {
+		c[n++] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0,
+				     -VC_REJOIN_BACK_CM);
+	}
+	tgt[0] = -side * VC_REJOIN_LOOK_DEG;	/* the line's side first */
+	tgt[1] = 0;
+	tgt[2] = side * VC_REJOIN_LOOK_DEG;
+	tgt[3] = 0;
+	for (i = 0; i < 4 && n < VC_SCRIPT_MAX; i++) {
+		a = norm180(tgt[i] - h);
+		if (a != 0) c[n++] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, a, 0);
+		h = tgt[i];
+	}
+	tm_printf((UB*)"vc: looking left and right for the line%s (try %d of %d)\n",
+		  reverse ? " after reversing" : "", vc.rejoin_tries,
+		  VC_REJOIN_TRIES);
+	vc.phase = PH_LOOK;
+	script_run(c, n);
+}
+
+/* PH_LOOK: the sensors see the line.  Which way the track runs from
+   here: the approach heading is VC_REJOIN_TURN_DEG off the track,
+   towards the line, so the track is at that angle minus look_h (half of
+   a turn still in progress counted).  Nearly along it: just follow.
+   Else bring the axle onto it and turn that way (rejoin_follow). */
+LOCAL void look_found(void)
+{
+	INT	h = look_h, t;
+
+	if (script_len > 0 && s2_cmd_type(script[script_idx]) == S2_CMD_TURN) {
+		h += s2_cmd_angle(script[script_idx]) / 2;
+	}
+	look_h = (H)norm180(h);
+	t = norm180(VC_REJOIN_TURN_DEG * (vc.side_right ? 1 : -1) - look_h);
+	if (t <= VC_REJOIN_ALONG_DEG && t >= -VC_REJOIN_ALONG_DEG) {
+		script_clear();
+		vc.phase = PH_CONFIRM;
+		cmd_follow(VC_SLOW_CM_S);	/* pre-empts the TURN / MOVE */
+		tm_printf((UB*)"vc: line found while looking, following it\n");
+	} else {
+		rejoin_follow(t > 0 ? 1 : -1);
+	}
 }
 
 /* Obstacle Scan stays in LINE_RECOVERY until it has seen the line for a
@@ -346,6 +429,7 @@ LOCAL void enter_obstacle_scan(void)
 	cmd_stop();
 	vc.phase = PH_WAIT_STOPPED;
 	vc.scan_sent = 0;
+	rescan_turn = 0;			/* new obstacle */
 	set_state(VC_ST_OBSTACLE_SCAN);
 }
 
@@ -489,6 +573,8 @@ LOCAL void script_done(void)
 		}
 		set_state(VC_ST_REJOIN_LINE);
 		vc.phase = PH_APPROACH;
+		vc.rejoin_tries = 0;
+		look_h = 0;			/* facing the approach heading */
 		script_run(&c, 1);
 		break;
 
@@ -499,21 +585,24 @@ LOCAL void script_done(void)
 				cmd_follow(VC_SLOW_CM_S);	/* follow while S5 confirms */
 			} else {
 				/* Turned VC_ALIGN_MAX_DEG, line never under the
-				   sensors: search, first towards the bypass side */
-				line_side = vc.side_right ? 1 : -1;
-				tm_printf((UB*)"vc: turned %d deg without the line,"
-					  " searching\n", VC_ALIGN_MAX_DEG);
-				enter_search();
+				   sensors again: back off and look left/right
+				   (30 Oct: was a LINE_SEARCH, 3 s, then FAULT) */
+				tm_printf((UB*)"vc: turned %d deg without the line\n",
+					  VC_ALIGN_MAX_DEG);
+				rejoin_look(TRUE);
 			}
 		}
 		else if (vc.phase == PH_APPROACH) {
-			/* Drove the whole approach without seeing the line (a
-			   curve took it away): search for it, first on the side
-			   it was left on.  relay_recovery keeps S5 fed. */
-			line_side = vc.side_right ? -1 : 1;
-			tm_printf((UB*)"vc: line not found after the obstacle,"
-				  " searching\n");
-			enter_search();
+			/* Drove the whole approach without seeing the line
+			   (overshot it, or a curve took it away): look left
+			   and right for it (30 Oct: was a LINE_SEARCH).
+			   relay_recovery keeps S5 fed. */
+			tm_printf((UB*)"vc: line not found after the obstacle\n");
+			rejoin_look(FALSE);
+		}
+		else if (vc.phase == PH_LOOK) {
+			if (line_seen()) look_found();	/* on it as the turn ended */
+			else rejoin_look(TRUE);		/* reverse a bit, look again */
 		}
 		break;
 
@@ -611,7 +700,9 @@ LOCAL void rescan(const char *why)
 
 LOCAL void on_no_clear(void)
 {
-	UW	c;
+	UW		c[2];
+	INT		n = 1, turn = VC_RESCAN_TURN_DEG;
+	S5_SNAPSHOT	s;
 
 	if (vc.state != VC_ST_OBSTACLE_SCAN) return;
 	if (vc.rescans >= VC_MAX_RESCANS) {
@@ -622,7 +713,6 @@ LOCAL void on_no_clear(void)
 	/* Reverse is the VC's decision (Buddy 5 cannot see behind).  Far
 	   enough to get the obstacle out of the turning circle at once */
 	{
-		S5_SNAPSHOT	s;
 		INT		d = VC_REVERSE_CM;
 		UINT		cl;
 
@@ -637,12 +727,40 @@ LOCAL void on_no_clear(void)
 		}
 		if (d < VC_REVERSE_CM) d = VC_REVERSE_CM;
 		if (d > VC_REVERSE_MAX_CM) d = VC_REVERSE_MAX_CM;
-		tm_printf((UB*)"vc: no clear way round, reversing %d cm (try %d of %d)\n",
-			  d, vc.rescans, VC_MAX_RESCANS);
-		c = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, -d);
+		c[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, -d);
+
+		/* Then look from a new angle: turn towards the side the scan
+		   saw more room on (+ = right).  Equal or unknown: the same
+		   way as the last rescan turn (left the first time), so the
+		   turns add up instead of cancelling.  A straight reverse
+		   keeps the same view, so a scan spoilt by the angle failed
+		   again every time (30 Oct, round bottle off to one side).
+		   At most VC_RESCAN_TURN_MAX_DEG off the line in total. */
+		if (turn > 0) {
+			if (s5_get_status(&s) == E_OK &&
+			    s5_profile_right(s.profile) != s5_profile_left(s.profile)) {
+				if (s5_profile_left(s.profile) > s5_profile_right(s.profile))
+					turn = -turn;
+			} else if (rescan_turn <= 0) {
+				turn = -turn;
+			}
+			if (rescan_turn + turn > VC_RESCAN_TURN_MAX_DEG ||
+			    rescan_turn + turn < -VC_RESCAN_TURN_MAX_DEG) {
+				turn = 0;		/* already turned enough */
+			} else {
+				rescan_turn = (B)(rescan_turn + turn);
+				c[1] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, turn, 0);
+				n = 2;
+			}
+		}
+		tm_printf((UB*)"vc: no clear way round, reversing %d cm%s"
+			  " (try %d of %d)\n", d,
+			  (n == 2) ? (turn < 0 ? " and turning left"
+					       : " and turning right") : "",
+			  vc.rescans, VC_MAX_RESCANS);
 	}
 	vc.phase = PH_REVERSING;
-	script_run(&c, 1);
+	script_run(c, n);
 }
 
 LOCAL void handle_event(UW w)
@@ -724,6 +842,11 @@ LOCAL void handle_event(UW w)
 		    (pl & S2_CMD_TYPE_MASK) != s2_cmd_type(script[script_idx])) {
 			dg.evt_ignored++;
 			break;
+		}
+		/* REJOIN_LINE: keep the heading the TURNs gave (rejoin_look) */
+		if (vc.state == VC_ST_REJOIN_LINE &&
+		    s2_cmd_type(script[script_idx]) == S2_CMD_TURN) {
+			look_h = (H)norm180(look_h + s2_cmd_angle(script[script_idx]));
 		}
 		if (++script_idx < script_len) {
 			t_step = now_ms();
@@ -917,6 +1040,23 @@ LOCAL void tick(void)
 				n = vc_bypass_script(plan_profile,
 						     vc.side_right ? 1 : -1, c, &lat);
 				vc.lat_cm = (B)lat;
+				/* Rescan turns (rescan_turn) left the robot at an
+				   angle to the line: the last bypass turn also
+				   undoes them, so the robot still meets the line
+				   at VC_REJOIN_TURN_DEG (30 Oct: it met it at
+				   up to 100 deg, or ran parallel and missed it) */
+				if (n >= 5 && rescan_turn != 0) {
+					INT a = s2_cmd_angle(c[4]) - rescan_turn;
+					if (a > 180) a = 180;
+					if (a < -180) a = -180;
+					c[4] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, a, 0);
+				}
+				tm_printf((UB*)"vc: bypass %s: out %d, %d cm, back %d,"
+					  " past %d cm, to the line %d (sideways %d cm)\n",
+					  vc.side_right ? "RIGHT" : "LEFT",
+					  s2_cmd_angle(c[0]), s2_cmd_dist(c[1]),
+					  s2_cmd_angle(c[2]), s2_cmd_dist(c[3]),
+					  s2_cmd_angle(c[4]), lat);
 				set_state(VC_ST_BYPASS_OBSTACLE);
 				script_run(c, n);
 			} else if (s5_sts_state(s5) == S5_ST_FORWARD_WATCH) {
@@ -935,7 +1075,7 @@ LOCAL void tick(void)
 		   rejoin drove on past it and timed out) */
 		if (script_len > 0 && script_idx >= VC_BYPASS_FOLLOW_STEP &&
 		    line_seen()) {
-			rejoin_follow();
+			rejoin_follow(vc.side_right ? 1 : -1);
 		}
 		break;
 
@@ -945,7 +1085,10 @@ LOCAL void tick(void)
 			BOOL found = line_seen();
 			s5_line_observe(found);
 			if (vc.phase == PH_APPROACH && found) {
-				rejoin_follow();	/* axle on it, turn until on it */
+				/* axle on it, turn until on it */
+				rejoin_follow(vc.side_right ? 1 : -1);
+			} else if (vc.phase == PH_LOOK && found) {
+				look_found();		/* seen while looking/reversing */
 			} else if (vc.phase == PH_REALIGN && script_idx == 1) {
 				/* Turning: the sensors must leave the line first
 				   (gap after 150 ms of white), then the first time

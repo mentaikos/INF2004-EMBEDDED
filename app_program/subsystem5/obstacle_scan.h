@@ -44,8 +44,9 @@
 #define S5_RETRY_LIMIT         3
 #define S5_RETRY_MS            1000
 #define S5_PLAN_TTL_MS         1000
-#define S5_RECOVERY_MS         20000    /* rejoin drive (up to 127 cm at 10 cm/s)
-					   + a line search; < 32 s (16-bit ms) */
+#define S5_RECOVERY_MS         30000    /* rejoin drive (up to 127 cm at 10 cm/s)
+					   + up to 3 left/right looks with reverses
+					   (30 Oct: was 20000); < 32 s (16-bit ms) */
 #define S5_LINE_FRESH_MS       120
 #define S5_LINE_CONFIRM_MS     120
 #define S5_PROFILE_BAND_CM     10
@@ -56,6 +57,20 @@
  * is taken as this wide (more than any bypass needs). */
 #define S5_PASS_DEPTH_MM       450
 #define S5_SIDE_FREE_MM        600
+/* Missing echoes (30 Oct: robot not square to a round bottle).  A round
+ * or angled surface sends the sound off sideways, so some angles of a
+ * sweep get no echo although nothing is there.  Before, ONE missing echo
+ *   - on a side made that side 0 cm free,
+ *   - straight ahead (90 deg) made every plan REVERSE,
+ *   - anywhere, with the obstacle > S5_DETECT_CM away and off the
+ *     robot's path, gave no plan at all (NO_CLEAR),
+ * and backing up straight changed nothing, so the robot faulted.
+ * Now up to this many missing echoes per side are passed over, the
+ * straight-ahead reading only has to be known when the obstacle is in
+ * front, and CONTINUE allows this many in the whole sweep (the forward
+ * watch still stops for anything that comes within S5_DETECT_CM). */
+#define S5_SIDE_NOECHO_OK      1
+#define S5_CONT_NOECHO_OK      2
 /* Forward watch on curves (task_scan.c): while following, point the
  * sensor into the bend, so a box placed on a curve is seen ahead of the
  * robot instead of beside the straight-ahead beam.  The bend is taken
@@ -69,8 +84,13 @@
  * Tune on the track: tight circle -> raise GAIN; the sensor jumping
  * about on straights -> raise DEADBAND. */
 #define S5_WATCH_MAX_DEG       40
-#define S5_WATCH_DEADBAND      8
+#define S5_WATCH_DEADBAND      10       /* 30 Oct: was 8 (straight-line weave) */
 #define S5_WATCH_GAIN          3
+/* Only look into a bend once the steering has stayed the same way this
+ * long (30 Oct): a straight-line weave changes side sooner, a bend does
+ * not.  Raise it if the sensor still moves on straights; lower it if it
+ * turns into bends too late. */
+#define S5_WATCH_HOLD_MS       600
 
 /* PLACEHOLDERS: measure assembled footprint and motion/sensing errors. */
 #define S5_ROBOT_WIDTH_MM      160

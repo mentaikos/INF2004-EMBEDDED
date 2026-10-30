@@ -198,19 +198,37 @@ LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns)
    Prints the look angle when it changes, for tuning.  Index 12 is straight ahead and
    lower indices point right (S5_SERVO_REVERSED handles the mounting). */
 LOCAL W steer_avg_q4;
+LOCAL UB steer_same;			/* cycles steering stayed one way */
+LOCAL B steer_way;			/* -1 left, 0 straight, +1 right */
 
 LOCAL UINT watch_index(BOOL moving)
 {
 	S3_STS_FIELDS f;
 	W avg, deg;
-	INT bins;
+	INT bins, way;
 	if (!moving) {
 		steer_avg_q4 = 0;
+		steer_same = 0;
+		steer_way = 0;
 		return S5_CENTRE;
 	}
 	s3_sts_unpack(s3_get_status(), &f);
 	steer_avg_q4 += ((W)f.steer * 16 - steer_avg_q4) / 8;
 	avg = steer_avg_q4 / 16;
+	/* 30 Oct: on a straight the line follower weaves, steering one way
+	   then the other every few hundred ms, and the average swung the
+	   sensor left and right.  A bend steers ONE way for a long time:
+	   look into it only after the steering has stayed the same way for
+	   S5_WATCH_HOLD_MS, and come back to centre as soon as it changes. */
+	way = f.steer > S5_WATCH_DEADBAND ? 1 :
+	      f.steer < -S5_WATCH_DEADBAND ? -1 : 0;
+	if (way != 0 && way == steer_way) {
+		if (steer_same < 255) steer_same++;
+	} else {
+		steer_same = (way != 0) ? 1 : 0;
+	}
+	steer_way = (B)way;
+	if ((UINT)steer_same * S5_PERIOD_MS < S5_WATCH_HOLD_MS) avg = 0;
 	if (avg > S5_WATCH_DEADBAND) deg = (avg - S5_WATCH_DEADBAND) * S5_WATCH_GAIN;
 	else if (avg < -S5_WATCH_DEADBAND) deg = (avg + S5_WATCH_DEADBAND) * S5_WATCH_GAIN;
 	else deg = 0;

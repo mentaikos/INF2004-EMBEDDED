@@ -76,6 +76,13 @@
 #define VC_REVERSE_TO_CM	22
 #define VC_REVERSE_MAX_CM	30
 #define VC_MAX_RESCANS		3	/* then FAULT (obstacle not passable); 30 Oct: was 2 */
+/* After backing off, also turn this far before the rescan, towards the
+   side Obstacle Scan saw more room on (30 Oct): a straight reverse keeps
+   the same viewing angle, so a scan spoilt by the angle (round or slanted
+   obstacle, robot not square to it) failed again every time.  0 = only
+   reverse, as before. */
+#define VC_RESCAN_TURN_DEG	20
+#define VC_RESCAN_TURN_MAX_DEG	40	/* total for one obstacle (VC_MAX_RESCANS is 3) */
 #define VC_SCAN_TIMEOUT_MS	5000	/* SCAN_REQ -> PROFILE / NO_CLEAR */
 #define VC_APPROVE_WAIT_MS	500	/* approval -> S5 BYPASSING */
 #define VC_S5_READY_MS		1000	/* START -> S5 FORWARD_WATCH */
@@ -90,9 +97,10 @@
    the near front corner forward, past the obstacle, and the rear away
    from it. */
 #define VC_PASS_MARGIN_CM	3
-#define VC_REJOIN_EXTRA_CM	3	/* drive this far past the expected line */
+#define VC_REJOIN_EXTRA_CM	4	/* drive this far past the expected line */
 #define VC_BYPASS_MIN_CM	20
-#define VC_BYPASS_EXTRA_CM	12
+#define VC_BYPASS_EXTRA_CM	4	/* 30 Oct: was 12; with the obstacle's edge
+					   now measured, not doubled, 12 went too wide */
 #define VC_BYPASS_MAX_CM	60
 /* Rejoin after a bypass (28 Oct, curved track): the last bypass turn is
    only this many degrees towards the line (not 90), so the robot meets
@@ -108,6 +116,17 @@
 #define VC_ALIGN_MAX_DEG	150
 #define VC_ALIGN_CM_S		10	/* wheel speed of that turn: slower, so
 					   the sensors do not overshoot the line */
+/* 30 Oct: line not found on the rejoin (approach driven, or the turn
+   onto it lost it): look for it instead of the normal 3 s LINE_SEARCH.
+   Turn VC_REJOIN_LOOK_DEG to one side, back, the other side, back; no
+   line: reverse VC_REJOIN_BACK_CM and look again; VC_REJOIN_TRIES looks
+   in all, then FAULT.  Line seen within VC_REJOIN_ALONG_DEG of the
+   track's direction: just follow it, else turn onto it as above.
+   VC_REJOIN_TRIES is at most 3 (2-bit counter). */
+#define VC_REJOIN_TRIES		3
+#define VC_REJOIN_LOOK_DEG	60
+#define VC_REJOIN_BACK_CM	10
+#define VC_REJOIN_ALONG_DEG	30
 /* Smooth bypass (28-29 Oct): 1 = turn out only as far as needed to miss
    the obstacle's near corner (45..90 deg, from the profile: tan(a) >=
    (corner sideways + half robot + margin + VC_BYPASS_CORNER_CM) /

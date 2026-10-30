@@ -79,7 +79,7 @@
 #define S2_ENC_CPR		220	/* counts per wheel rev, rising edges of A
 				   (S2-M01 26 Oct, hand-turned: L ~220,
 				   R ~217, +-10 %; likely 11 PPR x 1:20) */
-#define S2_TRACK_MM		120	/* TODO wheel centre to wheel centre */
+#define S2_TRACK_MM		95	/* TODO wheel centre to wheel centre */
 /* Motor model from the 27 Oct bench run (wheels lifted, no load):
    duty ~230-300 per mille held ~200 mm/s.  Fitted as deadband 100 +
    0.75 per mille per mm/s, i.e. ~1200 mm/s at full duty unloaded.  On
