@@ -377,8 +377,20 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 		lt->bend = 0;			/* other edge: overshoot, restart */
 	} else if ((pos == 2 || pos == -2) && pos == lt->pos) {
 		lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP : -S3_BEND_STEP));
-	} else if (!left && !center && lt->white_ms > S3_BEND_WHITE_MS) {
-		lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP : -S3_BEND_STEP));
+	} else if (!left && !center) {
+		/* 30 Oct: restores the 28 Oct straight-line fix (lost in a
+		   merge): grow while white only once a curve is confirmed */
+		if (lt->bend >= S3_BEND_CURVE || lt->bend <= -S3_BEND_CURVE) {
+			/* in a curve: the line slipped outside the sensor */
+			if (lt->white_ms > S3_BEND_WHITE_MS) {
+				lt->bend = (B)(lt->bend + (lt->bend > 0 ? S3_BEND_STEP
+								  : -S3_BEND_STEP));
+			}
+		} else if (lt->bend > 0) {
+			lt->bend--;		/* straight: a short touch fades */
+		} else if (lt->bend < 0) {
+			lt->bend++;
+		}
 	}
 	if (lt->bend >  S3_BEND_MAX) lt->bend =  S3_BEND_MAX;
 	if (lt->bend < -S3_BEND_MAX) lt->bend = -S3_BEND_MAX;

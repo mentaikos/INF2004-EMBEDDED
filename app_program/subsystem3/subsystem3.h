@@ -327,8 +327,15 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    to Motion Control is held at the learnt trim only, so the robot drives
    straight and the barcode sensor crosses the bars at an even speed.
    The line tracker keeps running (junction / line lost still reported).
-   0 = off. */
+   0 = off.
+   30 Oct (2): a pure hold (trim only) drove the robot off the line when
+   the read began while it was angled (LINE_LOST -> search mid-barcode).
+   The tracker's steering is now only LIMITED to +-S3_BC_STEER_LIMIT
+   during a read: it still follows the line, but the inner wheel never
+   drops below ~70 % of the outer one, so the robot cannot pivot over
+   the bars.  S3_BC_STEER_LIMIT 0 = the pure hold again. */
 #define S3_BC_HOLD_STRAIGHT	1
+#define S3_BC_STEER_LIMIT	10	/* inner wheel >= v x (1 - 2x10/64) */
 
 /* Trim: cancels the robot's own pull to one side (unequal motors or
    wheels).  Every new touch of the left edge means it drifted right, so
@@ -351,6 +358,13 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
 #define S3_BEND_STEP		2	/* per 20 ms cycle */
 #define S3_BEND_MAX		40
 #define S3_BEND_WHITE_MS	200
+/* Growing while both white made the straights weave (a centred robot
+   is white most of the time).  It only grows while white once a curve
+   is confirmed: the line held under one sensor long enough for the
+   bend to reach S3_BEND_CURVE (6 cycles = 120 ms).  Below that, while
+   white, the bend fades by 1 per cycle.  (28 Oct fix, restored 30 Oct:
+   it had been lost in a merge, which brought the weave back.) */
+#define S3_BEND_CURVE		12
 
 #define S3_TRIM_STEP		2
 #define S3_TRIM_MAX		6	/* +-25 % split at most */

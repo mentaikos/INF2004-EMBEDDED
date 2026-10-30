@@ -116,8 +116,14 @@ LOCAL void send_steer(void)
 
 	/* 30 Oct: drive straight while a barcode is being read */
 	if (bc.state == S3_BC_MEASURING) {
+#if S3_BC_STEER_LIMIT > 0
+		if (steer >  S3_BC_STEER_LIMIT) steer =  S3_BC_STEER_LIMIT;
+		if (steer < -S3_BC_STEER_LIMIT) steer = -S3_BC_STEER_LIMIT;
+#else
 		steer = lt.trim;
-		if (!held) tm_printf((UB*)"s3: barcode: steering held straight\n");
+#endif
+		if (!held) tm_printf((UB*)"s3: barcode: steering limited to +-%d\n",
+				      S3_BC_STEER_LIMIT);
 		held = 1;
 	} else if (held) {
 		held = 0;
