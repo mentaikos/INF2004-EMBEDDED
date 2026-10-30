@@ -8,7 +8,7 @@
  *	line tracker, the edge detector and the barcode decoder, so they
  *	need no track.  They use their own S3_LINE / S3_BC_DET / S3_BC,
  *	never the running task's.  S3-U15 checks the running task and the
- *	1 ms ISR; INT-03 the steering link to Motion Control (S2).
+ *	sampling ISR; INT-03 the steering link to Motion Control (S2).
  *	S3-U19..S3-U20 check the packed status word and the MQTT slot.  (S3-U14, the S3 MQTT frame, was dropped: Buddy 1 owns
  *	the telemetry payload.)
  */
@@ -20,8 +20,8 @@
 
 #define T_WHITE		300	/* made-up ADC levels */
 #define T_BLACK		3000
-#define T_NARROW	12	/* ms per narrow element at test speed */
-#define T_WIDE		30
+#define T_NARROW	S3_MS(12)	/* ticks per narrow element at test speed */
+#define T_WIDE		S3_MS(30)
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -48,8 +48,8 @@ LOCAL UH pattern_of(char c)
 
 /* Element widths for text (incl. the '*'s).  jitter_pct: each width
    varies by up to +-jitter_pct %.  Returns the element count. */
-LOCAL INT make_widths(const char *text, UB narrow, UB wide, INT jitter_pct,
-		      UB *w)
+LOCAL INT make_widths(const char *text, UH narrow, UH wide, INT jitter_pct,
+		      UH *w)
 {
 	INT	n = 0, i;
 	UH	p;
@@ -64,20 +64,20 @@ LOCAL INT make_widths(const char *text, UB narrow, UB wide, INT jitter_pct,
 	}
 	for (i = 0; i < n && jitter_pct > 0; i++) {
 		base = w[i];
-		w[i] = (UB)(base - base * jitter_pct / 100
+		w[i] = (UH)(base - base * jitter_pct / 100
 			    + base * rnd(2 * jitter_pct + 1) / 100);
 	}
 	return n;
 }
 
 /* A made-up ADC trace, fed the way the system does it: the edge
-   detector sees every 1 ms sample (as the ISR does) and the decoder gets
+   detector sees every sample (as the ISR does) and the decoder gets
    each edge, plus a poll every S3_PERIOD_MS (as the task does).
    Counts the results. */
 typedef struct {
 	S3_BC_DET	det;
 	S3_BC		bc;
-	UW		t;		/* ms */
+	UW		t;		/* ticks */
 	INT		nav, err, discard;
 	S3_BC_RESULT	last;
 } FEED;
@@ -100,33 +100,33 @@ LOCAL void feed_init(FEED *f)
 	f->nav = f->err = f->discard = 0;
 }
 
-LOCAL void feed_level(FEED *f, UH level, UW ms)
+LOCAL void feed_level(FEED *f, UH level, UW ticks)
 {
 	S3_BC_RESULT	res;
 	INT		edge;
 
-	while (ms-- > 0) {
+	while (ticks-- > 0) {
 		f->t++;
 		edge = s3_bc_detect(&f->det, level);
 		if (edge != S3_EDGE_NONE) {
 			count(f, s3_bc_edge(&f->bc, edge == S3_EDGE_TO_BLACK,
 					    (UH)f->t, &res), &res);
 		}
-		if (f->t % S3_PERIOD_MS == 0) {
+		if (f->t % S3_MS(S3_PERIOD_MS) == 0) {
 			count(f, s3_bc_poll(&f->bc, (UH)f->t, &res), &res);
 		}
 	}
 }
 
 /* Elements (first one black), then quiet white for quiet_ms */
-LOCAL void feed_elements(FEED *f, const UB *w, INT n, UW quiet_ms)
+LOCAL void feed_elements(FEED *f, const UH *w, INT n, UW quiet_ms)
 {
 	INT i;
 
 	for (i = 0; i < n; i++) {
 		feed_level(f, (i % 2 == 0) ? T_BLACK : T_WHITE, w[i]);
 	}
-	feed_level(f, T_WHITE, quiet_ms);
+	feed_level(f, T_WHITE, S3_MS(quiet_ms));
 }
 
 /* ------------------------------------------------------------------ */
@@ -149,14 +149,14 @@ LOCAL BOOL table_is_code39(void)
 	return s3_code39_len == 44;
 }
 
-LOCAL INT decode_text(const UB *w, INT n, char *text)
+LOCAL INT decode_text(const UH *w, INT n, char *text)
 {
 	return s3_code39_decode(w, n, text, 8);
 }
 
 LOCAL void test_barcode(INT *pass, INT *fail)
 {
-	UB	w[S3_BC_MAX_ELEMS], r[S3_BC_MAX_ELEMS];
+	UH	w[S3_BC_MAX_ELEMS], r[S3_BC_MAX_ELEMS];
 	char	text[8];
 	INT	n, i, len, ok;
 	FEED	f;
@@ -203,7 +203,7 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	/* S3-U07: a valid Code 39 barcode not in the table -> BARCODE_ERR,
 	   and the decoder is ready for the next one (FR31) */
 	feed_init(&f);
-	feed_level(&f, T_WHITE, 50);
+	feed_level(&f, T_WHITE, S3_MS(50));
 	n = make_widths("*Q*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, n, 300);
 	TEST_CHECK("S3-U07", f.err == 1 && f.nav == 0 &&
@@ -214,17 +214,17 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	/* S3-U08: ADC trace of "*F*" -> NAV_CMD; a second barcode
 	   within the 0.5 s cool-down is ignored (NFR23) */
 	feed_init(&f);
-	feed_level(&f, T_WHITE, 50);
+	feed_level(&f, T_WHITE, S3_MS(50));
 	n = make_widths("*F*", T_NARROW, T_WIDE, 10, w);
 	feed_elements(&f, w, n, 100);
 	ok = (f.nav == 1 && f.last.cmd == NAV_STRAIGHT && f.last.ch == 'F');
-	n = make_widths("*A*", 4, 10, 0, w);	/* ~170 ms: all inside it */
+	n = make_widths("*A*", S3_MS(4), S3_MS(10), 0, w);	/* ~170 ms: all inside it */
 	feed_elements(&f, w, n, 50);
 	TEST_CHECK("S3-U08", ok && f.nav == 1 && f.err == 0 && f.discard == 0,
 		   "trace *F* -> NAV_CMD, repeat within 0.5 s ignored");
 
 	/* S3-U09: after the cool-down the next barcode is read again */
-	feed_level(&f, T_WHITE, S3_BC_COOLDOWN_MS);
+	feed_level(&f, T_WHITE, S3_MS(S3_BC_COOLDOWN_MS));
 	n = make_widths("*A*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, n, 300);
 	TEST_CHECK("S3-U09", f.nav == 2 && f.last.ch == 'A',
@@ -233,12 +233,12 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	/* S3-U10: a read that stops half way is discarded after 200 ms of
 	   no edges, without a BARCODE_ERR (NFR22) */
 	feed_init(&f);
-	feed_level(&f, T_WHITE, 50);
+	feed_level(&f, T_WHITE, S3_MS(50));
 	n = make_widths("*C*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, 14, 0);		/* first 14 elements only */
-	feed_level(&f, T_WHITE, S3_BC_EDGE_TIMEOUT_MS - 50);
+	feed_level(&f, T_WHITE, S3_MS(S3_BC_EDGE_TIMEOUT_MS - 50));
 	ok = (f.discard == 0);			/* not yet */
-	feed_level(&f, T_WHITE, 100);
+	feed_level(&f, T_WHITE, S3_MS(100));
 	TEST_CHECK("S3-U10", ok && f.discard == 1 && f.err == 0 && f.nav == 0,
 		   "partial read discarded after 200 ms (NFR22)");
 
@@ -246,7 +246,7 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	   discarded with no NAV_CMD, the rest of it is not read as a new
 	   barcode, and the next barcode is read normally (8.3) */
 	feed_init(&f);
-	feed_level(&f, T_WHITE, 50);
+	feed_level(&f, T_WHITE, S3_MS(50));
 	n = make_widths("*Z*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, 12, 0);
 	count(&f, s3_bc_abort(&f.bc, f.t, &res), &res);
@@ -254,7 +254,7 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	for (i = 12; i < n; i++) {
 		feed_level(&f, (i % 2 == 0) ? T_BLACK : T_WHITE, w[i]);
 	}
-	feed_level(&f, T_WHITE, 300);
+	feed_level(&f, T_WHITE, S3_MS(300));
 	ok = ok && f.nav == 0 && f.err == 0 && f.discard == 1;
 	feed_elements(&f, w, n, 300);
 	TEST_CHECK("S3-U16", ok && f.nav == 1 && f.last.ch == 'Z',
@@ -273,13 +273,34 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	ok += (s3_bc_detect(&f.det, T_WHITE + S3_BC_DELTA_ON + 100) != S3_EDGE_TO_BLACK);
 	ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
 	ok += (s3_bc_detect(&f.det, T_WHITE + S3_BC_DELTA_OFF - 100) != S3_EDGE_TO_WHITE);
-	for (i = 0; i < 10000; i++) {	/* surface gets 200 darker */
+	for (i = 0; i < S3_MS(10000); i++) {	/* surface gets 200 darker */
 		s3_bc_detect(&f.det, T_WHITE + 200);
 	}
 	ok += (s3_bc_detect(&f.det, T_WHITE + S3_BC_DELTA_ON + 100) != S3_EDGE_NONE);
 	ok += (s3_bc_detect(&f.det, T_BLACK) != S3_EDGE_TO_BLACK);
 	TEST_CHECK("S3-U17", ok == 0,
 		   "edge detector: hysteresis, white baseline follows light");
+
+	/* S3-U21: speed range.  Fast: 50 cm/s over 1 mm / 2.5 mm bars
+	   (narrow 2 ms, wide 5 ms) with +-15 % width jitter.  Slow:
+	   2 cm/s over 3 mm / 6 mm bars (narrow 150 ms, wide 300 ms, longer
+	   than the 200 ms base time-out).  Each 20/20 (NFR24). */
+	ok = 0;
+	for (i = 0; i < 20; i++) {
+		feed_init(&f);
+		feed_level(&f, T_WHITE, S3_MS(50));
+		n = make_widths("*Z*", S3_MS(2), S3_MS(5), 15, w);
+		feed_elements(&f, w, n, 300);
+		ok += (f.nav == 1 && f.last.ch == 'Z');
+
+		feed_init(&f);
+		feed_level(&f, T_WHITE, S3_MS(50));
+		n = make_widths("*F*", S3_MS(150), S3_MS(300), 5, w);
+		feed_elements(&f, w, n, 1500);
+		ok += (f.nav == 1 && f.last.ch == 'F' && f.discard == 0);
+	}
+	TEST_CHECK("S3-U21", ok == 40,
+		   "barcode read at 50 cm/s and at 2 cm/s, 20/20 each");
 
 	*pass += test_pass_;
 	*fail += test_fail_;
@@ -430,18 +451,18 @@ LOCAL void test_live(INT *pass, INT *fail)
 	S3_DIAG		before, after;
 	TEST_INIT();
 
-	/* S3-U15: the task runs every 20 ms (NFR8) and the ISR every 1 ms
-	   (NFR16) without losing edges (A6) */
+	/* S3-U15: the task runs every 20 ms (NFR8) and the ISR every
+	   S3_SAMPLE_US (NFR16: at least every 1 ms) without losing edges (A6) */
 	s3_get_diag(&before);
 	tk_dly_tsk(1500);
 	s3_get_diag(&after);
 	TEST_CHECK("S3-U15",
 		   (UH)(after.cycles - before.cycles) >= 72 &&
 		   (UH)(after.cycles - before.cycles) <= 78 &&
-		   (UH)(after.samples - before.samples) >= 1450 &&
-		   (UH)(after.samples - before.samples) <= 1550 &&
+		   (UH)(after.samples - before.samples) >= S3_MS(1450) &&
+		   (UH)(after.samples - before.samples) <= S3_MS(1550) &&
 		   after.overflows == 0,
-		   "20 ms task, 1 ms sampling, bc_ring never overflows");
+		   "20 ms task, 0.25 ms sampling, bc_ring never overflows");
 
 	/* INT-03 (S3 -> S2 steering): Motion Control accepts one steering
 	   byte per cycle and drains its mbf_steer, so none is refused */
