@@ -251,6 +251,11 @@ EXPORT UH drv_ir_threshold(void)
 	return bc_det.thr_on;
 }
 
+EXPORT UH drv_ir_white(void)
+{
+	return (UH)(bc_det.white_q8 >> 8);
+}
+
 EXPORT UH drv_ir_sample_count(void)
 {
 	return bc_samples;
@@ -428,19 +433,13 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
  *	  MEASURING --bc_ring overflow--> WAIT_FOR_BAR     (discard, 8.3)
  */
 
-/* FR29: payload -> command, as in the project write-up (A..D).  If the
-   official track barcodes differ, only this table needs to change. */
-EXPORT const S3_BC_ENTRY s3_bc_table[] = {
-/* 29 Oct: the track's barcodes are A, F and Z; what each one means is
-   not decided yet, so all three map to S3_BC_UNDECIDED_CMD (STRAIGHT:
-   recognised and logged, the robot carries on at the junction).  Set
-   the real NAV_xxx per letter once decided.  Was A..D = L/R/S/U. */
-#define S3_BC_UNDECIDED_CMD	NAV_STRAIGHT
-	{ "A", S3_BC_UNDECIDED_CMD },
-	{ "F", S3_BC_UNDECIDED_CMD },
-	{ "Z", S3_BC_UNDECIDED_CMD },
-};
-EXPORT const INT s3_bc_table_len = sizeof(s3_bc_table) / sizeof(s3_bc_table[0]);
+/* 1 Nov: the letter -> movement mapping is not in the code: it comes by
+   MQTT (robot/cmd MAP) to the Vehicle Controller.  The decoder accepts
+   every single letter A..Z, read in either direction. */
+EXPORT BOOL s3_bc_is_letter(const char *text)
+{
+	return text[0] >= 'A' && text[0] <= 'Z' && text[1] == '\0';
+}
 
 /* Code 39, bar-space-bar-...-bar, 1 = wide (ISO/IEC 16388) */
 EXPORT const S3_C39 s3_code39[] = {
@@ -572,11 +571,13 @@ LOCAL INT decode_dir(const UH *w, INT n, char *text, INT max)
 	return len;
 }
 
-EXPORT INT s3_code39_decode(const UH *w, INT n, char *text, INT max)
+EXPORT INT s3_code39_decode_rev(const UH *w, INT n, char *text, INT max,
+				BOOL *rev_out)
 {
 	UH	rev[S3_BC_MAX_ELEMS];
 	INT	i, fwd, bwd;
 
+	*rev_out = FALSE;
 	if (n > S3_BC_MAX_ELEMS) return -S3_BCERR_FRAME;
 
 	fwd = decode_dir(w, n, text, max);
@@ -586,24 +587,20 @@ EXPORT INT s3_code39_decode(const UH *w, INT n, char *text, INT max)
 	   can only decode one way round) */
 	for (i = 0; i < n; i++) rev[i] = w[n - 1 - i];
 	bwd = decode_dir(rev, n, text, max);
-	if (bwd >= 0) return bwd;
+	if (bwd >= 0) {
+		*rev_out = TRUE;
+		return bwd;
+	}
 
 	/* Report the more specific error: right patterns, wrong framing */
 	return (fwd < bwd) ? fwd : bwd;
 }
 
-EXPORT UB s3_bc_lookup(const char *text)
+EXPORT INT s3_code39_decode(const UH *w, INT n, char *text, INT max)
 {
-	INT		i;
-	const char	*a, *b;
+	BOOL	rev;
 
-	for (i = 0; i < s3_bc_table_len; i++) {
-		a = s3_bc_table[i].text;
-		b = text;
-		while (*a != '\0' && *a == *b) { a++; b++; }
-		if (*a == '\0' && *b == '\0') return s3_bc_table[i].cmd;
-	}
-	return NAV_NONE;
+	return s3_code39_decode_rev(w, n, text, max, &rev);
 }
 
 /* ------------------------------------------------------------------ */
@@ -619,20 +616,32 @@ LOCAL void det_thresholds(S3_BC_DET *d)
 {
 	W white = (W)(d->white_q8 >> 8);
 
-	d->thr_on  = clamp_adc(white + S3_BC_DELTA_ON);
-	d->thr_off = clamp_adc(white + S3_BC_DELTA_OFF);
+	W amp   = (W)d->amp;
+
+	/* 1 Nov: part of the way from white to the black actually seen */
+	d->thr_on  = clamp_adc(white + amp * S3_BC_ON_PCT / 100);
+	d->thr_off = clamp_adc(white + amp * S3_BC_OFF_PCT / 100);
 }
 
 EXPORT void s3_bc_det_init(S3_BC_DET *d, UH white)
 {
 	d->white_q8 = (UW)white << 8;
 	d->black    = FALSE;
+	d->amp      = S3_BC_AMP_INIT;
+	if (d->amp < S3_BC_AMP_MIN) d->amp = S3_BC_AMP_MIN;
 	det_thresholds(d);
 }
 
 EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 {
 	if (d->black) {
+		/* 1 Nov: learn how dark the bars are (only grows) */
+		W lv = (W)adc - (W)(d->white_q8 >> 8);
+
+		if (lv > (W)d->amp) {
+			d->amp = (UH)lv;
+			det_thresholds(d);
+		}
 		if (adc < d->thr_off) {
 			d->black = FALSE;
 			return S3_EDGE_TO_WHITE;
@@ -688,6 +697,7 @@ LOCAL void clear_result(const S3_BC *bc, S3_BC_RESULT *res)
 	res->cmd      = NAV_NONE;
 	res->ch       = 0;
 	res->err      = 0;
+	res->rev      = 0;
 	res->elements = bc->n;
 }
 
@@ -695,6 +705,7 @@ LOCAL INT end_read(S3_BC *bc, UH now, S3_BC_RESULT *res)
 {
 	char	text[8];
 	INT	len;
+	BOOL	rev;
 
 	clear_result(bc, res);
 	bc->state = S3_BC_WAIT_FOR_BAR;
@@ -704,7 +715,7 @@ LOCAL INT end_read(S3_BC *bc, UH now, S3_BC_RESULT *res)
 	}
 
 	bc->state = S3_BC_DECODING;
-	len = s3_code39_decode(bc->elem, bc->n, text, sizeof(text));
+	len = s3_code39_decode_rev(bc->elem, bc->n, text, sizeof(text), &rev);
 	if (len < 0) {
 		bc->state = S3_BC_WAIT_FOR_BAR;
 		res->err = (UB)-len;
@@ -712,8 +723,9 @@ LOCAL INT end_read(S3_BC *bc, UH now, S3_BC_RESULT *res)
 	}
 
 	res->ch  = (len > 0) ? text[0] : 0;
-	res->cmd = s3_bc_lookup(text);
-	if (res->cmd == NAV_NONE) {
+	res->rev = rev ? 1 : 0;
+	res->cmd = NAV_NONE;		/* 1 Nov: the VC maps the letter */
+	if (!s3_bc_is_letter(text)) {
 		bc->state = S3_BC_WAIT_FOR_BAR;
 		res->err = S3_BCERR_UNKNOWN;
 		return S3_BEV_BARCODE_ERR;

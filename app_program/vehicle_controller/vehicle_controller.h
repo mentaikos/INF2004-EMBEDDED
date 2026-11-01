@@ -164,6 +164,16 @@
    during the move.  Keep 0 for normal runs. */
 #define VC_BENCH_MOVE_CM	0
 
+/* 1 Nov: barcode letter -> movement.  The mapping is NOT fixed in the
+   code: it arrives by MQTT before the demo (robot/cmd MAP, Buddy 1) and
+   can be sent again at any time.  Until it arrives, a junction after a
+   barcode goes straight on.  VC_BENCH_MAP is only for a no-WiFi bench
+   build: "" (normal) or 4 letters forward, U-turn, left, right (e.g.
+   "AFZW") used until an MQTT MAP replaces them. */
+#ifndef VC_BENCH_MAP
+#define VC_BENCH_MAP		""
+#endif
+
 /* Finish condition (assumption A9, still open): 0 = only EVT_MISSION_END
    ends the mission; N = the N-th junction ends it. */
 #define VC_FINISH_JUNCTIONS	0
@@ -284,6 +294,12 @@ IMPORT void	vc_get_diag(VC_DIAG *d);
 
 /* Barcode command at a junction -> MOVE/TURN script; 0 = keep following */
 IMPORT INT	vc_nav_script(UINT nav, UW *cmds);
+
+/* 1 Nov: barcode letter -> movement mapping (set by MQTT MAP).
+   vc_set_map: letters[] = forward, U-turn, left, right ('A'..'Z').
+   vc_map_nav: NAV_xxx for a letter, or NAV_NONE if it is not mapped. */
+IMPORT void	vc_set_map(const char letters[4]);
+IMPORT UINT	vc_map_nav(char letter);
 
 /* Bypass round the obstacle on one side, from Obstacle Scan's profile:
    turn out, sideways, turn back, past it, turn towards the line.

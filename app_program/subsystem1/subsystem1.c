@@ -174,6 +174,14 @@ WEAK_FUNC EXPORT void s1_out_estop(void)
 	s1_set_mission_state(3);	/* E_STOPPED */
 }
 
+WEAK_FUNC EXPORT BOOL s1_out_map(const char letters[4])
+{
+	tm_printf((UB*)"S1: MAP forward=%c U-turn=%c left=%c right=%c ->"
+		  " (no Vehicle Controller yet)\n",
+		  letters[0], letters[1], letters[2], letters[3]);
+	return TRUE;
+}
+
 /* ==================================================================== */
 /* 5. Network bridge -- called from cyw43_utk_task() (mqtt_utk.c).       */
 /*    Only TMO_POL kernel calls, so the radio task is never blocked.     */
@@ -231,6 +239,7 @@ EXPORT void s1_net_link(int up)
 /* ==================================================================== */
 /* 6. Task: Command Handler (pri 16)                                     */
 /*    2-bit command: 00 START / 01 STOP -> Vehicle Controller hook,      */
+/*    4-byte MAP (code 11): barcode letter mapping -> s1_out_map (1 Nov) */
 /*    10 E-STOP -> flg_safety hook (never filtered), else ack INVALID.   */
 /*    A START/STOP whose 6-bit id was just handled is ignored.           */
 /* ==================================================================== */
@@ -256,6 +265,20 @@ LOCAL void s1_cmd_task(INT stacd, void *exinf)
 		n = tk_rcv_mbf(mbf_s1_rx, buf, TMO_FEVR);
 		if (n <= 0) {
 			continue;
+		}
+
+		/* 1 Nov: a 4-byte message is the MAP command */
+		if (n == S1_MAP_LEN) {
+			char	letters[S1_MAP_COUNT];
+
+			if (s1_decode_map(buf, n, &id, letters) != S1_CMD_MAP) {
+				tm_printf((UB*)"S1: INVALID MAP (letters must be"
+					  " A..Z, all different)\n");
+				send_ack(S1_ACK_INVALID, id);
+			} else if (!s1_out_map(letters)) {
+				send_ack(S1_ACK_FAILED, id);
+			}
+			continue;	/* repeating a MAP is harmless: no id filter */
 		}
 
 		cmd = s1_decode_command(buf, n, &id);

@@ -157,6 +157,20 @@ EXPORT void vc_test(void)
 	TEST_CHECK("VC-U08", vc_sts_state(vc_get_status()) == VC_ST_IDLE,
 		   "STOP in IDLE stays IDLE");
 
+	/* VC-U09 (1 Nov): MQTT barcode map: forward, U-turn, left, right */
+	{
+		static const char m[4] = { 'A', 'F', 'Z', 'W' };
+		static const char none[4] = { 0, 0, 0, 0 };
+
+		vc_set_map(m);
+		ok = vc_map_nav('A') == NAV_STRAIGHT && vc_map_nav('F') == NAV_U_TURN &&
+		     vc_map_nav('Z') == NAV_LEFT && vc_map_nav('W') == NAV_RIGHT &&
+		     vc_map_nav('B') == NAV_NONE && vc_map_nav(0) == NAV_NONE;
+		vc_set_map(none);		/* the real map comes by MQTT */
+		ok = ok && vc_map_nav('A') == NAV_NONE;
+		TEST_CHECK("VC-U09", ok, "barcode map: letter -> movement, unmapped = none");
+	}
+
 	/* INT-06: Motion -> VC binding.  MOVE(d = 0) ends at once with
 	   MOTION_DONE, which must reach mbf_vc_evt.  Needs E-STOP clear
 	   (Motion ignores moves while braking). */

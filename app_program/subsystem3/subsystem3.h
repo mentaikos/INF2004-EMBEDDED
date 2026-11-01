@@ -174,7 +174,7 @@ IMPORT void	s3_get_diag(S3_DIAG *d);
 /* Why a barcode read failed (console log and S3_BC_RESULT.err) */
 #define S3_BCERR_PATTERN	1	/* not a Code 39 pattern */
 #define S3_BCERR_FRAME		2	/* missing start/stop '*' */
-#define S3_BCERR_UNKNOWN	3	/* valid barcode, not in the table */
+#define S3_BCERR_UNKNOWN	3	/* valid Code 39, but not one letter A..Z (1 Nov) */
 
 /* ---------------------------------------------------------------------
  *  Vehicle Controller binding, the same way as motion_bind_vc().  The
@@ -231,6 +231,24 @@ IMPORT void	s3_bind_vc(ID mbf_vc_evt, ID flg_fault);
    ~2500; toner reflects more IR).  +1100 was never reached. */
 #define S3_BC_DELTA_ON		450	/* black once > white + this (was 800, then 1100) */
 #define S3_BC_DELTA_OFF		300	/* white again once < white + this (was 500, then 750) */
+/* 1 Nov (driven pass, ADC trace on the robot, 15 cm/s): the track
+   barcode is LARGE (narrow ~8 mm, wide ~28 mm, ~42 cm long), black reads
+   ~3700-3900, but the paper between the bars only drops to ~630-830
+   (the floor/mat white at calibration is ~204).  OFF at white + 300 =
+   ~500 was never reached, so every bar merged into one (dropped,
+   "23302 ..." = 2.3 s of black).  Now the thresholds follow the black
+   level actually seen: ON / OFF at S3_BC_ON_PCT / S3_BC_OFF_PCT of the
+   way from white to the darkest bar so far (S3_BC_AMP_INIT before the
+   first bar).  With black ~3700: ON ~2100, OFF ~1600; paper ~830. */
+#define S3_BC_AMP_INIT		1800	/* black - white assumed before any bar */
+#define S3_BC_AMP_MIN		800	/* never below (noise) */
+/* 60 / 48: centred near (paper + black) / 2, the midpoint the blurred
+   narrow bars and gaps swing around (paper ~650 > floor ~204).  Fitted
+   to the 1 Nov trace: also reads 3 mm bars if the sensor is sharp
+   enough (sigma ~1.2 mm); 55 / 40 did not.  Barcode sizes on the track:
+   narrow 3, 3.5 and 7 mm (141, 165, 328 mm long), none hard-coded. */
+#define S3_BC_ON_PCT		60	/* black once > white + 60 % of (black - white) */
+#define S3_BC_OFF_PCT		48	/* white again once < white + 48 % */
 #define S3_BC_WHITE_SHIFT	12	/* white baseline EMA: 1/4096 per sample = ~1/1024 per ms (was 1/64) */
 #define S3_BC_WHITE_BAND	250	/* follow only readings < white + this */
 
@@ -245,6 +263,7 @@ typedef struct {
 	UW	white_q8;	/* white baseline, 12.8 fixed point (20 bits) */
 	UH	thr_on;		/* go black above this (12 bits) */
 	UH	thr_off;	/* go white below this (12 bits) */
+	UH	amp;		/* 1 Nov: darkest bar so far - white (12 bits) */
 	UB	black;		/* current level, after hysteresis: 0/1 */
 } S3_BC_DET;
 
@@ -292,6 +311,7 @@ IMPORT const volatile UH *drv_ir_cap_buf(void);
 IMPORT UH	drv_ir_ticks(void);		/* ISR's tick counter (edge clock) */
 IMPORT UH	drv_ir_last_raw(void);		/* latest ADC sample, 12 bits */
 IMPORT UH	drv_ir_threshold(void);		/* current black threshold */
+IMPORT UH	drv_ir_white(void);		/* current white baseline (1 Nov) */
 IMPORT UH	drv_ir_sample_count(void);	/* samples taken */
 IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
 
@@ -376,7 +396,7 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
        every read that ends: shows whether the sensor saw the bars
    2 = 1 + the barcode sensor's ADC level and threshold every 0.5 s
        (raw rises over the threshold on black) */
-#define S3_DEBUG_BARCODE	3	/* 3 = capture of one pass; back to 1 after */
+#define S3_DEBUG_BARCODE	1	/* 3 = capture of one pass (1 Nov: 1, the dump stalls the task) */
 /* Level 3 (integration aid, 29 Oct): the ISR records the barcode ADC
    from the first sample darker than white + S3_CAP_TRIGGER, one value
    every S3_CAP_MS ms, S3_CAP_LEN values, then the task prints them
@@ -443,19 +463,19 @@ IMPORT INT	s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms);
    sets the quiet wait after an abort).  A full pass of the track
    barcode took 2.7 s first bar -> last bar on the robot.  Replaces
    NFR22's 200 ms no-edge discard: update the report. */
-#define S3_BC_READ_MAX_MS	3000	/* longest a read stays open */
+#define S3_BC_READ_MAX_MS	5000	/* longest a read stays open (1 Nov: was 3000; the 42 cm
+					   barcode takes 2.8 s at 15 cm/s, +quiet) */
 #define S3_BC_COOLDOWN_MS	500	/* NFR23: ignore sensor after a command */
 #define S3_BC_MAX_ELEMS		49	/* up to 5 characters incl. '*' '*' */
 #define S3_BC_MIN_RATIO_X10	15	/* narrowest wide >= 1.5 x widest narrow */
 
-/* Command table (FR29): A left, B right, C straight, D U-turn */
-typedef struct {
-	const char	*text;	/* payload between the '*'s */
-	UB		cmd;	/* NAV_xxx */
-} S3_BC_ENTRY;
-
-IMPORT const S3_BC_ENTRY	s3_bc_table[];
-IMPORT const INT		s3_bc_table_len;
+/* 1 Nov: no letter -> command table any more.  Every barcode whose
+   payload is ONE letter 'A'..'Z' is a valid read (S3_BEV_NAV_CMD, ch
+   set, cmd = NAV_NONE); the letter goes to the Vehicle Controller
+   (EVT_BARCODE), which maps it to a movement with the mapping received
+   by MQTT.  Other valid Code 39 payloads (digits, symbols, 2+ letters)
+   are BARCODE_ERR S3_BCERR_UNKNOWN. */
+IMPORT BOOL	s3_bc_is_letter(const char *text);
 
 /* Code 39 patterns: 9 bits, element 0 (first bar) in bit 8, 1 = wide */
 typedef struct {
@@ -468,14 +488,15 @@ IMPORT const INT	s3_code39_len;
 
 /* Result of s3_bc_edge() / s3_bc_poll() / s3_bc_abort() */
 #define S3_BEV_NONE		0
-#define S3_BEV_NAV_CMD		1	/* valid barcode, cmd/ch filled in */
+#define S3_BEV_NAV_CMD		1	/* valid barcode: ch = letter, rev set (1 Nov) */
 #define S3_BEV_BARCODE_ERR	2	/* complete read that failed: err */
 #define S3_BEV_DISCARD		3	/* partial read dropped (NFR22) */
 
 /* Result of one call; a local variable, never stored or shared */
 typedef struct {
-	UB	cmd : 3;	/* NAV_xxx, or NAV_NONE */
+	UB	cmd : 3;	/* NAV_NONE (1 Nov: the VC maps the letter) */
 	UB	err : 2;	/* S3_BCERR_xxx */
+	UB	rev : 1;	/* 1 = decoded right->left (end '*' seen first) */
 	UB	elements;	/* elements in the read, 0..S3_BC_MAX_ELEMS */
 	char	ch;		/* first payload character */
 } S3_BC_RESULT;
@@ -511,9 +532,9 @@ IMPORT INT	s3_bc_abort(S3_BC *bc, UH now, S3_BC_RESULT *res);
 /* Decode n element widths.  Writes up to max-1 payload characters and a
    '\0' to text.  Returns the payload length, or -S3_BCERR_xxx. */
 IMPORT INT	s3_code39_decode(const UH *w, INT n, char *text, INT max);
-
-/* Payload -> NAV_xxx, or NAV_NONE if not in s3_bc_table */
-IMPORT UB	s3_bc_lookup(const char *text);
+/* Same; *rev = 1 if it only decoded read backwards (1 Nov) */
+IMPORT INT	s3_code39_decode_rev(const UH *w, INT n, char *text, INT max,
+				     BOOL *rev);
 
 /* Objects and the task (subsystem3.c, task_consumer.c) */
 IMPORT ID	tid_line_barcode;

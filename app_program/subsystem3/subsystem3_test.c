@@ -167,13 +167,13 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U02", table_is_code39(),
 		   "Code 39 table: 44 unique patterns, 3 wide each");
 
-	/* 29 Oct: table is now A, F, Z, all NAV_STRAIGHT until decided */
-	/* S3-U03: clean "*A*" decodes to its table command */
+	/* S3-U03: clean "*A*" decodes to the letter A (1 Nov: no table; the
+	   VC maps letters to movements with the MQTT mapping) */
 	n = make_widths("*A*", T_NARROW, T_WIDE, 0, w);
 	len = decode_text(w, n, text);
 	TEST_CHECK("S3-U03", n == 29 && len == 1 && text[0] == 'A' &&
-		   s3_bc_lookup(text) == NAV_STRAIGHT,
-		   "decode *A* -> its command (FR29)");
+		   s3_bc_is_letter(text),
+		   "decode *A* -> letter A (FR29)");
 
 	/* S3-U04: the same barcode read backwards (after a U-turn) */
 	for (i = 0; i < n; i++) r[i] = w[n - 1 - i];
@@ -181,17 +181,36 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U04", len == 1 && text[0] == 'A',
 		   "decode *A* read in reverse");
 
-	/* S3-U05: 20 reads of each command with +-25 % width noise */
+	/* S3-U25 (1 Nov): every letter A..Z decodes in BOTH directions to
+	   the same letter, and the direction is reported */
 	ok = 0;
-	for (i = 0; i < 20 * s3_bc_table_len; i++) {
+	for (i = 0; i < 26; i++) {
+		char	src[8] = "*?*";
+		BOOL	rv1, rv2;
+		INT	k, l1, l2;
+
+		src[1] = (char)('A' + i);
+		n = make_widths(src, T_NARROW, T_WIDE, 0, w);
+		for (k = 0; k < n; k++) r[k] = w[n - 1 - k];
+		l1 = s3_code39_decode_rev(w, n, text, sizeof(text), &rv1);
+		if (l1 == 1 && text[0] == src[1] && !rv1) ok++;
+		l2 = s3_code39_decode_rev(r, n, text, sizeof(text), &rv2);
+		if (l2 == 1 && text[0] == src[1] && rv2) ok++;
+	}
+	TEST_CHECK("S3-U25", ok == 52,
+		   "A-Z decode the same both ways, direction flagged");
+
+	/* S3-U05: 20 reads of every letter A..Z with +-25 % width noise */
+	ok = 0;
+	for (i = 0; i < 20 * 26; i++) {
 		char src[8] = "*?*";
-		src[1] = s3_bc_table[i % s3_bc_table_len].text[0];
+		src[1] = (char)('A' + i % 26);
 		n = make_widths(src, T_NARROW, T_WIDE, 25, w);
 		len = decode_text(w, n, text);
 		if (len == 1 && text[0] == src[1]) ok++;
 	}
-	TEST_CHECK("S3-U05", ok == 20 * s3_bc_table_len,
-		   "every command decodes 20/20 with +-25% width noise (NFR24)");
+	TEST_CHECK("S3-U05", ok == 20 * 26,
+		   "every letter A-Z decodes 20/20 with +-25% width noise (NFR24)");
 
 	/* S3-U06: a damaged barcode (one wide bar printed narrow) fails */
 	n = make_widths("*B*", T_NARROW, T_WIDE, 0, w);
@@ -200,16 +219,16 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U06", decode_text(w, n, text) < 0,
 		   "damaged barcode is rejected");
 
-	/* S3-U07: a valid Code 39 barcode not in the table -> BARCODE_ERR,
-	   and the decoder is ready for the next one (FR31) */
+	/* S3-U07: a valid Code 39 barcode that is not a letter (1 Nov: a
+	   digit) -> BARCODE_ERR, and the decoder is ready for the next (FR31) */
 	feed_init(&f);
 	feed_level(&f, T_WHITE, S3_MS(50));
-	n = make_widths("*Q*", T_NARROW, T_WIDE, 0, w);
+	n = make_widths("*5*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, n, 300);
 	TEST_CHECK("S3-U07", f.err == 1 && f.nav == 0 &&
 		   f.last.err == S3_BCERR_UNKNOWN &&
 		   f.bc.state == S3_BC_WAIT_FOR_BAR,
-		   "unknown barcode -> BARCODE_ERR, back to WAIT_FOR_BAR");
+		   "non-letter barcode -> BARCODE_ERR, back to WAIT_FOR_BAR");
 
 	/* S3-U08: ADC trace of "*F*" -> NAV_CMD; a second barcode
 	   within the 0.5 s cool-down is ignored (NFR23) */
@@ -217,7 +236,7 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	feed_level(&f, T_WHITE, S3_MS(50));
 	n = make_widths("*F*", T_NARROW, T_WIDE, 10, w);
 	feed_elements(&f, w, n, 100);
-	ok = (f.nav == 1 && f.last.cmd == NAV_STRAIGHT && f.last.ch == 'F');
+	ok = (f.nav == 1 && f.last.cmd == NAV_NONE && f.last.ch == 'F');
 	n = make_widths("*A*", S3_MS(4), S3_MS(10), 0, w);	/* ~170 ms: all inside it */
 	feed_elements(&f, w, n, 50);
 	TEST_CHECK("S3-U08", ok && f.nav == 1 && f.err == 0 && f.discard == 0,
@@ -267,17 +286,20 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	s3_bc_det_init(&f.det, T_WHITE);
 	ok = 0;
 	/* 29 Oct: levels follow S3_BC_DELTA_ON/OFF and S3_BC_WHITE_BAND */
-#define T_MID	((S3_BC_DELTA_ON + S3_BC_DELTA_OFF) / 2)
+/* 1 Nov: before any bar the levels come from S3_BC_AMP_INIT */
+#define T_ON0	(S3_BC_AMP_INIT * S3_BC_ON_PCT / 100)
+#define T_OFF0	(S3_BC_AMP_INIT * S3_BC_OFF_PCT / 100)
+#define T_MID	((T_ON0 + T_OFF0) / 2)
 	for (i = 0; i < 100; i++) {	/* between thr_off/on */
 		ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
 	}
-	ok += (s3_bc_detect(&f.det, T_WHITE + S3_BC_DELTA_ON + 100) != S3_EDGE_TO_BLACK);
+	ok += (s3_bc_detect(&f.det, T_WHITE + T_ON0 + 100) != S3_EDGE_TO_BLACK);
 	ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
-	ok += (s3_bc_detect(&f.det, T_WHITE + S3_BC_DELTA_OFF - 100) != S3_EDGE_TO_WHITE);
+	ok += (s3_bc_detect(&f.det, T_WHITE + T_OFF0 - 100) != S3_EDGE_TO_WHITE);
 	for (i = 0; i < S3_MS(10000); i++) {	/* surface gets 200 darker */
 		s3_bc_detect(&f.det, T_WHITE + 200);
 	}
-	ok += (s3_bc_detect(&f.det, T_WHITE + S3_BC_DELTA_ON + 100) != S3_EDGE_NONE);
+	ok += (s3_bc_detect(&f.det, T_WHITE + T_ON0 + 100) != S3_EDGE_NONE);
 	ok += (s3_bc_detect(&f.det, T_BLACK) != S3_EDGE_TO_BLACK);
 	TEST_CHECK("S3-U17", ok == 0,
 		   "edge detector: hysteresis, white baseline follows light");

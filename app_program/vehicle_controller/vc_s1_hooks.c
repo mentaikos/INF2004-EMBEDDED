@@ -30,3 +30,12 @@ EXPORT BOOL s1_out_stop(void)
 	tm_printf((UB*)"S1 -> VC: STOP\n");
 	return (vc_post(EVT_STOP, 0) == E_OK) ? TRUE : FALSE;
 }
+
+/* 1 Nov: MQTT MAP -> barcode letter mapping (any state; a new MAP
+   replaces the old one).  Never blocks: one word store. */
+EXPORT BOOL s1_out_map(const char letters[4])
+{
+	tm_printf((UB*)"S1 -> VC: MAP\n");
+	vc_set_map(letters);
+	return TRUE;
+}

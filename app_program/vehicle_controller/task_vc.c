@@ -52,7 +52,37 @@ LOCAL struct {
 	UB	faults;		/* SENSOR_FAULT bits of the last fault */
 	UH	t_state;	/* ms when the current state / phase began */
 	UH	t_junction;	/* ms of the last junction acted on */
+	char	bc_letter;	/* 1 Nov: last barcode letter, 0 = none */
 } vc;
+
+/* 1 Nov: barcode letter for each movement, one byte per NAV_xxx
+   ([7:0] LEFT, [15:8] RIGHT, [23:16] STRAIGHT, [31:24] U-TURN), 0 = not
+   set.  Written by Buddy 1's Command Handler (MQTT MAP), read by this
+   task: one aligned 32-bit word, so a reader never sees half a map. */
+LOCAL volatile UW	vc_map_word;
+
+EXPORT void vc_set_map(const char letters[4])
+{
+	/* letters[] order: forward, U-turn, left, right (S1_MAP_xxx) */
+	vc_map_word = ((UW)(UB)letters[2] << (8 * NAV_LEFT)) |
+		      ((UW)(UB)letters[3] << (8 * NAV_RIGHT)) |
+		      ((UW)(UB)letters[0] << (8 * NAV_STRAIGHT)) |
+		      ((UW)(UB)letters[1] << (8 * NAV_U_TURN));
+	tm_printf((UB*)"vc: barcode map: forward=%c U-turn=%c left=%c right=%c\n",
+		  letters[0], letters[1], letters[2], letters[3]);
+}
+
+EXPORT UINT vc_map_nav(char letter)
+{
+	UW	m = vc_map_word;
+	UINT	nav;
+
+	if (letter == 0) return NAV_NONE;
+	for (nav = NAV_LEFT; nav <= NAV_U_TURN; nav++) {
+		if ((char)((m >> (8 * nav)) & 0xFFu) == letter) return nav;
+	}
+	return NAV_NONE;
+}
 
 /* MOVE(d)/TURN script: one command at a time, next on MOTION_DONE */
 LOCAL UW	script[VC_SCRIPT_MAX];
@@ -507,6 +537,7 @@ LOCAL void do_start(void)
 	vc.nav_valid = 0;		/* 29 Oct: a barcode from the last run
 					   must not turn at this run's first
 					   junction */
+	vc.bc_letter = 0;
 	set_state(VC_ST_STARTING);
 }
 
@@ -638,15 +669,37 @@ LOCAL void on_junction(void)
 		enter_complete();
 		return;
 	}
+	/* 1 Nov: the stored letter is looked up NOW, in the mapping that
+	   came by MQTT, so a MAP sent after the barcode still applies */
+	if (vc.bc_letter != 0) {
+		UINT	nav = vc_map_nav(vc.bc_letter);
+
+		if (nav == NAV_NONE) {
+			tm_printf((UB*)"vc: JUNCTION %d, barcode '%c' has no movement"
+				  " (no MQTT MAP for it): straight on\n",
+				  vc.junctions, vc.bc_letter);
+			vc.bc_letter = 0;
+			vc.nav_valid = 0;
+			return;
+		}
+		vc.nav = (UB)nav;
+		vc.nav_valid = 1;
+	}
 	if (!vc.nav_valid) {			/* no barcode: straight on */
 		tm_printf((UB*)"vc: JUNCTION %d, no barcode: straight on\n",
 			  vc.junctions);
 		return;
 	}
-	tm_printf((UB*)"vc: JUNCTION %d, doing barcode %s\n", vc.junctions,
-		  nav_name(vc.nav));
+	if (vc.bc_letter != 0) {
+		tm_printf((UB*)"vc: JUNCTION %d, barcode '%c' -> %s\n",
+			  vc.junctions, vc.bc_letter, nav_name(vc.nav));
+	} else {
+		tm_printf((UB*)"vc: JUNCTION %d, doing barcode %s\n", vc.junctions,
+			  nav_name(vc.nav));
+	}
 	n = vc_nav_script(vc.nav, c);
 	vc.nav_valid = 0;
+	vc.bc_letter = 0;			/* done: wait for the next barcode */
 	if (n > 0) {
 		set_state(VC_ST_EXECUTE_NAV_CMD);
 		script_run(c, n);
@@ -777,10 +830,29 @@ LOCAL void handle_event(UW w)
 	case EVT_HUMP_END:			/* peak for the COMPLETE report */
 		if ((pl & 0x1Fu) > vc.peak_hump) vc.peak_hump = (UB)(pl & 0x1Fu);
 		break;
+	case EVT_BARCODE:			/* 1 Nov: letter, before its junction */
+		if (run) {
+			UINT	nav;
+
+			vc.bc_letter = (char)(pl & 0xFFu);
+			nav = vc_map_nav(vc.bc_letter);
+			vc.nav_valid = (nav != NAV_NONE);
+			if (nav != NAV_NONE) vc.nav = (UB)nav;
+			if (nav != NAV_NONE) {
+				tm_printf((UB*)"vc: barcode '%c' stored: %s at the next"
+					  " junction\n", vc.bc_letter, nav_name(nav));
+			} else {
+				tm_printf((UB*)"vc: barcode '%c' stored (no movement mapped"
+					  " to it yet: send the MQTT MAP)\n",
+					  vc.bc_letter);
+			}
+		}
+		break;
 	case EVT_NAV_CMD:			/* barcode before its junction (A7) */
 		if (run) {
 			vc.nav = (UB)(pl & NAV_MASK);
 			vc.nav_valid = 1;
+			vc.bc_letter = 0;
 			tm_printf((UB*)"vc: barcode %s stored for the next junction\n",
 				  nav_name(vc.nav));
 		}
@@ -1133,6 +1205,11 @@ EXPORT void vc_task(INT stacd, void *exinf)
 	(void)stacd; (void)exinf;
 
 	vc.state = VC_ST_INIT;
+	if (sizeof(VC_BENCH_MAP) == 5) {	/* 4 letters: no-WiFi bench build */
+		vc_set_map(VC_BENCH_MAP);
+		tm_printf((UB*)"vc: (bench map from VC_BENCH_MAP; an MQTT MAP"
+			  " replaces it)\n");
+	}
 	vc.t_state = vc.t_junction = now_ms();
 	line_side = 1;
 	publish();

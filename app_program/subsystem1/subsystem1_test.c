@@ -102,6 +102,32 @@ EXPORT void subsystem1_test(void)
 	       buf[0] == 0xD8 && buf[1] == 0xA0);	/* 11 01 1 000101 00000 */
 	TEST_CHECK("S1-U06", ok, "heartbeat 5 bytes, ack 2 bytes");
 
+	/* S1-U07 (1 Nov): MAP command, 4 bytes, letters for forward,
+	   U-turn, left, right; round trip, and bad maps are INVALID */
+	{
+		uint8_t	m[S1_MAP_LEN];
+		char	l[S1_MAP_COUNT];
+		static const char good[S1_MAP_COUNT] = { 'A', 'F', 'Z', 'W' };
+		static const char dup[S1_MAP_COUNT]  = { 'A', 'F', 'A', 'W' };
+
+		ok  = (s1_encode_map(m, 9, good) == 4);
+		ok &= (s1_decode_map(m, 4, &id, l) == S1_CMD_MAP && id == 9 &&
+		       l[0] == 'A' && l[1] == 'F' && l[2] == 'Z' && l[3] == 'W');
+		/* 10 01 11 001001 00000 00101 11001 10110 = 9C 90 17 36 */
+		ok &= (m[0] == 0x9C && m[1] == 0x90 && m[2] == 0x17 && m[3] == 0x36);
+		ok &= (s1_decode_map(m, 3, &id, l) == S1_CMD_INVALID);	/* length */
+		ok &= (s1_decode_command(m, 4, &id) == S1_CMD_INVALID);	/* not a 2-byte command */
+		s1_encode_map(m, 9, dup);
+		ok &= (s1_decode_map(m, 4, &id, l) == S1_CMD_INVALID);	/* A twice */
+		s1_encode_map(m, 9, good);
+		m[3] |= 0x1F;						/* right = 31 */
+		ok &= (s1_decode_map(m, 4, &id, l) == S1_CMD_INVALID);
+		make_cmd(m, S1_TYPE_COMMAND, S1_VERSION, 0, 9);		/* START code */
+		m[2] = m[3] = 0;
+		ok &= (s1_decode_map(m, 4, &id, l) == S1_CMD_INVALID);
+		TEST_CHECK("S1-U07", ok, "MAP command 4 B: round trip, bad letters INVALID");
+	}
+
 	TEST_SUMMARY("subsystem1");
 }
 

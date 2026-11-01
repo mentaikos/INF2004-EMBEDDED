@@ -86,6 +86,7 @@ IMPORT void subsystem5_test(void);
 #define EVT_STOP			12	/*                         (S1) */
 #define EVT_MOTION_DONE			13	/* finished command        (S2) */
 #define EVT_MISSION_END			14	/* finish trigger (A9)     (VC) */
+#define EVT_BARCODE			15	/* letter 'A'..'Z' [7:0], read right->left [8] (S3, 1 Nov) */
 
 #define EVT_TYPE_MASK		0xFu
 #define EVT_PAYLOAD_SHIFT	4

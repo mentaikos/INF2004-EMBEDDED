@@ -46,7 +46,7 @@ LOCAL UH		bc_overflows_seen;
 
 /* State kept between cycles that is not in lt or bc (task only) */
 LOCAL struct {
-	UB	last_nav : 2;	/* NAV_xxx of the last valid barcode */
+	UB	last_nav : 2;	/* NAV_xxx; 1 Nov: always 0, the VC maps letters */
 	UB	nav_valid : 1;
 	UB	calibrated : 1;
 	UB	overflow : 1;	/* bc_ring overflowed (sticky) */
@@ -248,6 +248,9 @@ LOCAL void print_widths(const S3_BC_RESULT *res)
 		tm_printf((UB*)" %d", bc.elem[i] * 10 / S3_TICKS_PER_MS);
 	}
 	tm_printf((UB*)"\n");
+	/* 1 Nov: the black switch level it learnt (the white one is ~3/4) */
+	tm_printf((UB*)"s3:   black above %d (floor white %d)\n",
+		  drv_ir_threshold(), drv_ir_white());
 }
 #endif
 
@@ -255,12 +258,13 @@ LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 {
 	switch (ev) {
 	case S3_BEV_NAV_CMD:
+		/* 1 Nov: a letter A..Z, read either way round.  The VC stores
+		   it and maps it to a movement (mapping sent by MQTT). */
 		dg.barcodes_ok++;
-		s3.last_nav  = res->cmd;
 		s3.nav_valid = 1;
-		send_vc(EVT_NAV_CMD, res->cmd);
-		tm_printf((UB*)"s3: barcode '%c' -> NAV_CMD %d\n",
-			  res->ch, res->cmd);
+		send_vc(EVT_BARCODE, (UW)(UB)res->ch | ((UW)res->rev << 8));
+		tm_printf((UB*)"s3: BARCODE READ: '%c' (scanned %s)\n", res->ch,
+			  res->rev ? "right->left" : "left->right");
 #if S3_DEBUG_BARCODE
 		print_widths(res);
 #endif
@@ -273,7 +277,7 @@ LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 			  res->err, res->elements);
 #if S3_DEBUG_BARCODE
 		tm_printf((UB*)"s3:   (err 1 = not Code 39, 2 = no '*' start/stop,"
-			  " 3 = valid but not A, F or Z)\n");
+			  " 3 = valid Code 39 but not one letter A-Z)\n");
 		print_widths(res);
 #endif
 		break;
@@ -338,13 +342,13 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 		INT		k;
 
 		if (!armed) {
-			drv_ir_cap_arm((UH)(drv_ir_threshold() - S3_BC_DELTA_ON +
-					      S3_CAP_TRIGGER));
+			drv_ir_cap_arm((UH)(drv_ir_white() + S3_CAP_TRIGGER));
 			armed = 1;
 			tm_printf((UB*)"s3: capture armed: pass the barcode sensor over"
 				  " the barcode (white=%d, on=%d, off=%d)\n",
-				  drv_ir_threshold() - S3_BC_DELTA_ON, drv_ir_threshold(),
-				  drv_ir_threshold() - S3_BC_DELTA_ON + S3_BC_DELTA_OFF);
+				  drv_ir_white(), drv_ir_threshold(),
+				  drv_ir_white() + (drv_ir_threshold() - drv_ir_white()) *
+				  S3_BC_OFF_PCT / S3_BC_ON_PCT);
 		} else if (drv_ir_cap_ready()) {
 			cb = drv_ir_cap_buf();
 			tm_printf((UB*)"s3: cap begin %d values, %d ms apart\n",
@@ -369,7 +373,7 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 	{
 		static UB	lvl_cyc;
 		INT		thr  = drv_ir_threshold();
-		INT		white = thr - S3_BC_DELTA_ON;
+		INT		white = drv_ir_white();
 		INT		k, len;
 
 		if ((INT)raw > white + 150 || ++lvl_cyc >= 500 / S3_PERIOD_MS) {
