@@ -8,7 +8,7 @@
  *	line tracker, the edge detector and the barcode decoder, so they
  *	need no track.  They use their own S3_LINE / S3_BC_DET / S3_BC,
  *	never the running task's.  S3-U15 checks the running task and the
- *	1 ms ISR; INT-03 the steering link to Motion Control (S2).
+ *	sampling ISR; INT-03 the steering link to Motion Control (S2).
  *	S3-U19..S3-U20 check the packed status word and the MQTT slot.  (S3-U14, the S3 MQTT frame, was dropped: Buddy 1 owns
  *	the telemetry payload.)
  */
@@ -20,8 +20,8 @@
 
 #define T_WHITE		300	/* made-up ADC levels */
 #define T_BLACK		3000
-#define T_NARROW	12	/* ms per narrow element at test speed */
-#define T_WIDE		30
+#define T_NARROW	S3_MS(12)	/* ticks per narrow element at test speed */
+#define T_WIDE		S3_MS(30)
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -48,8 +48,8 @@ LOCAL UH pattern_of(char c)
 
 /* Element widths for text (incl. the '*'s).  jitter_pct: each width
    varies by up to +-jitter_pct %.  Returns the element count. */
-LOCAL INT make_widths(const char *text, UB narrow, UB wide, INT jitter_pct,
-		      UB *w)
+LOCAL INT make_widths(const char *text, UH narrow, UH wide, INT jitter_pct,
+		      UH *w)
 {
 	INT	n = 0, i;
 	UH	p;
@@ -64,20 +64,20 @@ LOCAL INT make_widths(const char *text, UB narrow, UB wide, INT jitter_pct,
 	}
 	for (i = 0; i < n && jitter_pct > 0; i++) {
 		base = w[i];
-		w[i] = (UB)(base - base * jitter_pct / 100
+		w[i] = (UH)(base - base * jitter_pct / 100
 			    + base * rnd(2 * jitter_pct + 1) / 100);
 	}
 	return n;
 }
 
 /* A made-up ADC trace, fed the way the system does it: the edge
-   detector sees every 1 ms sample (as the ISR does) and the decoder gets
+   detector sees every sample (as the ISR does) and the decoder gets
    each edge, plus a poll every S3_PERIOD_MS (as the task does).
    Counts the results. */
 typedef struct {
 	S3_BC_DET	det;
 	S3_BC		bc;
-	UW		t;		/* ms */
+	UW		t;		/* ticks */
 	INT		nav, err, discard;
 	S3_BC_RESULT	last;
 } FEED;
@@ -100,33 +100,33 @@ LOCAL void feed_init(FEED *f)
 	f->nav = f->err = f->discard = 0;
 }
 
-LOCAL void feed_level(FEED *f, UH level, UW ms)
+LOCAL void feed_level(FEED *f, UH level, UW ticks)
 {
 	S3_BC_RESULT	res;
 	INT		edge;
 
-	while (ms-- > 0) {
+	while (ticks-- > 0) {
 		f->t++;
 		edge = s3_bc_detect(&f->det, level);
 		if (edge != S3_EDGE_NONE) {
 			count(f, s3_bc_edge(&f->bc, edge == S3_EDGE_TO_BLACK,
 					    (UH)f->t, &res), &res);
 		}
-		if (f->t % S3_PERIOD_MS == 0) {
+		if (f->t % S3_MS(S3_PERIOD_MS) == 0) {
 			count(f, s3_bc_poll(&f->bc, (UH)f->t, &res), &res);
 		}
 	}
 }
 
 /* Elements (first one black), then quiet white for quiet_ms */
-LOCAL void feed_elements(FEED *f, const UB *w, INT n, UW quiet_ms)
+LOCAL void feed_elements(FEED *f, const UH *w, INT n, UW quiet_ms)
 {
 	INT i;
 
 	for (i = 0; i < n; i++) {
 		feed_level(f, (i % 2 == 0) ? T_BLACK : T_WHITE, w[i]);
 	}
-	feed_level(f, T_WHITE, quiet_ms);
+	feed_level(f, T_WHITE, S3_MS(quiet_ms));
 }
 
 /* ------------------------------------------------------------------ */
@@ -149,14 +149,14 @@ LOCAL BOOL table_is_code39(void)
 	return s3_code39_len == 44;
 }
 
-LOCAL INT decode_text(const UB *w, INT n, char *text)
+LOCAL INT decode_text(const UH *w, INT n, char *text)
 {
 	return s3_code39_decode(w, n, text, 8);
 }
 
 LOCAL void test_barcode(INT *pass, INT *fail)
 {
-	UB	w[S3_BC_MAX_ELEMS], r[S3_BC_MAX_ELEMS];
+	UH	w[S3_BC_MAX_ELEMS], r[S3_BC_MAX_ELEMS];
 	char	text[8];
 	INT	n, i, len, ok;
 	FEED	f;
@@ -167,12 +167,13 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U02", table_is_code39(),
 		   "Code 39 table: 44 unique patterns, 3 wide each");
 
-	/* S3-U03: clean "*A*" decodes to LEFT */
+	/* S3-U03: clean "*A*" decodes to the letter A (1 Nov: no table; the
+	   VC maps letters to movements with the MQTT mapping) */
 	n = make_widths("*A*", T_NARROW, T_WIDE, 0, w);
 	len = decode_text(w, n, text);
 	TEST_CHECK("S3-U03", n == 29 && len == 1 && text[0] == 'A' &&
-		   s3_bc_lookup(text) == NAV_LEFT,
-		   "decode *A* -> LEFT (FR29)");
+		   s3_bc_is_letter(text),
+		   "decode *A* -> letter A (FR29)");
 
 	/* S3-U04: the same barcode read backwards (after a U-turn) */
 	for (i = 0; i < n; i++) r[i] = w[n - 1 - i];
@@ -180,17 +181,36 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U04", len == 1 && text[0] == 'A',
 		   "decode *A* read in reverse");
 
-	/* S3-U05: 20 reads of each command with +-25 % width noise */
+	/* S3-U25 (1 Nov): every letter A..Z decodes in BOTH directions to
+	   the same letter, and the direction is reported */
 	ok = 0;
-	for (i = 0; i < 20 * s3_bc_table_len; i++) {
+	for (i = 0; i < 26; i++) {
+		char	src[8] = "*?*";
+		BOOL	rv1, rv2;
+		INT	k, l1, l2;
+
+		src[1] = (char)('A' + i);
+		n = make_widths(src, T_NARROW, T_WIDE, 0, w);
+		for (k = 0; k < n; k++) r[k] = w[n - 1 - k];
+		l1 = s3_code39_decode_rev(w, n, text, sizeof(text), &rv1);
+		if (l1 == 1 && text[0] == src[1] && !rv1) ok++;
+		l2 = s3_code39_decode_rev(r, n, text, sizeof(text), &rv2);
+		if (l2 == 1 && text[0] == src[1] && rv2) ok++;
+	}
+	TEST_CHECK("S3-U25", ok == 52,
+		   "A-Z decode the same both ways, direction flagged");
+
+	/* S3-U05: 20 reads of every letter A..Z with +-25 % width noise */
+	ok = 0;
+	for (i = 0; i < 20 * 26; i++) {
 		char src[8] = "*?*";
-		src[1] = s3_bc_table[i % s3_bc_table_len].text[0];
+		src[1] = (char)('A' + i % 26);
 		n = make_widths(src, T_NARROW, T_WIDE, 25, w);
 		len = decode_text(w, n, text);
 		if (len == 1 && text[0] == src[1]) ok++;
 	}
-	TEST_CHECK("S3-U05", ok == 20 * s3_bc_table_len,
-		   "every command decodes 20/20 with +-25% width noise (NFR24)");
+	TEST_CHECK("S3-U05", ok == 20 * 26,
+		   "every letter A-Z decodes 20/20 with +-25% width noise (NFR24)");
 
 	/* S3-U06: a damaged barcode (one wide bar printed narrow) fails */
 	n = make_widths("*B*", T_NARROW, T_WIDE, 0, w);
@@ -199,64 +219,65 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U06", decode_text(w, n, text) < 0,
 		   "damaged barcode is rejected");
 
-	/* S3-U07: a valid Code 39 barcode not in the table -> BARCODE_ERR,
-	   and the decoder is ready for the next one (FR31) */
+	/* S3-U07: a valid Code 39 barcode that is not a letter (1 Nov: a
+	   digit) -> BARCODE_ERR, and the decoder is ready for the next (FR31) */
 	feed_init(&f);
-	feed_level(&f, T_WHITE, 50);
-	n = make_widths("*Q*", T_NARROW, T_WIDE, 0, w);
+	feed_level(&f, T_WHITE, S3_MS(50));
+	n = make_widths("*5*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, n, 300);
 	TEST_CHECK("S3-U07", f.err == 1 && f.nav == 0 &&
 		   f.last.err == S3_BCERR_UNKNOWN &&
 		   f.bc.state == S3_BC_WAIT_FOR_BAR,
-		   "unknown barcode -> BARCODE_ERR, back to WAIT_FOR_BAR");
+		   "non-letter barcode -> BARCODE_ERR, back to WAIT_FOR_BAR");
 
-	/* S3-U08: ADC trace of "*D*" -> NAV_CMD U-TURN; a second barcode
+	/* S3-U08: ADC trace of "*F*" -> NAV_CMD; a second barcode
 	   within the 0.5 s cool-down is ignored (NFR23) */
 	feed_init(&f);
-	feed_level(&f, T_WHITE, 50);
-	n = make_widths("*D*", T_NARROW, T_WIDE, 10, w);
+	feed_level(&f, T_WHITE, S3_MS(50));
+	n = make_widths("*F*", T_NARROW, T_WIDE, 10, w);
 	feed_elements(&f, w, n, 100);
-	ok = (f.nav == 1 && f.last.cmd == NAV_U_TURN && f.last.ch == 'D');
-	n = make_widths("*A*", 4, 10, 0, w);	/* ~170 ms: all inside it */
+	ok = (f.nav == 1 && f.last.cmd == NAV_NONE && f.last.ch == 'F');
+	n = make_widths("*A*", S3_MS(4), S3_MS(10), 0, w);	/* ~170 ms: all inside it */
 	feed_elements(&f, w, n, 50);
 	TEST_CHECK("S3-U08", ok && f.nav == 1 && f.err == 0 && f.discard == 0,
-		   "trace *D* -> U_TURN, repeat within 0.5 s ignored");
+		   "trace *F* -> NAV_CMD, repeat within 0.5 s ignored");
 
 	/* S3-U09: after the cool-down the next barcode is read again */
-	feed_level(&f, T_WHITE, S3_BC_COOLDOWN_MS);
+	feed_level(&f, T_WHITE, S3_MS(S3_BC_COOLDOWN_MS));
 	n = make_widths("*A*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, n, 300);
-	TEST_CHECK("S3-U09", f.nav == 2 && f.last.cmd == NAV_LEFT,
+	TEST_CHECK("S3-U09", f.nav == 2 && f.last.ch == 'A',
 		   "barcode read again after the cool-down");
 
-	/* S3-U10: a read that stops half way is discarded after 200 ms of
-	   no edges, without a BARCODE_ERR (NFR22) */
+	/* S3-U10: a read that stops half way is discarded without a
+	   BARCODE_ERR; 30 Oct: only once S3_BC_READ_MAX_MS has passed
+	   since its first bar, not after 200 ms of no edges */
 	feed_init(&f);
-	feed_level(&f, T_WHITE, 50);
+	feed_level(&f, T_WHITE, S3_MS(50));
 	n = make_widths("*C*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, 14, 0);		/* first 14 elements only */
-	feed_level(&f, T_WHITE, S3_BC_EDGE_TIMEOUT_MS - 50);
+	feed_level(&f, T_WHITE, S3_MS(S3_BC_EDGE_TIMEOUT_MS + 300));
 	ok = (f.discard == 0);			/* not yet */
-	feed_level(&f, T_WHITE, 100);
+	feed_level(&f, T_WHITE, S3_MS(S3_BC_READ_MAX_MS));
 	TEST_CHECK("S3-U10", ok && f.discard == 1 && f.err == 0 && f.nav == 0,
-		   "partial read discarded after 200 ms (NFR22)");
+		   "partial read discarded at the read time limit");
 
 	/* S3-U16: bc_ring overflow half way through a barcode: it is
 	   discarded with no NAV_CMD, the rest of it is not read as a new
 	   barcode, and the next barcode is read normally (8.3) */
 	feed_init(&f);
-	feed_level(&f, T_WHITE, 50);
-	n = make_widths("*B*", T_NARROW, T_WIDE, 0, w);
+	feed_level(&f, T_WHITE, S3_MS(50));
+	n = make_widths("*Z*", T_NARROW, T_WIDE, 0, w);
 	feed_elements(&f, w, 12, 0);
 	count(&f, s3_bc_abort(&f.bc, f.t, &res), &res);
 	ok = (f.discard == 1);
 	for (i = 12; i < n; i++) {
 		feed_level(&f, (i % 2 == 0) ? T_BLACK : T_WHITE, w[i]);
 	}
-	feed_level(&f, T_WHITE, 300);
+	feed_level(&f, T_WHITE, S3_MS(300));
 	ok = ok && f.nav == 0 && f.err == 0 && f.discard == 1;
 	feed_elements(&f, w, n, 300);
-	TEST_CHECK("S3-U16", ok && f.nav == 1 && f.last.cmd == NAV_RIGHT,
+	TEST_CHECK("S3-U16", ok && f.nav == 1 && f.last.ch == 'Z',
 		   "bc_ring overflow discards that barcode only (8.3)");
 
 	/* S3-U17: edge detector: hysteresis ignores noise around the
@@ -264,19 +285,46 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	   so bars are still seen */
 	s3_bc_det_init(&f.det, T_WHITE);
 	ok = 0;
-	for (i = 0; i < 100; i++) {	/* white + 600: between thr_off/on */
-		ok += (s3_bc_detect(&f.det, T_WHITE + 600) != S3_EDGE_NONE);
+	/* 29 Oct: levels follow S3_BC_DELTA_ON/OFF and S3_BC_WHITE_BAND */
+/* 1 Nov: before any bar the levels come from S3_BC_AMP_INIT */
+#define T_ON0	(S3_BC_AMP_INIT * S3_BC_ON_PCT / 100)
+#define T_OFF0	(S3_BC_AMP_INIT * S3_BC_OFF_PCT / 100)
+#define T_MID	((T_ON0 + T_OFF0) / 2)
+	for (i = 0; i < 100; i++) {	/* between thr_off/on */
+		ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
 	}
-	ok += (s3_bc_detect(&f.det, T_WHITE + 900) != S3_EDGE_TO_BLACK);
-	ok += (s3_bc_detect(&f.det, T_WHITE + 600) != S3_EDGE_NONE);
-	ok += (s3_bc_detect(&f.det, T_WHITE + 400) != S3_EDGE_TO_WHITE);
-	for (i = 0; i < 2000; i++) {	/* surface gets 400 darker */
-		s3_bc_detect(&f.det, T_WHITE + 400);
+	ok += (s3_bc_detect(&f.det, T_WHITE + T_ON0 + 100) != S3_EDGE_TO_BLACK);
+	ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
+	ok += (s3_bc_detect(&f.det, T_WHITE + T_OFF0 - 100) != S3_EDGE_TO_WHITE);
+	for (i = 0; i < S3_MS(10000); i++) {	/* surface gets 200 darker */
+		s3_bc_detect(&f.det, T_WHITE + 200);
 	}
-	ok += (s3_bc_detect(&f.det, T_WHITE + 900) != S3_EDGE_NONE);
+	ok += (s3_bc_detect(&f.det, T_WHITE + T_ON0 + 100) != S3_EDGE_NONE);
 	ok += (s3_bc_detect(&f.det, T_BLACK) != S3_EDGE_TO_BLACK);
 	TEST_CHECK("S3-U17", ok == 0,
 		   "edge detector: hysteresis, white baseline follows light");
+
+	/* S3-U21: speed range.  Fast: 50 cm/s over 1 mm / 2.5 mm bars
+	   (narrow 2 ms, wide 5 ms) with +-15 % width jitter.  Slow:
+	   narrow 50 ms, wide 150 ms (a whole *F* in ~2.4 s, inside the
+	   3 s read limit; 30 Oct, was 150/300 ms = 5.7 s).  Each 20/20
+	   (NFR24). */
+	ok = 0;
+	for (i = 0; i < 20; i++) {
+		feed_init(&f);
+		feed_level(&f, T_WHITE, S3_MS(50));
+		n = make_widths("*Z*", S3_MS(2), S3_MS(5), 15, w);
+		feed_elements(&f, w, n, 300);
+		ok += (f.nav == 1 && f.last.ch == 'Z');
+
+		feed_init(&f);
+		feed_level(&f, T_WHITE, S3_MS(50));
+		n = make_widths("*F*", S3_MS(50), S3_MS(150), 5, w);
+		feed_elements(&f, w, n, 1500);
+		ok += (f.nav == 1 && f.last.ch == 'F' && f.discard == 0);
+	}
+	TEST_CHECK("S3-U21", ok == 40,
+		   "barcode read fast and slow (2.4 s pass), 20/20 each");
 
 	*pass += test_pass_;
 	*fail += test_fail_;
@@ -292,54 +340,71 @@ LOCAL void test_line(INT *pass, INT *fail)
 	INT	ev1, ev2, ev3, i, lost_at;
 	TEST_INIT();
 
-	/* S3-U11: left only -> DRIFTING and steer left; centre -> ON_LINE,
-	   steering 0 */
+	/* S3-U11: line BETWEEN the sensors.  Line under the left sensor ->
+	   DRIFTING, steer left; under the right (centre) sensor -> steer
+	   right; both white -> ON_LINE, gentle steer towards the last side */
 	s3_line_init(&lt);
-	s3_line_step(&lt, 0, 1, 30);
-	s3_line_step(&lt, 1, 0, 30);
+	s3_line_step(&lt, 1, 0, 20);
 	ev1 = (lt.state == S3_LINE_DRIFTING && lt.steer < 0);
-	s3_line_step(&lt, 0, 1, 30);
-	TEST_CHECK("S3-U11", ev1 && lt.state == S3_LINE_ON_LINE && lt.steer == 0,
-		   "drift left of line -> steer left, back on line -> 0");
+	s3_line_step(&lt, 0, 1, 20);
+	ev2 = (lt.state == S3_LINE_DRIFTING && lt.steer > 0);
+	s3_line_step(&lt, 0, 0, 20);
+	TEST_CHECK("S3-U11", ev1 && ev2 && lt.state == S3_LINE_ON_LINE &&
+		   lt.steer > 0 && lt.steer < 2 * S3_STEER_KP,
+		   "line between sensors: steer towards the sensor on the line");
 
 	/* S3-U12: both black once is not a junction; twice is, reported
-	   once; it ends when the left sensor leaves the crossing line */
+	   once; both white again -> back ON_LINE */
 	s3_line_init(&lt);
-	ev1 = s3_line_step(&lt, 1, 1, 30);
-	ev2 = s3_line_step(&lt, 1, 1, 30);
-	ev3 = s3_line_step(&lt, 1, 1, 30);
-	s3_line_step(&lt, 0, 1, 30);
+	ev1 = s3_line_step(&lt, 1, 1, 20);
+	ev2 = s3_line_step(&lt, 1, 1, 20);
+	ev3 = s3_line_step(&lt, 1, 1, 20);
+	s3_line_step(&lt, 0, 0, 20);
 	TEST_CHECK("S3-U12", ev1 == S3_LEV_NONE && ev2 == S3_LEV_JUNCTION &&
 		   ev3 == S3_LEV_NONE && lt.state == S3_LINE_ON_LINE,
 		   "JUNCTION after 2 samples, reported once");
 
-	/* S3-U13: both white for 150 ms is a gap, for more is LINE_LOST
-	   (NFR21); centre black again -> LINE_FOUND */
+	/* S3-U13: both white is normal for 500 ms; LINE_LOST only after
+	   more than S3_LINE_LOST_MS; either sensor black -> LINE_FOUND */
 	s3_line_init(&lt);
-	s3_line_step(&lt, 0, 1, 30);
+	s3_line_step(&lt, 1, 0, 20);
 	lost_at = -1;
-	for (i = 1; i <= 8 && lost_at < 0; i++) {
-		if (s3_line_step(&lt, 0, 0, 30) == S3_LEV_LINE_LOST) lost_at = i * 30;
+	for (i = 1; i <= S3_LINE_LOST_MS / 20 + 5 && lost_at < 0; i++) {
+		if (s3_line_step(&lt, 0, 0, 20) == S3_LEV_LINE_LOST) lost_at = i * 20;
 	}
-	ev1 = s3_line_step(&lt, 0, 1, 30);
-	TEST_CHECK("S3-U13", lost_at == 180 && ev1 == S3_LEV_LINE_FOUND &&
-		   lt.state == S3_LINE_ON_LINE,
-		   "LINE_LOST only after > 150 ms white, then LINE_FOUND");
+	ev1 = s3_line_step(&lt, 0, 1, 20);
+	TEST_CHECK("S3-U13", lost_at == (S3_LINE_LOST_MS / 20 + 1) * 20 &&
+		   ev1 == S3_LEV_LINE_FOUND && lt.state == S3_LINE_DRIFTING,
+		   "LINE_LOST only after > S3_LINE_LOST_MS white, then LINE_FOUND");
 
-	/* S3-U18: right-curve mitigation: both white straight from ON_LINE
-	   -> gap, limited right steer, still ON_LINE; after a left drift
-	   -> steer left (8.3) */
-	s3_line_init(&lt);
-	s3_line_step(&lt, 0, 1, 20);
-	s3_line_step(&lt, 0, 0, 20);
-	s3_line_step(&lt, 0, 0, 20);
-	ev1 = (lt.gap && lt.state == S3_LINE_ON_LINE && lt.steer > 0 &&
-	       lt.steer < 2 * S3_STEER_KP);
+	/* S3-U18: after the left sensor touched the line, both white drifts
+	   gently LEFT (smaller than an edge correction); gap only after
+	   150 ms; a lost line keeps steering to that side for the VC */
 	s3_line_init(&lt);
 	s3_line_step(&lt, 1, 0, 20);
 	s3_line_step(&lt, 0, 0, 20);
-	TEST_CHECK("S3-U18", ev1 && lt.gap && lt.steer < 0,
-		   "white from ON_LINE -> gap, limited right steer");
+	s3_line_step(&lt, 0, 0, 20);
+	ev1 = (lt.steer < 0 && lt.steer > -2 * S3_STEER_KP && !lt.gap &&
+	       lt.state == S3_LINE_ON_LINE);
+	for (i = 0; i < 6; i++) s3_line_step(&lt, 0, 0, 20);
+	ev2 = lt.gap;
+	for (i = 0; i < S3_LINE_LOST_MS / 20; i++) s3_line_step(&lt, 0, 0, 20);
+	TEST_CHECK("S3-U18", ev1 && ev2 && lt.state == S3_LINE_LOST &&
+		   lt.steer < 0 && !lt.gap,
+		   "both white: gentle drift to the last side, gap after 150 ms");
+
+	/* S3-U21: a robot that keeps drifting right (left edge touched again
+	   and again) learns a left trim, bounded, and a right-edge touch
+	   moves it back */
+	s3_line_init(&lt);
+	for (i = 0; i < 20; i++) {
+		s3_line_step(&lt, 1, 0, 20);
+		s3_line_step(&lt, 0, 0, 20);
+	}
+	ev1 = (lt.trim == -S3_TRIM_MAX && lt.steer < -S3_STEER_SEEK);
+	s3_line_step(&lt, 0, 1, 20);
+	TEST_CHECK("S3-U21", ev1 && lt.trim == -S3_TRIM_MAX + S3_TRIM_STEP,
+		   "trim learns the robot's pull, bounded, moves back");
 
 	*pass += test_pass_;
 	*fail += test_fail_;
@@ -410,18 +475,18 @@ LOCAL void test_live(INT *pass, INT *fail)
 	S3_DIAG		before, after;
 	TEST_INIT();
 
-	/* S3-U15: the task runs every 20 ms (NFR8) and the ISR every 1 ms
-	   (NFR16) without losing edges (A6) */
+	/* S3-U15: the task runs every 20 ms (NFR8) and the ISR every
+	   S3_SAMPLE_US (NFR16: at least every 1 ms) without losing edges (A6) */
 	s3_get_diag(&before);
 	tk_dly_tsk(1500);
 	s3_get_diag(&after);
 	TEST_CHECK("S3-U15",
 		   (UH)(after.cycles - before.cycles) >= 72 &&
 		   (UH)(after.cycles - before.cycles) <= 78 &&
-		   (UH)(after.samples - before.samples) >= 1450 &&
-		   (UH)(after.samples - before.samples) <= 1550 &&
+		   (UH)(after.samples - before.samples) >= S3_MS(1450) &&
+		   (UH)(after.samples - before.samples) <= S3_MS(1550) &&
 		   after.overflows == 0,
-		   "20 ms task, 1 ms sampling, bc_ring never overflows");
+		   "20 ms task, 0.25 ms sampling, bc_ring never overflows");
 
 	/* INT-03 (S3 -> S2 steering): Motion Control accepts one steering
 	   byte per cycle and drains its mbf_steer, so none is refused */

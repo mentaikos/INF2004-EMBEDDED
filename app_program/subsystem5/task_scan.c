@@ -3,6 +3,7 @@
 #include "drv_ultrasonic.h"
 #include "../subsystem2/subsystem2.h"
 #include "../subsystem4/subsystem4.h"
+#include "../subsystem3/subsystem3.h"
 #include <tk/syslib.h>
 
 EXPORT ID tid_s5_scan;
@@ -119,6 +120,38 @@ LOCAL void inputs(S5_INPUT *in)
 
 LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns);
 
+/* TEMPORARY tuning aid: after every finished scan print what each angle
+   saw and the decision, so a REVERSE / NO_CLEAR can be explained from the
+   log.  Range codes: 0 = under 5 cm, 1 = over 100 cm (clear), 2 = no
+   echo, 3 = not scanned, else cm.  Set S5_DEBUG_SCAN to 0 when done. */
+#ifndef S5_DEBUG_SCAN
+#define S5_DEBUG_SCAN		1	/* 29 Oct: muted for barcodes; 30 Oct: back on for obstacles */
+#endif
+#if S5_DEBUG_SCAN
+LOCAL void print_scan(const S5_SCAN *scan, INT event)
+{
+	static const char *act[] = { "STOP", "CONTINUE", "LEFT", "RIGHT",
+				     "REVERSE", "?", "?", "?" };
+	S5_PROFILE p = scan->profile;
+	UINT i;
+
+	tm_printf((UB*)"s5: scan");
+	for (i = 0; i < S5_ANGLES; i++) {
+		tm_printf((UB*)" %d:%d", s5_angle_deg(i), s5_scan_get(scan->scan, i));
+	}
+	tm_printf((UB*)"\ns5: -> %s %s closest=%dcm width=%dcm x=%d y=%d"
+		  " clearL=%dcm clearR=%dcm (need %dcm) edges %d..%d\n",
+		  act[s5_profile_action(p) & 7u],
+		  event == EVT_OBSTACLE_PROFILE ? "(plan)" : "(NO_CLEAR)",
+		  s5_profile_closest(p), s5_profile_width(p),
+		  s5_profile_x(p), s5_profile_y(p),
+		  s5_profile_left(p), s5_profile_right(p),
+		  (S5_ROBOT_WIDTH_MM + 2 * (S5_CLEARANCE_MARGIN_MM +
+					    S5_RANGE_ERROR_MM)) / 10,
+		  s5_angle_deg((p.w1 >> 14) & 31u), s5_angle_deg((p.w1 >> 19) & 31u));
+}
+#endif
+
 LOCAL void deliver(const S5_OUTPUT *out, const S5_SCAN *scan, UH *drops, UH overruns)
 {
 	UW payload = out->payload, word;
@@ -128,6 +161,10 @@ LOCAL void deliver(const S5_OUTPUT *out, const S5_SCAN *scan, UH *drops, UH over
 	if (out->estop || fault) CHECK(tk_set_flg(flg_safety, S2_FLG_ESTOP), "S5 safety");
 	if (fault && vc_faults > 0) CHECK(tk_set_flg(vc_faults, fault), "S5 fault");
 	if (out->event < 0) return;
+#if S5_DEBUG_SCAN
+	if (out->event == EVT_OBSTACLE_PROFILE || out->event == EVT_NO_CLEAR)
+		print_scan(scan, out->event);
+#endif
 	/* The higher-priority VC can run immediately after tk_snd_mbf.
 	 * Publish first so that its event and profile describe the same scan. */
 	publish(scan, *drops, overruns);
@@ -152,6 +189,65 @@ LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns)
 	published.overruns = overruns;
 	published_ms = scan->plan_ms;         /* original plan time, not refresh time */
 	tk_unl_mtx(mtx_s5_status);
+}
+
+/* Forward watch on curves: the angle index to watch while following.
+   Line & Barcode's steering (+ = right), averaged over ~0.5 s (one call
+   per 60 ms cycle, 1/8 per call, Q4), says which way and how sharply
+   the track bends; look up to S5_WATCH_MAX_DEG that way (obstacle_scan.h).
+   Prints the look angle when it changes, for tuning.  Index 12 is straight ahead and
+   lower indices point right (S5_SERVO_REVERSED handles the mounting). */
+LOCAL W steer_avg_q4;
+LOCAL UB steer_same;			/* cycles steering stayed one way */
+LOCAL B steer_way;			/* -1 left, 0 straight, +1 right */
+
+LOCAL UINT watch_index(BOOL moving)
+{
+	S3_STS_FIELDS f;
+	W avg, deg;
+	INT bins, way;
+	if (!moving) {
+		steer_avg_q4 = 0;
+		steer_same = 0;
+		steer_way = 0;
+		return S5_CENTRE;
+	}
+	s3_sts_unpack(s3_get_status(), &f);
+	steer_avg_q4 += ((W)f.steer * 16 - steer_avg_q4) / 8;
+	avg = steer_avg_q4 / 16;
+	/* 30 Oct: on a straight the line follower weaves, steering one way
+	   then the other every few hundred ms, and the average swung the
+	   sensor left and right.  A bend steers ONE way for a long time:
+	   look into it only after the steering has stayed the same way for
+	   S5_WATCH_HOLD_MS, and come back to centre as soon as it changes. */
+	way = f.steer > S5_WATCH_DEADBAND ? 1 :
+	      f.steer < -S5_WATCH_DEADBAND ? -1 : 0;
+	if (way != 0 && way == steer_way) {
+		if (steer_same < 255) steer_same++;
+	} else {
+		steer_same = (way != 0) ? 1 : 0;
+	}
+	steer_way = (B)way;
+	if ((UINT)steer_same * S5_PERIOD_MS < S5_WATCH_HOLD_MS) avg = 0;
+	if (avg > S5_WATCH_DEADBAND) deg = (avg - S5_WATCH_DEADBAND) * S5_WATCH_GAIN;
+	else if (avg < -S5_WATCH_DEADBAND) deg = (avg + S5_WATCH_DEADBAND) * S5_WATCH_GAIN;
+	else deg = 0;
+	if (deg > S5_WATCH_MAX_DEG) deg = S5_WATCH_MAX_DEG;
+	if (deg < -S5_WATCH_MAX_DEG) deg = -S5_WATCH_MAX_DEG;
+	bins = (INT)(deg * (S5_ANGLES - 1) / (2 * S5_SWEEP_HALF_DEG));
+#if S5_DEBUG_SCAN
+	{
+		static INT last_bins;
+		if (bins != last_bins) {
+			tm_printf((UB*)"s5: watch %s %d deg (steer avg %d)\n",
+				  bins > 0 ? "right" : bins < 0 ? "left" : "ahead",
+				  (bins < 0 ? -bins : bins) * 2 * S5_SWEEP_HALF_DEG /
+				  (S5_ANGLES - 1), (INT)avg);
+			last_bins = bins;
+		}
+	}
+#endif
+	return (UINT)(S5_CENTRE - bins);	/* + steer (right) -> lower index */
 }
 
 EXPORT void s5_scan_task(INT stacd, void *exinf)
@@ -184,6 +280,9 @@ EXPORT void s5_scan_task(INT stacd, void *exinf)
 		inputs(&in);
 		s5_scan_tick(&scan, &in, &out);
 		deliver(&out, &scan, &drops, overruns);
+		/* Following the line: look into the bend (curves) */
+		if (scan.state == S5_ST_FORWARD_WATCH)
+			scan.index = (UB)watch_index(!in.stopped);
 		if (scan.index != pointed) {
 			settle_ms = s5_servo_settle_ms(pointed, scan.index);
 			er = drv_us_point(scan.index);

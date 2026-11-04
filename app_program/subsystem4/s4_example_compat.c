@@ -8,8 +8,7 @@
  *
  *	APIs shown: tk_cre_flg, tk_cre_mbf, tk_cre_alm, tk_sta_alm,
  *	            tk_stp_alm, alarm handler, tk_wai_flg, tk_rcv_mbf,
- *	            tk_ref_sem, tk_ref_mpf, tk_ref_tsk, tk_sus_tsk,
- *	            tk_rsm_tsk, tk_chg_pri
+ *	            tk_ref_sem, tk_ref_mpf
  */
 
 #include "subsystem4.h"
@@ -97,21 +96,7 @@ EXPORT void monitor_task(INT stacd, void *exinf)
 			  now.lo, snap.received, snap.min, snap.max,
 			  snap.received ? (INT)(snap.sum / (W)snap.received) : 0,
 			  rsem.semcnt, (INT)rmpf.frbcnt);
-
-		if (++reports % S4_LED_TOGGLE_REPORTS == 0) {
-			if (led_paused) {
-				tk_rsm_tsk(tid_led);
-				tk_chg_pri(tid_led, S1_PRI_LED);
-			} else {
-				tk_sus_tsk(tid_led);
-				tk_chg_pri(tid_led, S1_PRI_LED + 1);
-			}
-			led_paused = !led_paused;
-
-			tk_ref_tsk(tid_led, &rtsk);
-			tm_printf((UB*)"monitor: LED task %s, state=%s, pri=%d\n",
-				  led_paused ? "paused" : "resumed",
-				  state_name(rtsk.tskstat), rtsk.tskpri);
-		}
+		/* The LED pause/resume (IF-05) went with the template's LED
+		   task, which Buddy 1's code replaced. */
 	}
-}
+}

@@ -82,6 +82,12 @@ IMPORT BOOL	s1_out_start(void);
 IMPORT BOOL	s1_out_stop(void);
 IMPORT void	s1_out_estop(void);
 
+/* 1 Nov: MAP command (barcode letter -> movement, sent before the demo).
+   letters[0..3] = the letters for forward, U-turn, left, right
+   (S1_MAP_xxx order, 'A'..'Z', all different).  The Vehicle Controller
+   overrides it to store the mapping; FALSE -> robot/ack = FAILED. */
+IMPORT BOOL	s1_out_map(const char letters[4]);
+
 /* ---- Used by subsystem1_test.c only ---- */
 IMPORT ID	mbf_s1_tx;	/* outgoing messages -> network task */
 IMPORT ID	mbf_s1_rx;	/* robot/cmd payloads -> Command Handler */

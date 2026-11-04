@@ -21,6 +21,7 @@
 #include "imu_monitor.h"
 #include "drv_lsm303.h"
 #include "../subsystem2/subsystem2.h"	/* g_motion_status, flg_safety */
+#include "../subsystem1/subsystem1.h"	/* s1_tlm_set_slot, S1_SLOT_B4 */
 #include <tk/syslib.h>
 
 EXPORT ID		tid_imu;
@@ -36,6 +37,15 @@ LOCAL S4_DIAG		s4_diag;	/* guarded by mtx_s4_status */
 /* Shock latch: one writer per byte (s4_shock_ack in subsystem4.h) */
 LOCAL volatile UB	shock_seq;	/* IMU task only: shocks seen, wraps */
 LOCAL volatile UB	shock_acked;	/* Telemetry only: last one published */
+LOCAL UW		shock_tlm_until; /* IMU task only: hold in telemetry */
+
+LOCAL UW sys_ms(void)
+{
+	SYSTIM	tim;
+
+	tk_get_tim(&tim);
+	return tim.lo;
+}
 
 /* Bound by s4_bind_vc() before the tasks start; 0 = not yet */
 LOCAL volatile ID	vc_mbf;
@@ -43,6 +53,47 @@ LOCAL volatile ID	fault_flg;
 
 #if APP_TEST
 LOCAL volatile UB	inject_shock;	/* set by the test, cleared by the task */
+#endif
+
+#if S4_LOG_TILT
+/* Tilt trace queue (subsystem4.h S4_LOG_TILT).  One writer per index,
+   like Buddy 3's bc_ring: the IMU task writes entries and tilt_head,
+   the log task reads them and writes tilt_tail.  Entry, 32 bits:
+	[15:0]  pitch, 0.1 deg (signed)    [18:16] S4_ST_xxx
+	[31:19] IMU cycle number, 13 bits (time = cycles x 10 ms) */
+#define TILT_RING		64	/* 0.64 s of samples; power of two */
+#define MEMORY_BARRIER()	__asm__ volatile ("dmb" ::: "memory")
+
+LOCAL UW		tilt_ring[TILT_RING];
+LOCAL volatile UB	tilt_head;	/* IMU task only */
+LOCAL volatile UB	tilt_tail;	/* log task only */
+LOCAL volatile UH	tilt_lost;	/* IMU task only: queue was full */
+LOCAL UB		tilt_was_on;	/* IMU task only */
+
+/* IMU task, every cycle: queue the sample while tilted, plus the first
+   level one after it (so the trace shows the return to flat) */
+LOCAL void tilt_record(void)
+{
+	W	p = imu.pitch_mdeg;
+	INT	pitch_dd = (INT)((p >= 0 ? p + 50 : p - 50) / 100);
+	INT	st = imu.state;
+	BOOL	on = (st == S4_ST_CLIMBING || st == S4_ST_DESCENDING ||
+		      pitch_dd >= S4_TILT_MIN_DD || pitch_dd <= -S4_TILT_MIN_DD);
+	UB	head = tilt_head;
+
+	if (on || tilt_was_on) {
+		if ((UB)(head - tilt_tail) >= TILT_RING) {
+			tilt_lost++;		/* log task behind: drop, never wait */
+		} else {
+			tilt_ring[head & (TILT_RING - 1)] =
+				((UW)(UH)(H)pitch_dd) | (((UW)st & 7u) << 16) |
+				(((UW)dg.cycles & 0x1FFFu) << 19);
+			MEMORY_BARRIER();	/* entry before the index */
+			tilt_head = (UB)(head + 1);
+		}
+	}
+	tilt_was_on = on ? 1 : 0;
+}
 #endif
 
 /*
@@ -93,8 +144,11 @@ LOCAL void debug_pin(INT pin, UINT level)
    Telemetry (s4_shock_ack). */
 LOCAL void on_shock(void)
 {
+#if S4_SHOCK_ESTOP
 	tk_set_flg(flg_safety, S2_FLG_ESTOP);
+#endif
 	shock_seq = (UB)(shock_seq + 1);
+	shock_tlm_until = sys_ms() + S4_TLM_SHOCK_HOLD_MS;
 	set_fault(FAULT_SHOCK);
 	debug_pin(S4_DEBUG_SHOCK_PIN, 1);
 }
@@ -144,11 +198,70 @@ LOCAL void publish(void)
 	s4_w1 = w1;
 	s4_diag = dg;
 	tk_unl_mtx(mtx_s4_status);
+
+	/* Buddy 1's telemetry slot (44 bits, s4_tlm_slot): shock bit held
+	   1 s = two 500 ms frames, so it is always sent (Version C row 10) */
+	(void)s1_tlm_set_slot(S1_SLOT_B4, s4_tlm_slot(w0, w1,
+			(W)(shock_tlm_until - sys_ms()) > 0));
 }
 
 /* ------------------------------------------------------------------ */
 /*  IMU Monitor task                                                  */
 /* ------------------------------------------------------------------ */
+
+/* Sensor not found at start-up: say why, once (integration aid).
+   Lines low      -> no power, shorted, or the cable is not on Grove 6.
+   Nothing found  -> SDA/SCL swapped, wrong port or module unpowered.
+   0x1E answers but IRA_REG_M != 0x48 -> not an LSM303DLHC (e.g. an
+   LSM303D answers WHO_AM_I 0x0F = 0x49, an LSM303AGR mag 0x4F = 0x40). */
+LOCAL void imu_diagnose(void)
+{
+	UB	found[8], v;
+	UINT	lv = lsm303_line_levels();
+	INT	n, i;
+	BOOL	acc = FALSE, mag = FALSE, ira_ok = FALSE;
+
+	tm_printf((UB*)"s4: I2C idle levels SDA=%d SCL=%d (both must be 1),"
+		  " stuck-bus recoveries %d\n",
+		  lv & 1u, (lv >> 1) & 1u, (INT)lsm303_bus_recoveries());
+	n = lsm303_scan(found, 8);
+	tm_printf((UB*)"s4: I2C scan: %d device(s)", n);
+	for (i = 0; i < n && i < 8; i++) {
+		tm_printf((UB*)" 0x%02x", found[i]);
+		if (found[i] == LSM303_ACC_ADDR) acc = TRUE;
+		if (found[i] == LSM303_MAG_ADDR) mag = TRUE;
+	}
+	tm_printf((UB*)"\n");
+	if (lsm303_read_reg(LSM303_MAG_ADDR, 0x0A, &v)) {
+		tm_printf((UB*)"s4: 0x1E IRA_REG_M=0x%02x (LSM303DLHC = 0x48)\n", v);
+		ira_ok = (v == 0x48);
+	}
+	if (lsm303_read_reg(LSM303_MAG_ADDR, 0x0F, &v)) {
+		tm_printf((UB*)"s4: 0x1E reg 0x0F=0x%02x\n", v);
+	}
+	if (lsm303_read_reg(0x1D, 0x0F, &v)) {
+		tm_printf((UB*)"s4: 0x1D WHO_AM_I=0x%02x (LSM303D = 0x49)\n", v);
+	}
+
+	/* One plain-language verdict for whoever reads the log */
+	if ((lv & 3u) != 3u) {
+		tm_printf((UB*)"s4: VERDICT a line is held low: IMU unpowered, cable"
+			  " shorted, or not plugged into Grove 6 (GP26/GP27)\n");
+	} else if (n == 0) {
+		tm_printf((UB*)"s4: VERDICT nothing answers: SDA/SCL swapped, wrong"
+			  " Grove port, or the module has no power (check VIN/GND)\n");
+	} else if (!acc || !mag) {
+		tm_printf((UB*)"s4: VERDICT devices answer but not both 0x19 and 0x1E:"
+			  " a different IMU chip than the LSM303DLHC -- send this log"
+			  " to Buddy 4\n");
+	} else if (!ira_ok) {
+		tm_printf((UB*)"s4: VERDICT 0x19/0x1E answer but the ID is wrong: not an"
+			  " LSM303DLHC -- send this log to Buddy 4\n");
+	} else {
+		tm_printf((UB*)"s4: VERDICT wiring and chip look OK now (loose"
+			  " contact?); the IMU retries every 1 s\n");
+	}
+}
 
 EXPORT void imu_task(INT stacd, void *exinf)
 {
@@ -159,6 +272,7 @@ EXPORT void imu_task(INT stacd, void *exinf)
 	UW		dist, prev_dist;
 	BOOL		acc_ok, mag_ok;
 	INT		n;
+	UB		retries = 0, id_acc, id_ira, id_agr, id_d;
 
 	(void)stacd; (void)exinf;
 
@@ -179,8 +293,15 @@ EXPORT void imu_task(INT stacd, void *exinf)
 	tm_printf((UB*)"s4: I2C1 GP%d/GP%d: accel 0x19 %s, mag 0x1E %s -> %s\n",
 		  S4_PIN_IMU_SDA, S4_PIN_IMU_SCL,
 		  acc_ok ? "found" : "MISSING", mag_ok ? "found" : "MISSING",
-		  dg.sensor_found ? "LSM303DLHC ready, keep the robot STILL for 2 s"
+		  dg.sensor_found ? "ready, keep the robot STILL for 2 s"
 				  : "IMU FAULT, retrying every 1 s");
+	if (dg.sensor_found) {
+		tm_printf((UB*)"s4: chip = %s\n", lsm303_chip_name());
+	}
+
+	if (!dg.sensor_found) {
+		imu_diagnose();
+	}
 
 	imu_init(&imu);
 	if (!dg.sensor_found) {
@@ -213,6 +334,21 @@ EXPORT void imu_task(INT stacd, void *exinf)
 					imu_restart(&imu);	/* calibrate again */
 					clr_fault(FAULT_IMU);
 					dg.sensor_found = 1;
+					tm_printf((UB*)"s4: IMU answers again (%s), keep"
+						  " the robot STILL for 2 s (calibrating)\n",
+						  lsm303_chip_name());
+				} else if (++retries % 5 == 0) {
+					/* Why it still fails, every 5 s, so the log
+					   explains itself even if opened late.
+					   ID 0 = no answer at all (wiring/power). */
+					lsm303_last_ids(&id_acc, &id_ira, &id_agr, &id_d);
+					tm_printf((UB*)"s4: IMU still in FAULT: 0x19 accel id"
+						  " 0x%02x, 0x1E: 0x0A=0x%02x 0x4F=0x%02x"
+						  " 0x0F=0x%02x (LSM303D=0x49), i2c_err %d"
+						  " (all 0 = nothing answers: wiring/power)\n",
+						  id_acc, id_ira, id_agr, id_d,
+						  (INT)lsm303_error_count());
+					imu_diagnose();
 				}
 			}
 		} else {
@@ -224,6 +360,12 @@ EXPORT void imu_task(INT stacd, void *exinf)
 
 		/* 3.-4. logic and reactions */
 		n = imu_step(&imu, &s, s2_dist_diff(prev_dist, dist), now_ms, ev);
+		if (n > 0 && ev[0].type == IMU_EV_SHOCK) {
+			/* Integration aid: the raw reading that tripped SHOCK.
+			   At rest |a| is ~1000 mg; shock is > 2500 mg. */
+			tm_printf((UB*)"s4: SHOCK raw ax=%d ay=%d az=%d mg (%s)\n",
+				  s.ax, s.ay, s.az, lsm303_chip_name());
+		}
 		prev_dist = dist;
 		handle_events(ev, n);
 #if APP_TEST
@@ -236,6 +378,10 @@ EXPORT void imu_task(INT stacd, void *exinf)
 
 		/* 5. timing and status */
 		dg.cycles++;
+#if S4_LOG_TILT
+		tilt_record();
+#endif
+		dg.last_peak_dd = (H)((imu.last_peak_mdeg + 50) / 100);
 		dg.i2c_errors = lsm303_error_count();
 		used = in_w(TIMER_TIMERAWL) - t0;
 		dg.last_us = used;
@@ -257,28 +403,93 @@ LOCAL const char *s4_state_name(INT st)
 	return (st >= 0 && st <= S4_ST_FAULT) ? name[st] : "?";
 }
 
+/* Print a pitch in 0.1 deg as +d.d */
+LOCAL void print_deg(INT dd)
+{
+	INT	a = dd < 0 ? -dd : dd;
+
+	tm_printf((UB*)"%c%d.%d", dd < 0 ? '-' : '+', a / 10, a % 10);
+}
+
+#if S4_LOG_TILT
+/* Log task: print every queued tilt sample.  t counts from the first
+   tilted sample of this tilt, in 10 ms IMU cycles. */
+LOCAL void tilt_print(void)
+{
+	static UH	t_start;
+	static UB	in_tilt;
+	static UH	lost_seen;
+	UB		tail = tilt_tail;
+	UW		e;
+	UH		cyc;
+	INT		pitch_dd, st;
+
+	while (tail != tilt_head) {
+		MEMORY_BARRIER();		/* index before the entry */
+		e = tilt_ring[tail & (TILT_RING - 1)];
+		MEMORY_BARRIER();		/* entry read before freeing it */
+		tail = (UB)(tail + 1);
+		tilt_tail = tail;
+
+		pitch_dd = (INT)(H)(UH)(e & 0xFFFFu);
+		st  = (INT)((e >> 16) & 7u);
+		cyc = (UH)((e >> 19) & 0x1FFFu);
+		if (!in_tilt) {
+			in_tilt = 1;
+			t_start = cyc;
+		}
+		tm_printf((UB*)"s4: tilt t=+%dms pitch=",
+			  (INT)((UH)(cyc - t_start) & 0x1FFFu) * S4_PERIOD_MS);
+		print_deg(pitch_dd);
+		tm_printf((UB*)" deg %s\n", s4_state_name(st));
+
+		if (st != S4_ST_CLIMBING && st != S4_ST_DESCENDING &&
+		    pitch_dd < S4_TILT_MIN_DD && pitch_dd > -S4_TILT_MIN_DD) {
+			in_tilt = 0;		/* back to flat: next tilt restarts t */
+		}
+	}
+	if (tilt_lost != lost_seen) {
+		tm_printf((UB*)"s4: tilt trace skipped %d samples (console too slow)\n",
+			  (INT)(UH)(tilt_lost - lost_seen));
+		lost_seen = tilt_lost;
+	}
+}
+#endif
+
 EXPORT void imu_log_task(INT stacd, void *exinf)
 {
 	S4_STS_FIELDS	f;
 	S4_DIAG		d;
 	UW		w0, w1;
 	INT		last_state = -1, last_count = 0, ticks = 0, a;
+	INT		ms, last_ms = -1, turn_h0 = 0, turn_wait = 0, dh;
 	UB		last_seq = 0;
+	/* With the tilt trace on, wake every IMU period so the queue
+	   (0.64 s deep) is drained long before it fills */
+	const INT	step = S4_LOG_TILT ? S4_PERIOD_MS : 100;
 
 	(void)stacd; (void)exinf;
 
 	while (1) {
-		tk_dly_tsk(100);		/* changes: 100 ms, full line: S4_LOG_MS */
+		tk_dly_tsk(step);
+#if S4_LOG_TILT
+		tilt_print();
+#endif
 		s4_get_status(&w0, &w1);
 		s4_sts_unpack(w0, w1, &f);
 
 		if (f.state != last_state) {
-			tm_printf((UB*)"s4: state %s\n", s4_state_name(f.state));
+			tm_printf((UB*)"s4: state %s (pitch ", s4_state_name(f.state));
+			print_deg(f.pitch_dd);
+			tm_printf((UB*)" deg)\n");
 			last_state = f.state;
 		}
 		if (f.hump_count != last_count) {
-			tm_printf((UB*)"s4: HUMP_END height=%d mm (humps=%d)\n",
-				  f.hump_mm, f.hump_count);
+			s4_get_diag(&d);
+			tm_printf((UB*)"s4: HUMP_END height=%d mm, peak pitch ",
+				  f.hump_mm);
+			print_deg(d.last_peak_dd);
+			tm_printf((UB*)" deg (humps=%d)\n", f.hump_count);
 			last_count = f.hump_count;
 		}
 		if (s4_shock_seq() != last_seq) {
@@ -286,8 +497,33 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 			last_seq = s4_shock_seq();
 		}
 
-		ticks += 100;
-		if (ticks >= S4_LOG_MS) {
+		/* Turn check, for Buddy 2's S2_TRACK_MM: how far each on-the-spot
+		   TURN really turned, by the compass.  Measured 300 ms after
+		   Motion leaves TURN (the heading filter lags ~80 ms).  Only
+		   valid once the car has turned about a quarter turn since
+		   power-up (hard-iron centre).  Sign depends on how the board is
+		   mounted: compare the SIZE with the commanded angle. */
+		ms = (INT)s2_sts_state(motion_get_status());
+		if (ms == S2_ST_TURN && last_ms != S2_ST_TURN) {
+			turn_h0 = f.heading_deg;
+			turn_wait = 0;
+		} else if (ms != S2_ST_TURN && last_ms == S2_ST_TURN) {
+			turn_wait = 300;
+		} else if (turn_wait > 0) {
+			turn_wait -= step;
+			if (turn_wait <= 0) {
+				dh = f.heading_deg - turn_h0;
+				if (dh > 180)   dh -= 360;
+				if (dh <= -180) dh += 360;
+				tm_printf((UB*)"s4: TURN measured %d deg by compass"
+					  " (heading %d -> %d)\n",
+					  dh, turn_h0, f.heading_deg);
+			}
+		}
+		last_ms = ms;
+
+		ticks += step;
+		if (S4_LOG_MS > 0 && ticks >= S4_LOG_MS) {
 			ticks = 0;
 			s4_get_diag(&d);
 			a = f.pitch_dd < 0 ? -f.pitch_dd : f.pitch_dd;

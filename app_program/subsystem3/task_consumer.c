@@ -38,12 +38,15 @@ EXPORT S3_DIAG		s3_diag;	/* guarded by mtx_s3_status */
 
 LOCAL S3_DIAG		dg;		/* the task's working copy */
 LOCAL S3_LINE		lt;
+#if S3_DEBUG_LINE
+LOCAL UB		dbg_line;	/* cycles since the last debug line */
+#endif
 LOCAL S3_BC		bc;
 LOCAL UH		bc_overflows_seen;
 
 /* State kept between cycles that is not in lt or bc (task only) */
 LOCAL struct {
-	UB	last_nav : 2;	/* NAV_xxx of the last valid barcode */
+	UB	last_nav : 2;	/* NAV_xxx; 1 Nov: always 0, the VC maps letters */
 	UB	nav_valid : 1;
 	UB	calibrated : 1;
 	UB	overflow : 1;	/* bc_ring overflowed (sticky) */
@@ -96,10 +99,38 @@ LOCAL void set_fault(UINT bits)
 	if (flg > 0) tk_set_flg(flg, bits);
 }
 
+/* Clear only subsystem 3's own bits */
+LOCAL void clear_fault(UINT bits)
+{
+	ID	flg = fault_flg;
+
+	if (flg > 0) tk_clr_flg(flg, ~bits);
+}
+
 /* Motion Control (S2) keeps only the newest byte; never waits */
 LOCAL void send_steer(void)
 {
-	if (motion_send_steer(lt.steer) == E_OK) {
+	INT	steer = lt.steer;
+#if S3_BC_HOLD_STRAIGHT
+	static UB	held;
+
+	/* 30 Oct: drive straight while a barcode is being read */
+	if (bc.state == S3_BC_MEASURING) {
+#if S3_BC_STEER_LIMIT > 0
+		if (steer >  S3_BC_STEER_LIMIT) steer =  S3_BC_STEER_LIMIT;
+		if (steer < -S3_BC_STEER_LIMIT) steer = -S3_BC_STEER_LIMIT;
+#else
+		steer = lt.trim;
+#endif
+		if (!held) tm_printf((UB*)"s3: barcode: steering limited to +-%d\n",
+				      S3_BC_STEER_LIMIT);
+		held = 1;
+	} else if (held) {
+		held = 0;
+		tm_printf((UB*)"s3: barcode: steering released\n");
+	}
+#endif
+	if (motion_send_steer(steer) == E_OK) {
 		dg.steer_sent++;
 	} else {
 		dg.send_fail++;
@@ -114,6 +145,15 @@ LOCAL void line_cycle(UW dt_ms, S3_STS_FIELDS *f)
 {
 	UINT	left   = drv_ir_left();
 	UINT	center = drv_ir_center();
+
+	/* The trim only means something while Motion Control follows the
+	   line.  Turns, line search, STOP and E-STOP would teach it the
+	   wrong pull (and a slow or stalled run would leave it full), so
+	   it is cleared there and every new line-follow starts from 0. */
+	if (s2_sts_state(motion_get_status()) != S2_ST_SPEED_FOLLOW) {
+		lt.trim = 0;
+		lt.bend = 0;	/* integration fix 28 Oct */
+	}
 
 	switch (s3_line_step(&lt, left, center, dt_ms)) {
 	case S3_LEV_JUNCTION:
@@ -134,6 +174,15 @@ LOCAL void line_cycle(UW dt_ms, S3_STS_FIELDS *f)
 		break;
 	}
 	send_steer();
+
+#if S3_DEBUG_LINE
+	if (++dbg_line >= 500 / S3_PERIOD_MS) {
+		dbg_line = 0;
+		tm_printf((UB*)"s3: L=%d C=%d state=%d steer=%d trim=%d"
+			  " (state 0 on line, 1 drifting, 2 junction, 3 lost)\n",
+			  left, center, lt.state, lt.steer, lt.trim);
+	}
+#endif
 
 	f->ir_left    = left ? TRUE : FALSE;
 	f->ir_center  = center ? TRUE : FALSE;
@@ -165,13 +214,15 @@ LOCAL void calibrate(UH raw)
 		bc_overflows_seen = drv_ir_overflow_count();
 		drv_ir_start_edges(white);
 		s3.calibrated = 1;
+		if (cal.fault_sent) clear_fault(FAULT_IR_RIGHT);
 		tm_printf((UB*)"s3: calibrated, white=%d (range %d..%d)\n",
 			  white, cal.min, cal.max);
 	} else {
 		/* Not on plain white, or the sensor is unplugged/saturated:
 		   report once, then keep retrying quietly */
 		if (!cal.fault_sent) {
-			send_vc(EVT_SENSOR_FAULT, S3_FAULT_IR_RIGHT);
+			set_fault(FAULT_IR_RIGHT);
+			send_vc(EVT_SENSOR_FAULT, FAULT_IR_RIGHT);
 			cal.fault_sent = 1;
 			tm_printf((UB*)"s3: calibration failed, white=%d"
 				  " range %d..%d, retrying\n",
@@ -182,16 +233,41 @@ LOCAL void calibrate(UH raw)
 	cal.n = 0;
 }
 
+#if S3_DEBUG_BARCODE
+/* Element widths of the read that just ended: bar, space, bar...
+   Code 39: narrow and wide elements, wide >= 1.5x narrow; a full
+   character is 9 elements plus a 1-element gap (29/39/49 in total). */
+LOCAL void print_widths(const S3_BC_RESULT *res)
+{
+	INT	i, n = res->elements;
+
+	if (n > S3_BC_MAX_ELEMS) n = S3_BC_MAX_ELEMS;
+	/* in 0.1 ms units, whatever the sample rate */
+	tm_printf((UB*)"s3:   widths 0.1ms:");
+	for (i = 0; i < n; i++) {
+		tm_printf((UB*)" %d", bc.elem[i] * 10 / S3_TICKS_PER_MS);
+	}
+	tm_printf((UB*)"\n");
+	/* 1 Nov: the black switch level it learnt (the white one is ~3/4) */
+	tm_printf((UB*)"s3:   black above %d (floor white %d)\n",
+		  drv_ir_threshold(), drv_ir_white());
+}
+#endif
+
 LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 {
 	switch (ev) {
 	case S3_BEV_NAV_CMD:
+		/* 1 Nov: a letter A..Z, read either way round.  The VC stores
+		   it and maps it to a movement (mapping sent by MQTT). */
 		dg.barcodes_ok++;
-		s3.last_nav  = res->cmd;
 		s3.nav_valid = 1;
-		send_vc(EVT_NAV_CMD, res->cmd);
-		tm_printf((UB*)"s3: barcode '%c' -> NAV_CMD %d\n",
-			  res->ch, res->cmd);
+		send_vc(EVT_BARCODE, (UW)(UB)res->ch | ((UW)res->rev << 8));
+		tm_printf((UB*)"s3: BARCODE READ: '%c' (scanned %s)\n", res->ch,
+			  res->rev ? "right->left" : "left->right");
+#if S3_DEBUG_BARCODE
+		print_widths(res);
+#endif
 		break;
 	case S3_BEV_BARCODE_ERR:
 		dg.barcodes_err++;
@@ -199,9 +275,22 @@ LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 		set_fault(FAULT_BARCODE_ERR);
 		tm_printf((UB*)"s3: BARCODE_ERR %d (%d elements)\n",
 			  res->err, res->elements);
+#if S3_DEBUG_BARCODE
+		tm_printf((UB*)"s3:   (err 1 = not Code 39, 2 = no '*' start/stop,"
+			  " 3 = valid Code 39 but not one letter A-Z)\n");
+		print_widths(res);
+#endif
 		break;
 	case S3_BEV_DISCARD:
 		dg.barcodes_discarded++;
+#if S3_DEBUG_BARCODE
+		if (res->elements > 0) {
+			tm_printf((UB*)"s3: barcode dropped: %d elements (a full read is"
+				  " 29, 39 or 49)%s\n", res->elements,
+				  s3.overflow ? ", edges lost (overflow)" : "");
+			print_widths(res);
+		}
+#endif
 		break;
 	default:
 		break;
@@ -212,7 +301,7 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 {
 	UH		e[S3_BC_RING_SIZE];
 	INT		n, i;
-	UH		ms, ov, t;
+	UH		now, ov, t;
 	UH		raw = drv_ir_last_raw();
 	S3_BC_RESULT	res;
 
@@ -220,30 +309,86 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 		calibrate(raw);
 	} else {
 		/* Drain first, then read the clock, so no drained edge is
-		   newer than ms */
-		n  = drv_ir_read_edges(e, S3_BC_RING_SIZE);
-		ov = drv_ir_overflow_count();
-		ms = drv_ir_ms();
+		   newer than now */
+		n   = drv_ir_read_edges(e, S3_BC_RING_SIZE);
+		ov  = drv_ir_overflow_count();
+		now = drv_ir_ticks();
 
 		if (ov != bc_overflows_seen) {
 			/* Edges were lost: these edges straddle the gap, so
 			   drop them and the barcode they belong to (8.3) */
 			bc_overflows_seen = ov;
 			s3.overflow = 1;
-			report_barcode(s3_bc_abort(&bc, ms, &res), &res);
+			report_barcode(s3_bc_abort(&bc, now, &res), &res);
 			n = 0;
 		}
 
 		for (i = 0; i < n; i++) {
-			/* 15-bit edge time -> 16-bit ms clock (< 32 s old) */
-			t = (UH)(ms - ((ms - e[i]) & S3_EDGE_TIME_MASK));
+			/* 15-bit edge time -> 16-bit tick clock (< 8 s old) */
+			t = (UH)(now - ((now - e[i]) & S3_EDGE_TIME_MASK));
 			report_barcode(s3_bc_edge(&bc, (e[i] & S3_EDGE_BLACK) != 0,
 						  t, &res), &res);
 		}
-		report_barcode(s3_bc_poll(&bc, ms, &res), &res);
+		report_barcode(s3_bc_poll(&bc, now, &res), &res);
 	}
 
 	if (s3.err_hold > 0) s3.err_hold--;
+
+#if S3_DEBUG_BARCODE >= 3
+	/* Capture: arm once calibrated, print when the buffer is full */
+	if (s3.calibrated) {
+		static UB	armed;
+		const volatile UH *cb;
+		INT		k;
+
+		if (!armed) {
+			drv_ir_cap_arm((UH)(drv_ir_white() + S3_CAP_TRIGGER));
+			armed = 1;
+			tm_printf((UB*)"s3: capture armed: pass the barcode sensor over"
+				  " the barcode (white=%d, on=%d, off=%d)\n",
+				  drv_ir_white(), drv_ir_threshold(),
+				  drv_ir_white() + (drv_ir_threshold() - drv_ir_white()) *
+				  S3_BC_OFF_PCT / S3_BC_ON_PCT);
+		} else if (drv_ir_cap_ready()) {
+			cb = drv_ir_cap_buf();
+			tm_printf((UB*)"s3: cap begin %d values, %d ms apart\n",
+				  S3_CAP_LEN, S3_CAP_MS);
+			for (k = 0; k < S3_CAP_LEN; k++) {
+				if (k % 25 == 0) tm_printf((UB*)"s3: cap %4d:", k);
+				tm_printf((UB*)" %d", cb[k]);
+				if (k % 25 == 24) tm_printf((UB*)"\n");
+			}
+			tm_printf((UB*)"\ns3: cap end\n");
+			armed = 0;		/* re-arm next cycle */
+		}
+	}
+#endif
+
+#if S3_DEBUG_BARCODE == 2
+	/* ADC trace: every 20 ms while the barcode sensor sees anything
+	   darker than white (raw > white + 150), else every 0.5 s.  Push
+	   the robot slowly across the barcode by hand (~1 cm/s): each bar
+	   should rise past thr_on ('B' in the bar graph) and each space
+	   fall back near white. */
+	{
+		static UB	lvl_cyc;
+		INT		thr  = drv_ir_threshold();
+		INT		white = drv_ir_white();
+		INT		k, len;
+
+		if ((INT)raw > white + 150 || ++lvl_cyc >= 500 / S3_PERIOD_MS) {
+			lvl_cyc = 0;
+			tm_printf((UB*)"s3: bc raw=%4d white=%4d on=%4d cal=%d st=%d ",
+				  raw, white, thr, s3.calibrated, bc.state);
+			len = ((INT)raw - white) / 100;
+			if (len > 30) len = 30;
+			for (k = 0; k < len; k++) {
+				tm_printf((UB*)((white + (k + 1) * 100 > thr) ? "B" : "#"));
+			}
+			tm_printf((UB*)"\n");
+		}
+	}
+#endif
 
 	f->bc_state    = bc.state;
 	f->last_nav    = s3.last_nav;

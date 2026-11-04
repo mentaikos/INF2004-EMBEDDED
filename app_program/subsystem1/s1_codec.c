@@ -116,3 +116,56 @@ int s1_decode_command(const uint8_t *buf, int len, uint8_t *id)
 	}
 	return (int)cmd;	/* 00 START, 01 STOP, 10 E-STOP, 11 invalid */
 }
+
+/* 1 Nov: MAP command, header(4) | 11 | id(6) | 4 x letter(5) = 32 bits */
+int s1_decode_map(const uint8_t *buf, int len, uint8_t *id,
+		  char letters[S1_MAP_COUNT])
+{
+	uint32_t pos = 0;
+	uint32_t type, version, cmd, v;
+	int i, j;
+
+	*id = 0;
+	if (buf == 0 || len != S1_MAP_LEN) {
+		return S1_CMD_INVALID;
+	}
+	type    = (uint32_t)s1_get_bits(buf, &pos, S1_TYPE_BITS);
+	version = (uint32_t)s1_get_bits(buf, &pos, S1_VERSION_BITS);
+	cmd     = (uint32_t)s1_get_bits(buf, &pos, 2);
+	*id     = (uint8_t)s1_get_bits(buf, &pos, 6);
+	if (type != S1_TYPE_COMMAND || version != S1_VERSION || cmd != 3u) {
+		return S1_CMD_INVALID;
+	}
+	for (i = 0; i < S1_MAP_COUNT; i++) {
+		v = (uint32_t)s1_get_bits(buf, &pos, S1_MAP_LETTER_BITS);
+		if (v > 25u) {
+			return S1_CMD_INVALID;		/* not A..Z */
+		}
+		letters[i] = (char)('A' + v);
+		for (j = 0; j < i; j++) {
+			if (letters[j] == letters[i]) {
+				return S1_CMD_INVALID;	/* one letter, two moves */
+			}
+		}
+	}
+	return S1_CMD_MAP;
+}
+
+int s1_encode_map(uint8_t out[S1_MAP_LEN], uint8_t id,
+		  const char letters[S1_MAP_COUNT])
+{
+	uint32_t pos = 0;
+	int i;
+
+	for (i = 0; i < S1_MAP_LEN; i++) {
+		out[i] = 0;
+	}
+	put_header(out, &pos, S1_TYPE_COMMAND);
+	s1_put_bits(out, &pos, 3u, 2);
+	s1_put_bits(out, &pos, id & 0x3Fu, 6);
+	for (i = 0; i < S1_MAP_COUNT; i++) {
+		s1_put_bits(out, &pos, (uint32_t)(letters[i] - 'A') & 0x1Fu,
+			    S1_MAP_LETTER_BITS);
+	}
+	return S1_MAP_LEN;
+}

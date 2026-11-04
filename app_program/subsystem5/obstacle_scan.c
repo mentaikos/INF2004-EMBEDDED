@@ -32,7 +32,12 @@ LOCAL INT sin_deg(INT deg)
 	INT sign = deg < 0 ? -1 : 1;
 	if (deg < 0) deg = -deg;
 	if (deg > 90) deg = 180 - deg;
-	return sign * sin5[clamp(deg / 5, 0, 18)];
+	deg = clamp(deg, 0, 90);
+	/* Linear between the 5-degree entries: exact on multiples of 5, and
+	   bins that are not (S5_SWEEP_HALF_DEG != 60) are not rounded down */
+	if (deg >= 90) return sign * sin5[18];
+	return sign * (sin5[deg / 5] +
+		((INT)sin5[deg / 5 + 1] - (INT)sin5[deg / 5]) * (deg % 5) / 5);
 }
 
 LOCAL INT project(INT mm, INT degrees)
@@ -43,7 +48,7 @@ LOCAL INT project(INT mm, INT degrees)
 EXPORT UB s5_range_from_echo(UW width_us)
 {
 	UW mm;
-	if (width_us == 0 || width_us > S5_ECHO_TIMEOUT_US)
+	if (width_us < S5_ECHO_MIN_US || width_us > S5_ECHO_TIMEOUT_US)
 		return S5_RANGE_NO_ECHO;
 	/* d = c*t/2. c=343 m/s: mm = us*343/2000, rounded once.
 	 * Classify BEFORE cm rounding so a 49 mm echo stays NEAR. */
@@ -55,7 +60,10 @@ EXPORT UB s5_range_from_echo(UW width_us)
 
 EXPORT UINT s5_angle_deg(UINT index)
 {
-	return 30u + 5u * (UINT)clamp((INT)index, 0, S5_ANGLES - 1);
+	/* 90 - half .. 90 + half over bins 0..24, rounded to whole degrees */
+	return (90u - S5_SWEEP_HALF_DEG) +
+		(2u * S5_SWEEP_HALF_DEG * (UINT)clamp((INT)index, 0, S5_ANGLES - 1) +
+		 (S5_ANGLES - 1) / 2u) / (S5_ANGLES - 1);
 }
 
 EXPORT UINT s5_servo_pulse_us(UINT index)
@@ -118,7 +126,7 @@ EXPORT UW s5_fine_mask(const UB *scan)
 		a = s5_scan_get(scan, i);
 		b = s5_scan_get(scan, i + 6);
 		if (uncertain(a) || uncertain(b) || a == S5_RANGE_NEAR ||
-		    b == S5_RANGE_NEAR || (nearest <= 30 &&
+		    b == S5_RANGE_NEAR || (nearest <= S5_PLAN_CM &&
 		    ((measured(a) && a <= nearest + S5_PROFILE_BAND_CM) ||
 		     (measured(b) && b <= nearest + S5_PROFILE_BAND_CM)))) {
 			for (j = i; j <= i + 6; j++)
@@ -145,27 +153,41 @@ LOCAL UINT required_width_mm(void)
 	return S5_ROBOT_WIDTH_MM + 2 * (S5_CLEARANCE_MARGIN_MM + S5_RANGE_ERROR_MM);
 }
 
-/* Free wedge outside a visible edge. Missing echoes invalidate that side.
- * Unscanned fine bins are covered only by their measured coarse endpoints;
- * no coarse bin may be absent. A 15-degree beam allowance shrinks the fan.
- * Chord = 2*r*sin(fan/2); floor to 5 degrees is conservative. */
-LOCAL UINT side_clearance(const UB *scan, UINT edge, BOOL left, UINT band)
+/* Free gap beside the obstacle on one side, mm: the sideways distance
+ * from the obstacle's outer edge (edge_mm, measured from the robot's
+ * centre line) to the nearest thing on that side that lies within the
+ * strip the robot drives through while passing it (forward up to the
+ * obstacle face + S5_PASS_DEPTH_MM).  Readings further ahead do not
+ * matter for the bypass.  Missing echoes or a very near return on that
+ * side make it 0 (unknown is not clear); an unscanned coarse bin too.
+ * Nothing in the strip: S5_SIDE_FREE_MM (the sweep saw open space).
+ *
+ * 28 Oct: this replaced a "free wedge chord" that only credited the
+ * angle left over beyond the obstacle's edges, minus a 15-degree beam
+ * allowance.  A 30 cm box 22 cm away fills 60..125 degrees, so that
+ * gave 14..17 cm with nothing at all beside the box, and the robot
+ * reversed until NO_CLEAR. */
+LOCAL UINT side_clearance(const UB *scan, UINT edge, BOOL left, UINT band,
+			  INT edge_mm)
 {
-	INT i, step = left ? 1 : -1;
-	UINT r, radius = 1000, span;
+	INT i, step = left ? 1 : -1, lat, fwd, gap;
+	UINT r, free_mm = S5_SIDE_FREE_MM;
 	if ((!left && edge == 0) || (left && edge == 24)) return 0;
+	if (edge_mm < 0) edge_mm = 0;
 	for (i = (INT)edge + step; i >= 0 && i < S5_ANGLES; i += step) {
 		r = s5_scan_get(scan, (UINT)i);
 		if (r == S5_RANGE_UNSCANNED && i % 6 != 0) continue;
-		if (uncertain(r) || r == S5_RANGE_NEAR || (measured(r) && r <= band))
-			return 0;
-		if (measured(r) && r * 10u < radius) radius = r * 10u;
+		if (uncertain(r) || r == S5_RANGE_NEAR) return 0;
+		if (!measured(r)) continue;            /* FAR: open */
+		lat = project((INT)r * 10, 90 - (INT)s5_angle_deg((UINT)i));
+		if (lat < 0) lat = -lat;
+		fwd = project((INT)r * 10, (INT)s5_angle_deg((UINT)i));
+		if (fwd > (INT)band * 10 + S5_PASS_DEPTH_MM) continue;
+		gap = lat - edge_mm - S5_RANGE_ERROR_MM;
+		if (gap <= 0) return 0;
+		if ((UINT)gap < free_mm) free_mm = (UINT)gap;
 	}
-	span = (left ? 24u - edge : edge) * 5u;
-	if (span <= S5_BEAM_ALLOW_DEG) return 0;
-	span -= S5_BEAM_ALLOW_DEG;
-	radius = radius > S5_RANGE_ERROR_MM ? radius - S5_RANGE_ERROR_MM : 0;
-	return (UINT)(2 * project((INT)radius, (INT)(span / 2u)));
+	return free_mm;
 }
 
 EXPORT S5_PROFILE s5_make_profile(const UB *scan)
@@ -174,18 +196,24 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 	UINT i, r, closest = 101, nearest_i = S5_CENTRE, lo, hi;
 	UINT left = 0, right = 0, width = 0, action = S5_ACT_STOP, valid = 0;
 	INT x = 0, y = 0, xmin = 1001, xmax = -1001, px;
+	UINT path = 101;			/* nearest range in the robot's path */
 	BOOL unknown = FALSE, near = FALSE, foreground_known = TRUE;
 	for (i = 0; i < S5_ANGLES; i++) {
 		r = s5_scan_get(scan, i);
 		if (r == S5_RANGE_NEAR) near = TRUE;
 		if (r == S5_RANGE_NO_ECHO || (i % 6 == 0 && uncertain(r))) unknown = TRUE;
 		if (measured(r) && r < closest) { closest = r; nearest_i = i; }
+		if (measured(r) && r < path) {
+			px = project((INT)r * 10, 90 - (INT)s5_angle_deg(i));
+			if (px < 0) px = -px;
+			if ((UINT)px <= required_width_mm() / 2u) path = r;
+		}
 	}
 	lo = hi = nearest_i;
-	if (!near && !unknown && closest > S5_DETECT_CM) {
+	if (!near && !unknown && closest > S5_DETECT_CM && path > S5_PLAN_CM) {
 		action = S5_ACT_CONTINUE;
 		valid = 1;
-	} else if (!near && closest <= S5_DETECT_CM) {
+	} else if (!near && (closest <= S5_DETECT_CM || path <= S5_PLAN_CM)) {
 		/* Foreground is the nearest range band; extrema are visible surface
 		 * points only. Hidden depth is deliberately not inferred. */
 		for (i = 0; i < S5_ANGLES; i++) {
@@ -203,8 +231,10 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 		/* An unknown forward/foreground return cannot establish a clear
 		 * turning envelope, even when one outer side fan looks open. */
 		if (uncertain(s5_scan_get(scan, S5_CENTRE))) foreground_known = FALSE;
-		left = side_clearance(scan, hi, TRUE, closest + S5_PROFILE_BAND_CM);
-		right = side_clearance(scan, lo, FALSE, closest + S5_PROFILE_BAND_CM);
+		left = side_clearance(scan, hi, TRUE, closest + S5_PROFILE_BAND_CM,
+				      -xmin);
+		right = side_clearance(scan, lo, FALSE, closest + S5_PROFILE_BAND_CM,
+				       xmax);
 		/* All measured bearings must clear the in-place turning envelope. */
 		if (foreground_known && closest * 10u > turn_radius_mm()) {
 			if (left >= required_width_mm() || right >= required_width_mm()) {
@@ -292,6 +322,17 @@ LOCAL void begin_scan(S5_SCAN *s)
 EXPORT void s5_scan_tick(S5_SCAN *s, const S5_INPUT *in, S5_OUTPUT *out)
 {
 	output_init(out);
+	/* Integration fix (VC): a latched echo fault stops pinging after
+	   S5_RETRY_LIMIT retries, and nothing else could re-arm it, because
+	   the fault also holds E-STOP and RESET was only accepted with
+	   E-STOP clear -- so START stayed refused for ever, even after the
+	   sensor was fixed.  RESET now re-arms the retry pings while in
+	   SENSOR_FAULT.  This moves nothing and clears no flag: the state
+	   leaves SENSOR_FAULT only on a valid echo (s5_scan_sample). */
+	if ((in->flags & S5_RESET) && s->state == S5_ST_SENSOR_FAULT) {
+		s->retries = 0;
+		s->retry_ms = (UH)(in->now_ms - S5_RETRY_MS);
+	}
 	if ((in->flags & S5_CANCEL) || in->estop) {
 		if (s->state != S5_ST_FORWARD_WATCH && s->state != S5_ST_SENSOR_FAULT)
 			s->state = S5_ST_OBSTACLE_DETECTED;
@@ -385,8 +426,16 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 	if (range > 100u || range == 4 || range == S5_RANGE_UNSCANNED)
 		range = S5_RANGE_NO_ECHO;
 	s->range = range;
-	/* A physical near return is never suppressed by hump masking. */
+	/* A physical near return is never suppressed by hump masking, but it
+	 * must be seen on two consecutive pings: one stray echo (noise, TRIG
+	 * crosstalk) no longer E-STOPs the robot.  Cost: one 60 ms ping, about
+	 * 6 mm at the 10 cm/s cap that applies within 20 cm (NFR12). */
 	if (range == S5_RANGE_NEAR || (measured(range) && range * 10u <= S5_CRITICAL_MM)) {
+		if (!s->crit_seen) {
+			s->crit_seen = 1;
+			return;             /* unconfirmed: this ping is ignored */
+		}
+		s->crit_seen = 0;
 		out->estop = TRUE;
 		invalidate(s);
 		s->state = S5_ST_OBSTACLE_DETECTED;
@@ -394,6 +443,7 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 		out->payload = (UW)range | ((UW)10u << 7);
 		return;
 	}
+	s->crit_seen = 0;
 	if (s->state == S5_ST_SENSOR_FAULT) {
 		if (s->retries < S5_RETRY_LIMIT) s->retries++;
 		s->retry_ms = in->now_ms;
@@ -429,7 +479,9 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 			if (s->pending & ((UW)1u << i)) { s->index = (UB)i; break; }
 	} else if (s->state == S5_ST_FORWARD_WATCH || s->state == S5_ST_BYPASSING ||
 		   s->state == S5_ST_LINE_RECOVERY) {
-		if (range == S5_RANGE_NO_ECHO || !measured(range) || range > S5_DETECT_CM)
+		UINT detect = s->state == S5_ST_BYPASSING ? S5_BYPASS_DETECT_CM
+							   : S5_DETECT_CM;
+		if (range == S5_RANGE_NO_ECHO || !measured(range) || range > detect)
 			s->near_count = 0;
 		else {
 			/* Reject a short hump reflection, never mask a persistent hazard

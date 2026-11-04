@@ -8,7 +8,7 @@
  *	What Motion Control does (report section 6.2, statechart 6.2):
  *	  - the ONLY code that drives the motor pins GP8..GP11;
  *	  - runs every 20 ms (NFR14), checks E-STOP every cycle (NFR9/NFR10);
- *	  - counts the wheel encoders (GP0 left, GP7 right) in an ISR;
+ *	  - counts the wheel encoders (GP7 left, GP0 right) in an ISR;
  *	  - per-wheel speed PID, MOVE(follow, v), MOVE(d), TURN(angle), STOP,
  *	    SPEED_LIMIT(v); MOTION_DONE when a MOVE(d)/TURN finishes;
  *	  - stall detection (PWM on, no pulse for 300 ms) -> STALL_FAULT;
@@ -57,12 +57,16 @@
 #define S2_PIN_MR_B		9	/* right motor M1B (PWM slice 4 B) */
 #define S2_PIN_ML_A		10	/* left motor  M2A (PWM slice 5 A) */
 #define S2_PIN_ML_B		11	/* left motor  M2B (PWM slice 5 B) */
-#define S2_PIN_ENC_L		0	/* left encoder  (never build CRASH_REPORT=1) */
-#define S2_PIN_ENC_R		7	/* right encoder (Grove 7 split cable) */
+#define S2_PIN_ENC_L		7	/* left encoder  (Grove 7 split cable; swapped
+				   26 Oct to match the robot's wiring) */
+#define S2_PIN_ENC_R		0	/* right encoder (Grove 1; never build
+				   CRASH_REPORT=1) */
 
 /* Set to 1 if bench testing shows a motor turns backwards on "forward" */
 #define S2_INVERT_LEFT		0
-#define S2_INVERT_RIGHT		0
+#define S2_INVERT_RIGHT		1	/* 27 Oct: right motor is mirror-mounted and ran
+				   backwards (robot spun on the spot; inverting
+				   the left instead drove it backwards) */
 
 /* PWM: 125 MHz / (6249 + 1) = 20 kHz (Robo Pico limit is 20 kHz) */
 #define S2_PWM_WRAP		6249
@@ -71,14 +75,21 @@
  *  3. Measured constants.  PLACEHOLDERS until measured on the robot
  *     (report 9.5 / testing/subsystem2/TEST_LOG.md S2-M01..S2-M04).
  * ===================================================================== */
-#define S2_WHEEL_DIAM_MM	65	/* TODO measure */
-#define S2_ENC_CPR		20	/* TODO counts per wheel rev (one edge) */
-#define S2_TRACK_MM		120	/* TODO wheel centre to wheel centre */
-#define S2_TOP_SPEED_MM_S	600	/* TODO speed at 100 % duty */
-#define S2_DEADBAND_PM		250	/* TODO duty (per mille) that just starts a wheel */
-#define S2_KFF_Q8		320	/* feed-forward: (1000-250)/600 * 256 */
-#define S2_KP_Q8		512	/* PID gains, Q8 (256 = 1.0): tune */
-#define S2_KI_Q8		64
+#define S2_WHEEL_DIAM_MM	43	/* measured 27 Oct */
+#define S2_ENC_CPR		220	/* counts per wheel rev, rising edges of A
+				   (S2-M01 26 Oct, hand-turned: L ~220,
+				   R ~217, +-10 %; likely 11 PPR x 1:20) */
+#define S2_TRACK_MM		95	/* TODO wheel centre to wheel centre */
+/* Motor model from the 27 Oct bench run (wheels lifted, no load):
+   duty ~230-300 per mille held ~200 mm/s.  Fitted as deadband 100 +
+   0.75 per mille per mm/s, i.e. ~1200 mm/s at full duty unloaded.  On
+   the floor the load needs more duty: the integrator supplies it.
+   Re-fit on the track (S2-M06) and lower KP if the speed still swings. */
+#define S2_TOP_SPEED_MM_S	800	/* unloaded speed at 100 % duty (1200 x 43/65: the fit used the 65 mm placeholder) */
+#define S2_DEADBAND_PM		100	/* duty (per mille) where a wheel starts */
+#define S2_KFF_Q8		288	/* feed-forward: (1000-100)/800 * 256 */
+#define S2_KP_Q8		96	/* PI gains, Q8 (256 = 1.0); was 512, which */
+#define S2_KI_Q8		16	/* swung duty 0 <-> 400 around the target */
 #define S2_I_MAX_PM		300	/* integrator clamp, per mille duty */
 
 /* Derived: micrometres travelled per encoder count (pi ~ 355/113) */
@@ -92,19 +103,34 @@
 #define S2_REVERSE_MAX_MM_S	100	/* "safe reverse" cap */
 #define S2_SLOW_MM_S		80	/* last 10 % of a MOVE(d)/TURN */
 #define S2_DEFAULT_MM_S		150	/* MOVE(d)/TURN with speed field 0 */
-#define S2_ACCEL_MM_S_PER_CYC	10	/* target ramp (500 mm/s^2) */
-#define S2_HEADING_K_MM_S	15	/* heading hold: mm/s per count of L/R difference */
+#define S2_ACCEL_MM_S_PER_CYC	20	/* target ramp (1000 mm/s^2); was 10, then 15:
+					   the inner wheel took 300 ms to slow for a
+					   curve (jiahao16, Fine-Tuning 4bea17a) */
+#define S2_DECEL_MM_S_PER_CYC	40	/* slowing down (2000 mm/s^2), Fine-Tuning */
+#define S2_HEADING_K_MM_S	4	/* heading hold: mm/s per count of L/R difference (15 made the robot weave, 27 Oct) */
 #define S2_STEER_FULL		64	/* steer value giving a 100 % speed split */
 #define S2_STEER_TIMEOUT_MS	100	/* no steer message -> steer 0 */
+#define S2_SPEED_WIN		5	/* speed = counts in the last 5 cycles (100 ms) */
 #define S2_STALL_MS		300	/* PWM on, no pulse -> stall */
 #define S2_STALL_ARM_MS		500	/* start-up window before stall can trip */
 #define S2_ZERO_SPEED_MS	200	/* no pulse for this long -> speed 0 */
 #define S2_REVERSE_SETTLE_MS	60	/* brake before changing direction */
 #define S2_ENC_MAX_INTERVAL_MS	40	/* Part C row 3: one missed cycle */
-#define S2_ENC_DEBOUNCE_US	300	/* ignore edges closer than this */
-/* Largest believable count change in one read interval (x2 margin) */
+#define S2_ENC_DEBOUNCE_US	500	/* ignore edges closer than this: a real
+				   edge at top speed is ~1.5 ms apart */
+/* Largest believable count change in one read interval (x2 margin).
+   The formula needs the real counts per revolution: these motors' hall
+   encoders give hundreds per wheel turn, not the placeholder 20, which
+   would make every real reading look impossible (ENC_FAULT).  Until
+   S2_ENC_CPR is measured (S2-M01), use a loose bound that only catches
+   garbage; set S2_CPR_MEASURED to 1 after measuring. */
+#define S2_CPR_MEASURED		0
+#if S2_CPR_MEASURED
 #define S2_ENC_MAX_DELTA \
 	((S2_TOP_SPEED_MM_S * S2_ENC_MAX_INTERVAL_MS) / S2_UM_PER_COUNT * 2 + 2)
+#else
+#define S2_ENC_MAX_DELTA	200
+#endif
 
 /* =====================================================================
  *  5. mbf_motion_cmd -- one 32-bit packed word (VC -> Motion)
@@ -212,6 +238,10 @@ Inline UW s2_sts_pack(INT spd_l, INT spd_r, UW dist_mm, UINT state,
 	w |= ((UW)(stopped & 1u)) << S2_STS_STOP_SHIFT;
 	return w;
 }
+
+/* Telemetry slot for Buddy 1 (S1_SLOT_B2, 26 bits): status bits [25:0] */
+#define S2_TLM_MASK		0x03FFFFFFu
+#define S2_TLM_EVERY		5	/* cycles between slot updates (100 ms) */
 
 Inline INT  s2_sts_speed_l(UW w) { return s2_sext(w >> S2_STS_SPDL_SHIFT, 7); }
 Inline INT  s2_sts_speed_r(UW w) { return s2_sext(w >> S2_STS_SPDR_SHIFT, 7); }

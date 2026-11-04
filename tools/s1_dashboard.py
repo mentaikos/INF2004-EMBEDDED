@@ -9,6 +9,9 @@ Bit layouts match app_program/subsystem1/s1_codec.h (MSB-first, 4-bit header:
   pip install paho-mqtt
   python s1_dashboard.py --broker 192.168.1.10              # live view, Ctrl+C = summary
   python s1_dashboard.py --broker 192.168.1.10 --send START # START / STOP / E-STOP
+  python s1_dashboard.py --broker 192.168.1.10 --map forward=A,uturn=F,left=Z,right=W
+      barcode letter -> movement mapping (1 Nov), any order, or 4 letters
+      in the order forward,uturn,left,right:  --map A,F,Z,W
 """
 import argparse
 import csv
@@ -81,6 +84,45 @@ def decode_ack(data):
     return {"result": "FAILED" if b.get(1) else "INVALID", "id": b.get(6)}
 
 
+MAP_ORDER = ["forward", "uturn", "left", "right"]   # S1_MAP_xxx order in s1_codec.h
+MAP_ALIASES = {"forward": "forward", "f": "forward", "straight": "forward",
+               "uturn": "uturn", "u-turn": "uturn", "u": "uturn",
+               "left": "left", "l": "left", "right": "right", "r": "right"}
+
+
+def parse_map(text):
+    """'forward=A,uturn=F,left=Z,right=W' or 'A,F,Z,W' -> {'forward': 'A', ...}"""
+    parts = [s.strip() for s in text.replace(" ", ",").split(",") if s.strip()]
+    if len(parts) != 4:
+        raise SystemExit("--map needs 4 entries: forward, uturn, left, right")
+    m = {}
+    for i, part in enumerate(parts):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            k = MAP_ALIASES.get(k.strip().lower())
+            if k is None:
+                raise SystemExit(f"--map: unknown movement in '{part}' (use forward/uturn/left/right)")
+        else:
+            k, v = MAP_ORDER[i], part
+        v = v.strip().upper()
+        if len(v) != 1 or not ("A" <= v <= "Z"):
+            raise SystemExit(f"--map: '{v}' is not a letter A-Z")
+        m[k] = v
+    if sorted(m) != sorted(MAP_ORDER):
+        raise SystemExit("--map needs each of forward, uturn, left, right once")
+    if len(set(m.values())) != 4:
+        raise SystemExit("--map: the four letters must be different")
+    return m
+
+
+def encode_map(m, cmd_id):
+    """4 bytes: type(2) version(2) 11(2) id(6) forward(5) uturn(5) left(5) right(5)"""
+    v = (T_COMMAND << 30) | (VERSION << 28) | (0b11 << 26) | ((cmd_id & 0x3F) << 20)
+    for i, k in enumerate(MAP_ORDER):
+        v |= (ord(m[k]) - ord("A")) << (15 - 5 * i)
+    return v.to_bytes(4, "big")
+
+
 def encode_command(name, cmd_id):
     """2 bytes: type(2) version(2) command(2) id(6) pad(4)"""
     v = (T_COMMAND << 14) | (VERSION << 12) | (CMD[name] << 10) | ((cmd_id & 0x3F) << 4)
@@ -128,7 +170,7 @@ def on_message(client, userdata, msg):
     elif kind == "heartbeat":
         d = decode_heartbeat(data)
         print(f"[heartbeat] {len(data)} B  " + (str(d) if d else f"UNDECODABLE {data.hex()}"))
-    elif kind == "ack":
+    elif kind == "ack":   # a MAP is acked only if refused (INVALID / FAILED)
         d = decode_ack(data)
         print(f"[ack] {d if d else data.hex()}")
 
@@ -151,6 +193,7 @@ def main():
     ap.add_argument("--broker", required=True)
     ap.add_argument("--port", type=int, default=1883)
     ap.add_argument("--send", choices=list(CMD))
+    ap.add_argument("--map", help="barcode mapping, e.g. forward=A,uturn=F,left=Z,right=W")
     ap.add_argument("--id", type=int, help="command id 0..63 (default: random)")
     ap.add_argument("--log", default="s1_mqtt_log.csv")
     a = ap.parse_args()
@@ -165,12 +208,18 @@ def main():
     client.on_message = on_message
     client.connect(a.broker, a.port, keepalive=30)
 
-    if a.send:
+    if a.send or a.map:
         cmd_id = a.id if a.id is not None else random.randrange(64)
-        payload = encode_command(a.send, cmd_id)
+        if a.map:
+            m = parse_map(a.map)
+            payload = encode_map(m, cmd_id)
+            what = "MAP " + " ".join(f"{k}={m[k]}" for k in MAP_ORDER)
+        else:
+            payload = encode_command(a.send, cmd_id)
+            what = a.send
         client.loop_start()
         client.publish("robot/cmd", payload, qos=1).wait_for_publish()
-        print(f"[dashboard] sent {a.send} id={cmd_id} bytes={payload.hex()}")
+        print(f"[dashboard] sent {what} id={cmd_id} bytes={payload.hex()}")
         time.sleep(1)
         client.loop_stop()
         f.close()

@@ -44,27 +44,135 @@
 /* =====================================================================
  *  2. Mission behaviour (PLACEHOLDERS: tune on the track)
  * ===================================================================== */
-#define VC_CRUISE_CM_S		20	/* line following speed */
-#define VC_SLOW_CM_S		10	/* NFR12: <= 10 cm/s near an obstacle */
-#define VC_TURN_CM_S		15	/* wheel speed while turning */
+#define VC_CRUISE_CM_S		20	/* line following speed (27 Oct: 20 lost the line, slowed to 15;
+					   back to 20 after the start-up / sensor-wiring fixes;
+					   30 Oct: 30, then 25, then 22 as asked -- if it loses the line on
+					   curves, go back down or raise Buddy 3's KP) */
+#define VC_SLOW_CM_S		15	/* NFR12: <= 10 cm/s near an obstacle (30 Oct: 15 as asked -- above NFR12) */
+/* 30 Oct: slow zone.  While following, anything the ultrasonic sees
+   within this far caps the speed at VC_SLOW_CM_S, released again beyond
+   VC_SLOW_ZONE_CM + 10.  At 30 cm/s the robot otherwise reached the
+   S5_DETECT_CM (25) stop at full speed and coasted into its own turning
+   circle before the scan.  0 = off. */
+#define VC_SLOW_ZONE_CM		50
+#define VC_TURN_CM_S		15	/* wheel speed while turning (27 Oct: was 15) */
 #define VC_JUNCTION_ADV_CM	5	/* sensors are ahead of the axle */
 #define VC_JUNCTION_COOLDOWN_MS	800	/* same junction is not counted twice */
 #define VC_LINE_SEARCH_MS	3000	/* NFR18: LINE_SEARCH timeout */
 #define VC_SEARCH_STEP_DEG	30	/* sweep: +30, -60, +90, -120 ... */
 #define VC_SEARCH_STEPS		6
-#define VC_LOST_CHECK_MS	300	/* LINE_FOLLOW: still LOST this long after entry */
+#define VC_LOST_CHECK_MS	2500	/* LINE_FOLLOW: still LOST this long after entry
+					   (27 Oct: was 300.  > S3_LINE_LOST_MS, since S3
+					   is already LOST after idling centred: give the
+					   seek drift time to touch an edge first) */
 #define VC_HUMP_MAX_MS		5000	/* HUMP_END never came: carry on */
-#define VC_REVERSE_CM		10	/* NO_CLEAR: back off and rescan */
-#define VC_MAX_RESCANS		2	/* then FAULT (obstacle not passable) */
+#define VC_REVERSE_CM		10	/* NO_CLEAR: back off at least this, rescan */
+/* 30 Oct (video IMG_0775): on a corner the obstacle came into view only
+   ~6-8 cm away, inside the robot's own turning circle (16.9 cm, S5), so
+   the plan said REVERSE; two fixed 10 cm reverses were not enough and
+   the robot stopped (FAULT).  Now the reverse is long enough to put the
+   obstacle about VC_REVERSE_TO_CM away (from the profile's closest
+   point), between VC_REVERSE_CM and VC_REVERSE_MAX_CM. */
+#define VC_REVERSE_TO_CM	22
+#define VC_REVERSE_MAX_CM	30
+#define VC_MAX_RESCANS		3	/* then FAULT (obstacle not passable); 30 Oct: was 2 */
+/* After backing off, also turn this far before the rescan, towards the
+   side Obstacle Scan saw more room on (30 Oct): a straight reverse keeps
+   the same viewing angle, so a scan spoilt by the angle (round or slanted
+   obstacle, robot not square to it) failed again every time.  0 = only
+   reverse, as before. */
+#define VC_RESCAN_TURN_DEG	20
+#define VC_RESCAN_TURN_MAX_DEG	40	/* total for one obstacle (VC_MAX_RESCANS is 3) */
 #define VC_SCAN_TIMEOUT_MS	5000	/* SCAN_REQ -> PROFILE / NO_CLEAR */
 #define VC_APPROVE_WAIT_MS	500	/* approval -> S5 BYPASSING */
 #define VC_S5_READY_MS		1000	/* START -> S5 FORWARD_WATCH */
 #define VC_S5_SETTLE_MS		120	/* >= 2 S5 periods after s5_reset() */
-#define VC_STEP_TIMEOUT_MS	6000	/* one MOVE(d)/TURN without MOTION_DONE */
-#define VC_OBSTACLE_DEPTH_CM	15	/* assumed obstacle depth (not measurable) */
-#define VC_REJOIN_EXTRA_CM	15	/* drive this far past the expected line */
-#define VC_BYPASS_MIN_CM	10
+#define VC_STEP_TIMEOUT_MS	15000	/* one MOVE(d)/TURN without MOTION_DONE:
+				   127 cm at 10-20 cm/s needs ~7-13 s */
+#define VC_OBSTACLE_DEPTH_CM	10	/* assumed obstacle depth (not measurable;
+					   30 Oct: was 25, then 15; rejoined too late) */
+/* 30 Oct: drive past only until the robot's centre is this far beyond
+   the obstacle's back (+ half the robot length), then turn back to the
+   line -- was the whole robot length.  Turning on the spot there swings
+   the near front corner forward, past the obstacle, and the rear away
+   from it. */
+#define VC_PASS_MARGIN_CM	3
+#define VC_REJOIN_EXTRA_CM	4	/* drive this far past the expected line */
+#define VC_BYPASS_MIN_CM	20
+#define VC_BYPASS_EXTRA_CM	4	/* 30 Oct: was 12; with the obstacle's edge
+					   now measured, not doubled, 12 went too wide */
 #define VC_BYPASS_MAX_CM	60
+/* Rejoin after a bypass (28 Oct, curved track): the last bypass turn is
+   only this many degrees towards the line (not 90), so the robot meets
+   it at an angle and can turn onto it; the approach is up to
+   2 x sideways distance + VC_REJOIN_EXTRA_CM (a curve may have moved
+   the line further away), and if the line is still not found a normal
+   LINE_SEARCH follows instead of waiting for Obstacle Scan's time-out. */
+#define VC_REJOIN_TURN_DEG	60
+/* 30 Oct: when the line is found after the obstacle the robot no longer
+   turns a fixed VC_REJOIN_TURN_DEG back: it brings the axle onto the
+   line and turns towards the bypass side until the line sensors find
+   the line again, at most this far, then follows it.  Works on curves. */
+#define VC_ALIGN_MAX_DEG	150
+#define VC_ALIGN_CM_S		10	/* wheel speed of that turn: slower, so
+					   the sensors do not overshoot the line */
+/* 30 Oct: line not found on the rejoin (approach driven, or the turn
+   onto it lost it): look for it instead of the normal 3 s LINE_SEARCH.
+   Turn VC_REJOIN_LOOK_DEG to one side, back, the other side, back; no
+   line: reverse VC_REJOIN_BACK_CM and look again; VC_REJOIN_TRIES looks
+   in all, then FAULT.  Line seen within VC_REJOIN_ALONG_DEG of the
+   track's direction: just follow it, else turn onto it as above.
+   VC_REJOIN_TRIES is at most 3 (2-bit counter). */
+#define VC_REJOIN_TRIES		3
+#define VC_REJOIN_LOOK_DEG	60
+#define VC_REJOIN_BACK_CM	10
+#define VC_REJOIN_ALONG_DEG	30
+/* Smooth bypass (28-29 Oct): 1 = turn out only as far as needed to miss
+   the obstacle's near corner (45..90 deg, from the profile: tan(a) >=
+   (corner sideways + half robot + margin + VC_BYPASS_CORNER_CM) /
+   distance ahead), drive that diagonal, straighten, pass.  Less turning
+   = less turn error and less stop-start.  Too close for a diagonal ->
+   90 as before.  0 = the team's 90-degree path, exactly as on d4cd515.
+   The rejoin (VC_REJOIN_TURN_DEG, approach, LINE_SEARCH) is the same
+   either way. */
+#define VC_BYPASS_SMOOTH	1
+#define VC_BYPASS_CORNER_CM	5	/* extra room at the near corner */
+
+/* START needs the IMU calibrated and an IMU fault stops the mission
+   (design).  0 = bench mode ONLY: drive without a working IMU (no hump
+   height, no shock E-STOP).  Never 0 on the track or in a demo. */
+/* Bench only: START by itself this long after IDLE (0 = off, the
+   normal setting: START comes from the dashboard).  For a test build
+   without WiFi.  The car drives off on its own: keep it on the track. */
+#ifndef VC_AUTO_START_MS
+#define VC_AUTO_START_MS	0
+#endif
+
+#define VC_REQUIRE_IMU		1
+
+/* Obstacle Scan (Buddy 5, ultrasonic + servo).  1 = normal.  0 = bench
+   mode ONLY: Obstacle Scan's task is not started (its objects still are),
+   and the VC treats the path ahead as always clear -- NO obstacle
+   detection, NO stop for an obstacle (NFR1, NFR10, NFR12 not met).
+   For testing line following and motion while the ultrasonic is being
+   fixed.  Never 0 on the track with people or obstacles, or in a demo. */
+#define VC_USE_ULTRASONIC	1
+
+/* Bench test of straight driving (S2-M03), independent of the line
+   sensors: 0 = normal.  N (1..127) = on START, drive straight N cm with
+   heading hold, then stop and go back to IDLE.  Line events are ignored
+   during the move.  Keep 0 for normal runs. */
+#define VC_BENCH_MOVE_CM	0
+
+/* 1 Nov: barcode letter -> movement.  The mapping is NOT fixed in the
+   code: it arrives by MQTT before the demo (robot/cmd MAP, Buddy 1) and
+   can be sent again at any time.  Until it arrives, a junction after a
+   barcode goes straight on.  VC_BENCH_MAP is only for a no-WiFi bench
+   build: "" (normal) or 4 letters forward, U-turn, left, right (e.g.
+   "AFZW") used until an MQTT MAP replaces them. */
+#ifndef VC_BENCH_MAP
+#define VC_BENCH_MAP		""
+#endif
 
 /* Finish condition (assumption A9, still open): 0 = only EVT_MISSION_END
    ends the mission; N = the N-th junction ends it. */
@@ -165,6 +273,10 @@ IMPORT void	vc_test(void);
 IMPORT ER	vc_post(UINT type, UW payload);
 
 IMPORT UW	vc_get_status(void);	/* = g_vc_status */
+
+/* START guards; VC_R_NONE = START would be accepted.  verbose prints
+   each failing guard on the console. */
+IMPORT UINT	vc_start_check(BOOL verbose);
 IMPORT UINT	vc_get_faults(void);	/* SENSOR_FAULT bits of the last fault */
 
 typedef struct {
@@ -182,6 +294,12 @@ IMPORT void	vc_get_diag(VC_DIAG *d);
 
 /* Barcode command at a junction -> MOVE/TURN script; 0 = keep following */
 IMPORT INT	vc_nav_script(UINT nav, UW *cmds);
+
+/* 1 Nov: barcode letter -> movement mapping (set by MQTT MAP).
+   vc_set_map: letters[] = forward, U-turn, left, right ('A'..'Z').
+   vc_map_nav: NAV_xxx for a letter, or NAV_NONE if it is not mapped. */
+IMPORT void	vc_set_map(const char letters[4]);
+IMPORT UINT	vc_map_nav(char letter);
 
 /* Bypass round the obstacle on one side, from Obstacle Scan's profile:
    turn out, sideways, turn back, past it, turn towards the line.

@@ -58,7 +58,20 @@
 /* Console log task: prints the IMU status (no %f: fixed point).
    0 = no log task. */
 #define S4_PRI_LOG		19
-#define S4_LOG_MS		1000
+#define S4_LOG_MS		0
+/* 1 = print events only (state changes with pitch, HUMP_END height and
+   peak pitch, SHOCK, TURN measured by compass), even with S4_LOG_MS 0:
+   a few lines per hump / turn, no 1 s status line. */
+#define S4_LOG_EVENTS		1
+
+/* Tilt trace on the console (bench / tuning aid): while the robot is
+   tilted (|pitch| >= S4_TILT_MIN_DD or on a hump) print EVERY 10 ms
+   IMU sample, e.g.  s4: tilt t=+120ms pitch=+5.3 deg CLIMBING
+   10 ms is the fastest: the IMU reads the sensor every 10 ms.  The IMU
+   task only queues the samples; the low-priority log task prints them,
+   so printing never delays the 10 ms loop.  0 = off (before the demo). */
+#define S4_LOG_TILT		0
+#define S4_TILT_MIN_DD		10	/* 1.0 deg, in 0.1 deg */
 
 /* =====================================================================
  *  2. Pins
@@ -74,6 +87,11 @@
                  brake latency (S4-T02, Version C row 11)
      TIMING pin  high while one IMU cycle runs: period, jitter and WCET
                  (S4-T01) */
+/* SHOCK -> E-STOP.  1 = normal (FR27, NFR10).  0 = bench mode ONLY while
+   false shocks are being fixed: SHOCK is still detected, logged and
+   latched, but does not set E-STOP.  Never 0 on the track or in a demo. */
+#define S4_SHOCK_ESTOP		0
+
 #define S4_DEBUG_SHOCK_PIN	(-1)
 #define S4_DEBUG_TIMING_PIN	(-1)
 
@@ -130,6 +148,20 @@ IMPORT UB	s4_shock_seq(void);
 IMPORT BOOL	s4_shock_pending(void);
 IMPORT void	s4_shock_ack(UB seq);
 
+/* Telemetry slot (Buddy 1: S1_SLOT_B4 = 44 bits, frame bits 38..81),
+   set by the IMU task every 10 ms:
+	[43:13]  status word 0 (31 bits: state, pitch, heading, rate, cal)
+	[12:2]   status word 1 (11 bits: hump height, count, I2C fails)
+	[1]      shock, held 1 s (two 500 ms telemetry frames)
+	[0]      0, spare
+   The dashboard decodes it with the same shifts as s4_pack.h. */
+#define S4_TLM_SHOCK_HOLD_MS	1000
+Inline UD s4_tlm_slot(UW w0, UW w1, BOOL shock)
+{
+	return ((UD)(w0 & 0x7FFFFFFFu) << 13) | ((UD)(w1 & 0x7FFu) << 2) |
+	       ((UD)(shock ? 1u : 0u) << 1);
+}
+
 /* Diagnostics (console and tests; not sent) */
 typedef struct {
 	UW	wcet_us;	/* longest IMU cycle since start */
@@ -139,6 +171,7 @@ typedef struct {
 	UH	i2c_errors;	/* failed transfers (wraps) */
 	UH	evt_drops;	/* events mbf_vc_evt refused, or not bound */
 	UB	sensor_found;	/* LSM303DLHC answered at start-up */
+	H	last_peak_dd;	/* peak pitch of the last hump, 0.1 deg */
 } S4_DIAG;
 
 IMPORT void	s4_get_diag(S4_DIAG *d);
@@ -165,7 +198,7 @@ IMPORT void	s4_test_inject_shock(void);
  *     flg_events (IF-03).  REMOVE together with subsystem 3's
  *     consumer_task; nothing in the IMU uses it.
  * ===================================================================== */
-#define S4_EXAMPLE_MONITOR	1	/* 0 = objects only, no monitor task */
+#define S4_EXAMPLE_MONITOR	0	/* 0 = objects only, no monitor task */
 #define S4_PRI_MONITOR		18
 #define S4_ALARM_MS		2000	/* report anyway if nothing for 2 s */
 #define S4_LED_TOGGLE_REPORTS	6	/* pause/resume the LED every N reports */

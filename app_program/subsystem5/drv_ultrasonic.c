@@ -22,6 +22,30 @@ LOCAL UH echo_rise_us, echo_width_us;
 LOCAL UB echo_phase;                    /* 0 idle, 1 await rise, 2 await fall */
 LOCAL BOOL driver_ready;
 
+/* TEMPORARY bring-up aid (integration): once per 16 pings (~1 s) print
+   what the echo line did, so "no echo" can be told apart:
+     high = ECHO already high before the trigger (stuck high / wiring)
+     norise = no rising edge after the trigger (sensor not answering:
+              no power, TRIG/ECHO swapped, wrong Grove port)
+     nofall = rose but never fell inside 30 ms (nothing in range:
+              reported as FAR, not as a missing echo)
+     ok = complete echoes; w = last echo width in us (58 us per cm)
+   Set S5_DEBUG_PING to 0 once the sensor works. */
+#ifndef S5_DEBUG_PING
+#define S5_DEBUG_PING		0	/* 29 Oct: muted while debugging barcodes */
+#endif
+#if S5_DEBUG_PING
+LOCAL UH dbg_pings, dbg_high, dbg_norise, dbg_nofall, dbg_ok, dbg_w;
+
+LOCAL void dbg_report(void)
+{
+	if (++dbg_pings < 16) return;
+	tm_printf((UB*)"s5: pings=%d ok=%d norise=%d nofall=%d high=%d w=%dus\n",
+		  dbg_pings, dbg_ok, dbg_norise, dbg_nofall, dbg_high, dbg_w);
+	dbg_pings = dbg_high = dbg_norise = dbg_nofall = dbg_ok = 0;
+}
+#endif
+
 LOCAL void echo_callback(UINT pin, UINT events)
 {
 	UINT mask;
@@ -88,6 +112,7 @@ EXPORT UB drv_us_ping(void)
 	UINT mask, pulse_mask;
 	UW start, pulse;
 	UH width;
+	UB phase;
 	ER er;
 	if (!driver_ready) return S5_RANGE_NO_ECHO;
 	/* Task and GPIO dispatcher run on core 0: late ISR signals cannot race
@@ -99,10 +124,12 @@ EXPORT UB drv_us_ping(void)
 	out_w(S5_ECHO_INTR, S5_ECHO_EDGE_BITS);
 	if (gpio_get_val(S5_PIN_ECHO)) {
 		ISpinUnlock(&echo_lock, mask);
+#if S5_DEBUG_PING
+		dbg_high++; dbg_report();
+#endif
 		return S5_RANGE_NO_ECHO;         /* stuck/old high is not a new echo */
 	}
 	start = in_w(TIMER_TIMERAWL);
-	echo_phase = 1;
 	ISpinUnlock(&echo_lock, mask);
 	/* Tick is 10 ms: use the hardware timer for this short 10-us pulse. */
 	DI(pulse_mask);
@@ -111,11 +138,38 @@ EXPORT UB drv_us_ping(void)
 	while ((UW)(in_w(TIMER_TIMERAWL) - pulse) < 10u) { }
 	gpio_set_val(S5_PIN_TRIG, 0);
 	EI(pulse_mask);
+	/* Arm only now.  TRIG and ECHO share one Grove cable, so the trigger
+	   can couple a short blip onto ECHO; armed before TRIG, that blip was
+	   timed as a ~10 us "echo" = NEAR with nothing in front.  A real echo
+	   rises only after the 8-cycle 40 kHz burst (~200 us), so nothing real
+	   is missed.  Drop edges latched during TRIG before arming. */
+	ISpinLock(&echo_lock, &mask);
+	out_w(S5_ECHO_INTR, S5_ECHO_EDGE_BITS);
+	echo_width_us = 0;
+	echo_phase = 1;
+	ISpinUnlock(&echo_lock, mask);
 	er = tk_wai_sem(sem_echo, 1, 30);
 	ISpinLock(&echo_lock, &mask);
 	width = echo_width_us;
+	phase = echo_phase;		/* 1 = never rose, 2 = rose, never fell */
+#if S5_DEBUG_PING
+	if (er == E_OK) { dbg_ok++; dbg_w = width; }
+	else if (phase == 1) dbg_norise++;
+	else dbg_nofall++;
+#endif
 	echo_phase = 0;
 	ISpinUnlock(&echo_lock, mask);
+#if S5_DEBUG_PING
+	dbg_report();
+#endif
+	/* Rose but did not fall inside the window: the sensor answered and is
+	   still timing, i.e. nothing within its range (the HC-SR04 holds ECHO
+	   high for ~38 ms when no sound comes back).  That is open space, not
+	   a fault: it was NO_ECHO, so 3 in a row (e.g. facing out of the track
+	   on a bend) raised a sensor fault and E-STOP.  A sensor that does not
+	   answer at all (norise) or is stuck high (high) is still NO_ECHO. */
+	if (er != E_OK && phase == 2)
+		return S5_RANGE_FAR;
 	/* Timeout rounding may return late: enforce the physical time window. */
 	if (er != E_OK || (UW)(in_w(TIMER_TIMERAWL) - start) > S5_ECHO_TIMEOUT_US)
 		return S5_RANGE_NO_ECHO;

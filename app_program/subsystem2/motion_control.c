@@ -27,13 +27,15 @@
  *	  - MOVE(d)/TURN target reached -> brake, MOTION_DONE, STOPPED
  *	  - a new MOVE/TURN pre-empts the current one; SPEED_LIMIT only
  *	    changes the cap.
- *	The task never blocks except in its tick wait, and sends to other
- *	tasks with TMO_POL only.
+ *	The task never blocks except in its tick wait (and Buddy 1's
+ *	telemetry-slot mutex, a few us every 100 ms, priority inheritance),
+ *	and sends to other tasks with TMO_POL only.
  */
 
 #include "subsystem2.h"
 #include "motor_driver.h"
 #include "encoder.h"
+#include "../subsystem1/subsystem1.h"	/* telemetry slot */
 #include <tk/syslib.h>
 
 /* ---------------------------------------------------------------------
@@ -58,6 +60,9 @@ typedef struct {
 	UH	settle_ms;	/* braking before a direction change */
 	UH	progress;	/* counts since the current MOVE(d)/TURN */
 	UB	want_dir;	/* direction wanted by the state */
+	UB	hist[S2_SPEED_WIN];	/* counts in each of the last cycles */
+	UB	hdt[S2_SPEED_WIN];	/* length of each of those cycles, ms */
+	UB	hi;		/* next slot in hist */
 } WHEEL;
 
 EXPORT volatile UW	g_motion_status;
@@ -77,6 +82,7 @@ LOCAL volatile UB	faults;		/* latched FAULT_* bits */
 LOCAL volatile UH	evt_drops;	/* events the VC buffer refused */
 LOCAL volatile ID	vc_mbf;		/* bound by motion_bind_vc() */
 LOCAL volatile ID	fault_flg;
+LOCAL UB		tlm_div;	/* telemetry slot divider */
 
 /* ---------------------------------------------------------------------
  *  Small helpers
@@ -252,31 +258,41 @@ LOCAL void handle_cmd(UW w)
 /* ---------------------------------------------------------------------
  *  Encoders -> speed, distance, progress, encoder fault
  * --------------------------------------------------------------------- */
+/* TEMPORARY bring-up prints (see debug_print below); 0 when done */
+#ifndef S2_DEBUG
+#define S2_DEBUG		1
+#endif
+#if S2_DEBUG
+LOCAL UH	dbg_maxdt, dbg_late, dbg_mindt = 0xFFFFu;	/* cycle timing */
+#endif
 LOCAL ENC_SNAPSHOT	enc_prev;
 LOCAL UW		cycle_prev_us;
 
 LOCAL void update_speed(UINT w, UINT d, UINT period_us, INT dt_ms)
 {
 	WHEEL	*p = &wh[w];
-	INT	est;
+	UINT	k, sum = 0, tsum = 0;
 
+	/* Speed = counts in the last S2_SPEED_WIN cycles divided by the time
+	   those cycles REALLY took (~100 ms).  Dividing by the nominal 20 ms
+	   per cycle gave wrong speeds whenever a cycle ran early or late. */
+	(void)period_us;
+	p->hist[p->hi] = (UB)(d > 255u ? 255u : d);
+	p->hdt[p->hi]  = (UB)(dt_ms > 255 ? 255 : (dt_ms < 1 ? 1 : dt_ms));
+	p->hi = (UB)((p->hi + 1u) % S2_SPEED_WIN);
+	for (k = 0; k < S2_SPEED_WIN; k++) {
+		sum  += p->hist[k];
+		tsum += p->hdt[k];
+	}
+	if (tsum == 0) tsum = S2_SPEED_WIN * S2_PERIOD_MS;
+	p->meas = (H)s2_clamp((INT)(sum * S2_UM_PER_COUNT / tsum),
+			      0, 2 * S2_TOP_SPEED_MM_S);
+
+	/* time since the last pulse, for the stall check */
 	if (d > 0) {
 		p->since_ms = 0;
-		if (period_us != ENC_PERIOD_NONE && period_us > 0) {
-			est = (INT)(S2_UM_PER_COUNT * 1000u / period_us);
-		} else {
-			est = (INT)(d * S2_UM_PER_COUNT) / dt_ms;  /* um/ms = mm/s */
-		}
-		p->meas = (H)((p->meas + est) / 2);
-	} else {
-		if (p->since_ms <= 0xFFFFu - (UH)dt_ms) p->since_ms += (UH)dt_ms;
-		if (p->since_ms >= S2_ZERO_SPEED_MS) {
-			p->meas = 0;
-		} else {
-			/* no edge yet: the speed is at most one count per since_ms */
-			est = (INT)(S2_UM_PER_COUNT / p->since_ms);
-			if (p->meas > est) p->meas = (H)est;
-		}
+	} else if (p->since_ms <= 0xFFFFu - (UH)dt_ms) {
+		p->since_ms += (UH)dt_ms;
 	}
 }
 
@@ -302,6 +318,11 @@ LOCAL void read_encoders(void)
 
 	cycle_prev_us = now;
 	if (dt_ms <= 0) dt_ms = 1;
+#if S2_DEBUG
+	if (dt_ms > dbg_maxdt) dbg_maxdt = (UH)dt_ms;
+	if (dt_ms < dbg_mindt) dbg_mindt = (UH)dt_ms;
+	if (dt_ms > S2_ENC_MAX_INTERVAL_MS && dbg_late < 0xFFFFu) dbg_late++;
+#endif
 
 	encoder_snapshot(&s);
 	dl = encoder_delta(enc_prev.cnt.c[ENC_LEFT],  s.cnt.c[ENC_LEFT]);
@@ -323,11 +344,11 @@ LOCAL void read_encoders(void)
 	if (mf.dir_r == wh[1].want_dir) wh[1].progress += (UH)dr;
 
 	/* ...but a speed from an over-long interval is not used. */
+	/* A late cycle (> 40 ms) is reported as ENC_FAULT (Part C row 3),
+	   but the speed is still updated from the counts and the real time:
+	   skipping it left a stale speed and the PI control then swung. */
 	late = (dt_ms > S2_ENC_MAX_INTERVAL_MS);
-	if (late) {
-		raise_fault(FAULT_ENC);
-		return;
-	}
+	if (late) raise_fault(FAULT_ENC);
 	update_speed(ENC_LEFT,  dl, s.period_us[ENC_LEFT],  dt_ms);
 	update_speed(ENC_RIGHT, dr, s.period_us[ENC_RIGHT], dt_ms);
 }
@@ -351,8 +372,12 @@ LOCAL void set_targets(void)
 	case S2_ST_SPEED_FOLLOW:
 		v = imin(cruise_mm_s, limit_mm_s);
 		split = v * steer / S2_STEER_FULL;	/* + steer: left faster */
-		wh[0].target = (H)s2_clamp(v + split, 0, S2_TOP_SPEED_MM_S);
-		wh[1].target = (H)s2_clamp(v - split, 0, S2_TOP_SPEED_MM_S);
+		/* 28 Oct (jiahao16, Fine-Tuning 4bea17a, merged 30 Oct): the
+		   outer wheel keeps the cruise speed and the inner one slows by
+		   twice the split (same turn rate as +-split), so the robot
+		   slows down in a curve instead of speeding up */
+		wh[0].target = (H)s2_clamp(split < 0 ? v + 2 * split : v, 0, S2_TOP_SPEED_MM_S);
+		wh[1].target = (H)s2_clamp(split > 0 ? v - 2 * split : v, 0, S2_TOP_SPEED_MM_S);
 		break;
 
 	case S2_ST_MOVE_DISTANCE:
@@ -399,8 +424,8 @@ LOCAL void drive_wheel(UINT w, INT dt_ms)
 		p->ramp = 0;
 	} else if (tgt > p->ramp + S2_ACCEL_MM_S_PER_CYC) {
 		p->ramp = (H)(p->ramp + S2_ACCEL_MM_S_PER_CYC);
-	} else if (tgt < p->ramp - S2_ACCEL_MM_S_PER_CYC) {
-		p->ramp = (H)(p->ramp - S2_ACCEL_MM_S_PER_CYC);
+	} else if (tgt < p->ramp - S2_DECEL_MM_S_PER_CYC) {
+		p->ramp = (H)(p->ramp - S2_DECEL_MM_S_PER_CYC);
 	} else {
 		p->ramp = (H)tgt;
 	}
@@ -437,11 +462,63 @@ LOCAL BOOL stalled(void)
 	for (w = 0; w < 2; w++) {
 		if (wh[w].duty > 0 && wh[w].active_ms >= S2_STALL_ARM_MS &&
 		    wh[w].since_ms >= S2_STALL_MS) {
+			tm_printf((UB*)"s2: STALL %s wheel: duty %d/1000 for %d ms,"
+				  " no encoder pulse for %d ms (counts L=%d R=%d)\n",
+				  w ? "RIGHT" : "LEFT", wh[w].duty, wh[w].active_ms,
+				  wh[w].since_ms, enc_prev.cnt.c[ENC_LEFT],
+				  enc_prev.cnt.c[ENC_RIGHT]);
 			return TRUE;
 		}
 	}
 	return FALSE;
 }
+
+/* TEMPORARY bring-up aid: once a second while a wheel is driven (or
+   turned by hand), print
+   the raw 8-bit encoder counters, duty and measured speed.  If duty is
+   high but the counts do not move, the wheel is not turning (power) or
+   the encoder is not reaching GP0 / GP7.  Set S2_DEBUG to 0 afterwards. */
+#if S2_DEBUG
+LOCAL void debug_print(void)
+{
+	static UB n, lv_prev, tog_l, tog_r, cl_prev, cr_prev;
+	static W  tot_l, tot_r;		/* counts since boot, for measuring CPR */
+	static UH last;
+	UB	lv;
+
+	/* Running totals (the 8-bit counters wrap every 256 counts) */
+	tot_l += (UB)(enc_prev.cnt.c[ENC_LEFT]  - cl_prev);
+	tot_r += (UB)(enc_prev.cnt.c[ENC_RIGHT] - cr_prev);
+	cl_prev = enc_prev.cnt.c[ENC_LEFT];
+	cr_prev = enc_prev.cnt.c[ENC_RIGHT];
+
+	/* Raw encoder pin levels, sampled every 20 ms: if a level toggles
+	   while the count stays 0, the signal arrives but the interrupt does
+	   not count it; if it never toggles, no signal reaches the pin. */
+	lv = (UB)((gpio_get_val(S2_PIN_ENC_L) ? 1u : 0u) |
+		  (gpio_get_val(S2_PIN_ENC_R) ? 2u : 0u));
+	if ((lv ^ lv_prev) & 1u) { if (tog_l < 255) tog_l++; }
+	if ((lv ^ lv_prev) & 2u) { if (tog_r < 255) tog_r++; }
+	lv_prev = lv;
+
+	if (++n < 1000 / S2_PERIOD_MS) return;
+	n = 0;
+	/* quiet while stopped, unless a wheel was turned by hand */
+	if (wh[0].duty == 0 && wh[1].duty == 0 && last == enc_prev.cnt.both &&
+	    tog_l == 0 && tog_r == 0) return;
+	last = enc_prev.cnt.both;
+	tm_printf((UB*)"s2: st=%d L(GP%d) total=%d pin=%d toggles=%d duty=%d"
+		  " v=%dmm/s | R(GP%d) total=%d pin=%d toggles=%d duty=%d v=%dmm/s"
+		  " | cycle %d..%dms late=%d faults=0x%x\n",
+		  mf.state,
+		  S2_PIN_ENC_L, tot_l, lv & 1u, tog_l, wh[0].duty, wh[0].meas,
+		  S2_PIN_ENC_R, tot_r, (lv >> 1) & 1u, tog_r, wh[1].duty,
+		  wh[1].meas, dbg_mindt, dbg_maxdt, dbg_late, faults);
+	dbg_maxdt = 0;
+	dbg_mindt = 0xFFFFu;
+	tog_l = tog_r = 0;
+}
+#endif
 
 /* ---------------------------------------------------------------------
  *  Status word (one aligned 32-bit store, single writer)
@@ -461,6 +538,16 @@ LOCAL void publish_status(void)
 	g_motion_status = s2_sts_pack(mf.dir_l ? -sl : sl, mf.dir_r ? -sr : sr,
 				      dist_mm, mf.state, mf.dir_l, mf.dir_r,
 				      stopped);
+
+	/* Buddy 1's telemetry slot (IF-S1-01): the tribunal's 26 bits =
+	   speed_l 7 | speed_r 7 | distance 12 = status bits [25:0].  Every
+	   5th cycle (100 ms) is enough for a 500 ms publisher; the call
+	   takes Buddy 1's mutex (priority inheritance) for a few us only. */
+	if (++tlm_div >= S2_TLM_EVERY) {
+		tlm_div = 0;
+		(void)s1_tlm_set_slot(S1_SLOT_B2,
+				      (UD)(g_motion_status & S2_TLM_MASK));
+	}
 }
 
 /* ---------------------------------------------------------------------
@@ -527,6 +614,9 @@ LOCAL void motion_cycle(void)
 
 	/* 6. status */
 	publish_status();
+#if S2_DEBUG
+	debug_print();
+#endif
 }
 
 /* ---------------------------------------------------------------------

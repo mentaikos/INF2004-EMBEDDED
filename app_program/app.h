@@ -86,6 +86,7 @@ IMPORT void subsystem5_test(void);
 #define EVT_STOP			12	/*                         (S1) */
 #define EVT_MOTION_DONE			13	/* finished command        (S2) */
 #define EVT_MISSION_END			14	/* finish trigger (A9)     (VC) */
+#define EVT_BARCODE			15	/* letter 'A'..'Z' [7:0], read right->left [8] (S3, 1 Nov) */
 
 #define EVT_TYPE_MASK		0xFu
 #define EVT_PAYLOAD_SHIFT	4
@@ -120,6 +121,7 @@ IMPORT void subsystem5_test(void);
 #define FAULT_BARCODE_ERR	0x0020u	/* S3 Line & Barcode: read failed */
 #define FAULT_LINE_TIMEOUT	0x0040u	/* VC LINE_SEARCH / S5 rejoin > 3 s */
 #define FAULT_SHOCK		0x0080u	/* S4 IMU: shock latch */
+#define FAULT_IR_RIGHT		0x0100u	/* S3: barcode IR not calibrated */
 
 /* Print a readable message if a kernel call failed (negative error code) */
 #define CHECK(er, what)							\

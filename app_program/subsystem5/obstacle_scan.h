@@ -5,7 +5,14 @@
 #include "scan_types.h"
 
 #define S5_ANGLES              25
-#define S5_CENTRE              12       /* 30 + 5*12 = 90 degrees */
+#define S5_CENTRE              12       /* index 12 = 90 degrees (straight ahead) */
+/* Sweep: 90 +- S5_SWEEP_HALF_DEG, spread over the 25 bins.  Coarse scan
+ * = bins 0, 6, 12, 18, 24.  60 = 30..150 deg (original, 5-deg bins,
+ * coarse every 30 deg).  45 = 45..135 (3.75-deg bins, coarse every
+ * 22.5 deg).  30 = 60..120 (2.5-deg bins, coarse every 15 deg).
+ * Narrower = less servo swing, but less of each side is seen, so a
+ * bypass is approved less often (more REVERSE / NO_CLEAR). */
+#define S5_SWEEP_HALF_DEG      60       /* 28 Oct: 45 never cleared a 30 cm box */
 #define S5_SCAN_BYTES          22       /* 25 * 7 = 175 bits */
 #define S5_ALL_ANGLES          0x01ffffffu
 #define S5_RANGE_NEAR          0        /* returned echo below 5 cm */
@@ -14,18 +21,76 @@
 #define S5_RANGE_UNSCANNED     3
 #define S5_RANGE_MIN_CM        5
 #define S5_RANGE_MAX_CM        100
-#define S5_DETECT_CM           20
+#define S5_DETECT_CM           25       /* 28 Oct: was 20; the robot coasted to
+					   ~16 cm, inside its own turning circle
+					   (16.8 cm), so every first scan said
+					   REVERSE */
+/* After a stop, an obstacle IN THE ROBOT'S PATH (within half the required
+ * width of the centre line) this close is planned around, not driven
+ * into: without this, the rescan after a 10 cm reverse saw it beyond
+ * S5_DETECT_CM, answered CONTINUE, and the robot drove back into it. */
+#define S5_PLAN_CM             50       /* > detect + 2 reverses of 10 cm */
+/* While going around (BYPASSING), stop for something this close only.
+ * The bypass turns sweep the sensor across the obstacle being passed
+ * (~19 cm away): with S5_DETECT_CM that re-detected it mid-turn, the VC
+ * re-planned from a half-turned heading and the robot clipped the box.
+ * Anything within S5_CRITICAL_MM still E-STOPs. */
+#define S5_BYPASS_DETECT_CM    10
 #define S5_CRITICAL_MM         50       /* TODO validate brake distance */
 #define S5_ECHO_TIMEOUT_US     30000u
+#define S5_ECHO_MIN_US         100u     /* < 1.7 cm: below the HC-SR04P's 2 cm
+					   minimum, so a glitch, not an echo */
 #define S5_INVALID_LIMIT       3
 #define S5_RETRY_LIMIT         3
 #define S5_RETRY_MS            1000
 #define S5_PLAN_TTL_MS         1000
-#define S5_RECOVERY_MS         3000
+#define S5_RECOVERY_MS         30000    /* rejoin drive (up to 127 cm at 10 cm/s)
+					   + up to 3 left/right looks with reverses
+					   (30 Oct: was 20000); < 32 s (16-bit ms) */
 #define S5_LINE_FRESH_MS       120
 #define S5_LINE_CONFIRM_MS     120
 #define S5_PROFILE_BAND_CM     10
 #define S5_BEAM_ALLOW_DEG      15
+/* Side gap check (side_clearance): only things within the strip the robot
+ * drives through while passing count -- up to the obstacle face band +
+ * this far ahead (obstacle depth + robot length).  Nothing there: the side
+ * is taken as this wide (more than any bypass needs). */
+#define S5_PASS_DEPTH_MM       450
+#define S5_SIDE_FREE_MM        600
+/* Missing echoes (30 Oct: robot not square to a round bottle).  A round
+ * or angled surface sends the sound off sideways, so some angles of a
+ * sweep get no echo although nothing is there.  Before, ONE missing echo
+ *   - on a side made that side 0 cm free,
+ *   - straight ahead (90 deg) made every plan REVERSE,
+ *   - anywhere, with the obstacle > S5_DETECT_CM away and off the
+ *     robot's path, gave no plan at all (NO_CLEAR),
+ * and backing up straight changed nothing, so the robot faulted.
+ * Now up to this many missing echoes per side are passed over, the
+ * straight-ahead reading only has to be known when the obstacle is in
+ * front, and CONTINUE allows this many in the whole sweep (the forward
+ * watch still stops for anything that comes within S5_DETECT_CM). */
+#define S5_SIDE_NOECHO_OK      1
+#define S5_CONT_NOECHO_OK      2
+/* Forward watch on curves (task_scan.c): while following, point the
+ * sensor into the bend, so a box placed on a curve is seen ahead of the
+ * robot instead of beside the straight-ahead beam.  The bend is taken
+ * from Line & Barcode's steering, averaged over ~0.5 s: look angle =
+ * (|average| - S5_WATCH_DEADBAND) x S5_WATCH_GAIN degrees, at most
+ * S5_WATCH_MAX_DEG; inside the deadband the sensor stays centred, so
+ * normal weaving on a straight does not move it.
+ * Geometry: on a circle of radius R, a box on the line d cm ahead is
+ * asin(d / 2R) off the robot's heading -- 30 deg for R = 25 cm and
+ * d = 25 cm, 39 deg for R = 20 cm.  The beam is about +-15 deg wide.
+ * Tune on the track: tight circle -> raise GAIN; the sensor jumping
+ * about on straights -> raise DEADBAND. */
+#define S5_WATCH_MAX_DEG       40
+#define S5_WATCH_DEADBAND      10       /* 30 Oct: was 8 (straight-line weave) */
+#define S5_WATCH_GAIN          3
+/* Only look into a bend once the steering has stayed the same way this
+ * long (30 Oct): a straight-line weave changes side sooner, a bend does
+ * not.  Raise it if the sensor still moves on straights; lower it if it
+ * turns into bends too late. */
+#define S5_WATCH_HOLD_MS       600
 
 /* PLACEHOLDERS: measure assembled footprint and motion/sensing errors. */
 #define S5_ROBOT_WIDTH_MM      160
@@ -100,7 +165,7 @@ typedef struct {
 	UB line_fresh : 1;
 	UB index : 5;
 	UB near_count : 2;
-	UB reserved : 1;
+	UB crit_seen : 1;       /* one critical reading, waiting for a second */
 	UB invalid_count : 2;
 	UB retries : 2;
 	UB line_count : 2;

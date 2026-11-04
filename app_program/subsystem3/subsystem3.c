@@ -2,7 +2,7 @@
  *	subsystem3.c
  *	Subsystem 3 -- Line & Barcode: creates its objects, starts its task,
  *	and holds the code the task calls:
- *	  1. IR sensor driver and the 1 ms Barcode ADC ISR
+ *	  1. IR sensor driver and the Barcode ADC ISR (every 0.25 ms)
  *	  2. line tracker (6.3 region A)
  *	  3. barcode edge detector and decoder (6.3 region B)
  *	  4. packed status word and MQTT telemetry slot (minimum-bit)
@@ -24,7 +24,7 @@
 /*
  *	Why a hardware timer and not a cyclic handler: the kernel tick is
  *	CNF_TIMER_PERIOD (config/config.h), so a cyclic handler cannot run
- *	every 1 ms unless the whole system ticks at 1 ms.  The RP2040 TIMER
+ *	every 0.25 ms.  The RP2040 TIMER
  *	counts microseconds and has four alarms; nothing else uses alarm 3.
  *
  *	Why not the kernel's "adc" driver: it waits on an event flag for
@@ -58,24 +58,32 @@ LOCAL volatile UB	bc_head;	/* written only by the ISR */
 LOCAL volatile UB	bc_tail;	/* written only by the task */
 LOCAL volatile UH	bc_samples;	/* ISR only, wraps */
 LOCAL volatile UH	bc_overflows;	/* ISR only, wraps */
-LOCAL volatile UH	bc_ms;		/* ISR only: ms counter, the edge clock */
+LOCAL volatile UH	bc_ticks;	/* ISR only: tick counter, the edge clock */
 LOCAL volatile UH	bc_raw;		/* ISR only: latest sample, 12 bits */
 LOCAL volatile UB	bc_edges_on;	/* task only: detector running */
 LOCAL S3_BC_DET	bc_det;		/* ISR only while bc_edges_on */
+#if S3_DEBUG_BARCODE >= 3
+LOCAL volatile UH	cap_buf[S3_CAP_LEN];	/* ISR writes, task reads when done */
+LOCAL volatile UH	cap_trig;	/* task only */
+LOCAL volatile UB	cap_go;		/* task only: new capture number */
+LOCAL volatile UB	cap_done;	/* ISR only: last capture finished */
+LOCAL UB		cap_seen;	/* ISR only */
+LOCAL UH		cap_n, cap_dec;	/* ISR only */
+#endif
 LOCAL UW	bc_next_us;	/* ISR only: when the next alarm is due */
 
 /* Stop the compiler (and the bus) reordering ring accesses */
 #define MEMORY_BARRIER()	__asm__ volatile ("dmb" ::: "memory")
 
 /*
- * Barcode ADC ISR, every 1 ms.  Interrupt context: no waiting, no
- * tm_printf.  About 3 us including the conversion.  Only edges go into
- * bc_ring, so a barcode needs ~30 entries, not one per millisecond.
+ * Barcode ADC ISR, every S3_SAMPLE_US.  Interrupt context: no waiting,
+ * no tm_printf.  About 3 us including the conversion.  Only edges go
+ * into bc_ring, so a barcode needs ~30 entries, not one per sample.
  */
 LOCAL void bc_alarm_handler(UINT intno)
 {
 	UW	now;
-	UH	ms;
+	UH	tick;
 	UB	head;
 	UH	value;
 	INT	edge;
@@ -99,8 +107,24 @@ LOCAL void bc_alarm_handler(UINT intno)
 	while ((in_w(ADC_CS) & ADC_CS_READY) == 0) ;
 	value = (UH)(in_w(ADC_RESULT) & 0x0FFF);
 	bc_raw = value;
-	ms = (UH)(bc_ms + 1);
-	bc_ms = ms;
+#if S3_DEBUG_BARCODE >= 3
+	if (cap_go != cap_done) {
+		if (cap_seen != cap_go) {	/* new capture armed */
+			cap_seen = cap_go;
+			cap_n = 0;
+			cap_dec = S3_CAP_DECIM - 1;
+		}
+		if (cap_n > 0 || value > cap_trig) {
+			if (++cap_dec >= S3_CAP_DECIM) {
+				cap_dec = 0;
+				cap_buf[cap_n++] = value;
+				if (cap_n >= S3_CAP_LEN) cap_done = cap_go;
+			}
+		}
+	}
+#endif
+	tick = (UH)(bc_ticks + 1);
+	bc_ticks = tick;
 	bc_samples++;
 
 	edge = bc_edges_on ? s3_bc_detect(&bc_det, value) : S3_EDGE_NONE;
@@ -110,7 +134,7 @@ LOCAL void bc_alarm_handler(UINT intno)
 			bc_overflows++;		/* task too slow: lose it */
 		} else {
 			bc_ring[head & (S3_BC_RING_SIZE - 1)] =
-				(UH)((ms & S3_EDGE_TIME_MASK) |
+				(UH)((tick & S3_EDGE_TIME_MASK) |
 				     ((edge == S3_EDGE_TO_BLACK) ? S3_EDGE_BLACK : 0));
 			MEMORY_BARRIER();	/* data before the index */
 			bc_head = (UB)(head + 1);
@@ -139,10 +163,10 @@ EXPORT ER drv_ir_init(void)
 
 	bc_head = bc_tail = 0;
 	bc_samples = bc_overflows = 0;
-	bc_ms = 0;
+	bc_ticks = 0;
 	bc_edges_on = FALSE;
 
-	/* 1 ms sampling interrupt.  EnableInt acts on the NVIC of the core
+	/* Sampling interrupt.  EnableInt acts on the NVIC of the core
 	   that calls it: this runs from usermain(), on core 0. */
 	dint.intatr = TA_HLNG;
 	dint.inthdr = (FP)bc_alarm_handler;
@@ -193,9 +217,28 @@ EXPORT INT drv_ir_read_edges(UH *buf, INT max)
 	return n;
 }
 
-EXPORT UH drv_ir_ms(void)
+#if S3_DEBUG_BARCODE >= 3
+EXPORT void drv_ir_cap_arm(UH trigger)
 {
-	return bc_ms;
+	cap_trig = trigger;
+	MEMORY_BARRIER();		/* trigger before the go */
+	cap_go = (UB)(cap_go + 1);
+}
+
+EXPORT BOOL drv_ir_cap_ready(void)
+{
+	return cap_done == cap_go;
+}
+
+EXPORT const volatile UH *drv_ir_cap_buf(void)
+{
+	return cap_buf;
+}
+#endif
+
+EXPORT UH drv_ir_ticks(void)
+{
+	return bc_ticks;
 }
 
 EXPORT UH drv_ir_last_raw(void)
@@ -206,6 +249,11 @@ EXPORT UH drv_ir_last_raw(void)
 EXPORT UH drv_ir_threshold(void)
 {
 	return bc_det.thr_on;
+}
+
+EXPORT UH drv_ir_white(void)
+{
+	return (UH)(bc_det.white_q8 >> 8);
 }
 
 EXPORT UH drv_ir_sample_count(void)
@@ -222,22 +270,29 @@ EXPORT UH drv_ir_overflow_count(void)
 /*  2. Line tracker (6.3 region A)                                    */
 /* ------------------------------------------------------------------ */
 /*
- *	  L C   meaning (1 = black)          state
- *	  0 1   line under the centre        ON_LINE
- *	  1 0   line under the left sensor   DRIFTING  (steer left)
- *	  1 1   two cycles in a row          JUNCTION  -> VC
- *	  0 0   more than 150 ms             LINE_LOST -> VC
- *	A shorter white gap keeps the current state (NFR21).  LINE_LOST ends
- *	only when the centre sensor sees the line again (LINE_FOUND -> VC),
- *	matching the VC's LINE_SEARCH, which sweeps until IR_CENTER is black.
+ *	The line runs BETWEEN the two sensors (IR_LEFT left of the tape,
+ *	IR_CENTER right of it):
  *
- *	With no right-hand line sensor, "both white" means the line has moved
- *	right of the centre sensor or has gone.  While the 150 ms filter runs
- *	(gap = 1) the tracker steers back towards where the line was last
- *	seen.  Coming straight from ON_LINE that is usually a right curve, so
- *	it steers right with a limited correction (right-curve mitigation,
- *	8.3).  gap is in the status for the VC; Motion Control's steering
- *	byte has no "slow down" input, so the reduced speed is [DECIDE].
+ *	  L C   meaning (1 = black)                 state      steering
+ *	  0 0   line between the sensors (normal)   ON_LINE    gentle, towards
+ *	                                                       the last side
+ *	  1 0   robot drifted right: line under L   DRIFTING   left
+ *	  0 1   robot drifted left:  line under C   DRIFTING   right
+ *	  1 1   two cycles in a row: crossing line  JUNCTION   0  -> VC
+ *	  0 0   more than 500 ms                    LINE_LOST  -> VC
+ *
+ *	Both white is the normal centred case, so "lost" cannot be read from
+ *	one sample.  Instead the tracker always drifts gently towards the
+ *	side the line was last touched: if the line is between the sensors
+ *	the robot weaves and touches an edge again within a few hundred ms,
+ *	and if the line slipped outside it is brought back under that sensor.
+ *	Only when nothing is touched for > S3_LINE_LOST_MS (well over the
+ *	150 ms of NFR21) is the line lost; the steering sign then tells the
+ *	VC's LINE_SEARCH which side to sweep first.  LINE_FOUND: either
+ *	sensor sees the line again.
+ *
+ *	A learnt trim cancels the robot's own pull to one side, so the
+ *	corrections themselves can stay gentle (see S3_TRIM_STEP).
  */
 
 EXPORT void s3_line_init(S3_LINE *lt)
@@ -247,18 +302,19 @@ EXPORT void s3_line_init(S3_LINE *lt)
 	lt->white_ms   = 0;
 	lt->pos        = 0;
 	lt->steer      = 0;
-	lt->gap        = FALSE;
+	lt->gap        = 0;
+	lt->side_left  = 0;	/* no side yet: drift right first */
+	lt->trim       = 0;
+	lt->bend       = 0;
 }
 
 /* Coarse line position from the two sensors (FR9): - = left, + = right */
-LOCAL B line_position(UINT left, UINT center, B last_pos)
+LOCAL B line_position(UINT left, UINT center, UINT side_left)
 {
-	if (left && !center) return -2;		/* well to the left */
-	if (left && center)  return -1;		/* centre and a bit left */
-	if (center)          return 0;		/* centred */
-	if (last_pos < 0)    return -2;		/* white: went off to the left */
-	if (last_pos > 0)    return last_pos;	/* ... or to the right */
-	return 1;		/* white straight from centred: limited right */
+	if (left && !center) return -2;		/* line under the left sensor */
+	if (center && !left) return 2;		/* line under the right sensor */
+	if (left && center)  return 0;		/* crossing line */
+	return side_left ? -1 : 1;		/* between: towards the last side */
 }
 
 EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
@@ -266,15 +322,21 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	INT	ev = S3_LEV_NONE;
 	B	pos;
 	W	steer;
+	UW	white;
 
 	left   = left   ? 1 : 0;
 	center = center ? 1 : 0;
 
+	if (left != center) lt->side_left = left;	/* which edge touched */
+
 	if (!left && !center) {
-		/* Both white: only a gap until it lasts more than 150 ms */
+		/* Both white: centred, unless nothing is touched for long */
 		lt->both_black = 0;
-		lt->white_ms = (UB)((lt->white_ms + dt_ms > 255) ?
-				    255 : lt->white_ms + dt_ms);
+		white = lt->white_ms + dt_ms;
+		lt->white_ms = (UH)((white > 0xFFFF) ? 0xFFFF : white);
+		if (lt->state == S3_LINE_DRIFTING || lt->state == S3_LINE_JUNCTION) {
+			lt->state = S3_LINE_ON_LINE;	/* back between the sensors */
+		}
 		if (lt->white_ms > S3_LINE_LOST_MS && lt->state != S3_LINE_LOST) {
 			lt->state = S3_LINE_LOST;
 			ev = S3_LEV_LINE_LOST;
@@ -283,11 +345,11 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 		lt->white_ms = 0;
 
 		if (lt->state == S3_LINE_LOST) {
-			if (center) {
-				lt->state      = S3_LINE_ON_LINE;
-				lt->both_black = left;
-				ev = S3_LEV_LINE_FOUND;
-			}
+			/* Either sensor on the line again */
+			lt->state      = (left && center) ? S3_LINE_JUNCTION
+							  : S3_LINE_DRIFTING;
+			lt->both_black = (left && center) ? 1 : 0;
+			ev = S3_LEV_LINE_FOUND;
 		} else if (left && center) {
 			if (lt->both_black < 3) lt->both_black++;
 			if (lt->both_black >= S3_JUNCTION_SAMPLES &&
@@ -297,26 +359,62 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 			}
 		} else {
 			lt->both_black = 0;
-			lt->state = center ? S3_LINE_ON_LINE : S3_LINE_DRIFTING;
+			lt->state = S3_LINE_DRIFTING;
 		}
 	}
 
-	/* PD steering on the coarse position.  No correction when centred
-	   (6.3: steering = 0), nor at a junction, where the left sensor is
-	   on the crossing line rather than on ours. */
-	pos = line_position(left, center, lt->pos);
-	if ((lt->state == S3_LINE_ON_LINE && pos == 0) ||
-	    lt->state == S3_LINE_JUNCTION) {
+	/* PD steering on the coarse position.  None at a junction, where
+	   both sensors are on the crossing line. */
+	pos = line_position(left, center, lt->side_left);
+
+	/* Learn the robot's own pull: a NEW touch of one edge moves the
+	   trim towards that side (left edge = it drifted right) */
+	if (pos == -2 && lt->pos != -2 && lt->trim > -S3_TRIM_MAX) {
+		lt->trim = (B)(lt->trim - S3_TRIM_STEP);
+	} else if (pos == 2 && lt->pos != 2 && lt->trim < S3_TRIM_MAX) {
+		lt->trim = (B)(lt->trim + S3_TRIM_STEP);
+	}
+
+	/* Bend: grows while the curve keeps the line on one side */
+	if (lt->state == S3_LINE_JUNCTION) {
+		lt->bend = 0;
+	} else if ((pos == 2 && lt->bend < 0) || (pos == -2 && lt->bend > 0)) {
+		lt->bend = 0;			/* other edge: overshoot, restart */
+	} else if ((pos == 2 || pos == -2) && pos == lt->pos) {
+		lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP : -S3_BEND_STEP));
+	} else if (!left && !center) {
+		/* 30 Oct: restores the 28 Oct straight-line fix (lost in a
+		   merge): grow while white only once a curve is confirmed */
+		if (lt->bend >= S3_BEND_CURVE || lt->bend <= -S3_BEND_CURVE) {
+			/* in a curve: the line slipped outside the sensor */
+			if (lt->white_ms > S3_BEND_WHITE_MS) {
+				lt->bend = (B)(lt->bend + (lt->bend > 0 ? S3_BEND_STEP
+								  : -S3_BEND_STEP));
+			}
+		} else if (lt->bend > 0) {
+			lt->bend--;		/* straight: a short touch fades */
+		} else if (lt->bend < 0) {
+			lt->bend++;
+		}
+	}
+	if (lt->bend >  S3_BEND_MAX) lt->bend =  S3_BEND_MAX;
+	if (lt->bend < -S3_BEND_MAX) lt->bend = -S3_BEND_MAX;
+
+	if (lt->state == S3_LINE_JUNCTION) {
 		steer = 0;
+	} else if (!left && !center) {
+		steer = (W)S3_STEER_SEEK * pos + lt->trim + lt->bend; /* pos = +-1 */
 	} else {
-		steer = (W)S3_STEER_KP * pos + (W)S3_STEER_KD * (pos - lt->pos);
+		steer = (W)S3_STEER_KP * pos + (W)S3_STEER_KD * (pos - lt->pos)
+			+ lt->trim + lt->bend;
 	}
 	if (steer >  S3_STEER_MAX) steer =  S3_STEER_MAX;
 	if (steer < -S3_STEER_MAX) steer = -S3_STEER_MAX;
 
 	lt->pos   = pos;
 	lt->steer = (B)steer;
-	lt->gap   = (!left && !center && lt->state != S3_LINE_LOST) ? 1 : 0;
+	lt->gap   = (!left && !center && lt->white_ms > S3_LINE_GAP_MS &&
+		     lt->state != S3_LINE_LOST) ? 1 : 0;
 	return ev;
 }
 
@@ -335,15 +433,13 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
  *	  MEASURING --bc_ring overflow--> WAIT_FOR_BAR     (discard, 8.3)
  */
 
-/* FR29: payload -> command, as in the project write-up (A..D).  If the
-   official track barcodes differ, only this table needs to change. */
-EXPORT const S3_BC_ENTRY s3_bc_table[] = {
-	{ "A", NAV_LEFT },
-	{ "B", NAV_RIGHT },
-	{ "C", NAV_STRAIGHT },
-	{ "D", NAV_U_TURN },
-};
-EXPORT const INT s3_bc_table_len = sizeof(s3_bc_table) / sizeof(s3_bc_table[0]);
+/* 1 Nov: the letter -> movement mapping is not in the code: it comes by
+   MQTT (robot/cmd MAP) to the Vehicle Controller.  The decoder accepts
+   every single letter A..Z, read in either direction. */
+EXPORT BOOL s3_bc_is_letter(const char *text)
+{
+	return text[0] >= 'A' && text[0] <= 'Z' && text[1] == '\0';
+}
 
 /* Code 39, bar-space-bar-...-bar, 1 = wide (ISO/IEC 16388) */
 EXPORT const S3_C39 s3_code39[] = {
@@ -363,30 +459,43 @@ EXPORT const INT s3_code39_len = sizeof(s3_code39) / sizeof(s3_code39[0]);
 /*  Decoding                                                          */
 /* ------------------------------------------------------------------ */
 
-/* One character from 9 widths: the 3 widest are wide.  Returns the
-   character, or -1.  *narrow_max gets the widest narrow element. */
-LOCAL INT decode_char(const UB *w, UB *narrow_max)
+/* Mark the nwide widest of the elements first, first+2, ... (count of
+   them) as wide.  Returns their pattern bits; *wide_min / *narrow_max
+   get the narrowest wide and the widest narrow element of the set. */
+LOCAL UH pick_wide(const UH *w, INT first, INT count, INT nwide,
+		   UH *wide_min, UH *narrow_max)
 {
 	UH	pattern = 0;
-	UB	wide_min = 0xFF, nmax = 0;
 	INT	i, k, best;
 
-	for (k = 0; k < 3; k++) {
+	*wide_min = 0xFFFF;
+	*narrow_max = 0;
+	for (k = 0; k < nwide; k++) {
 		best = -1;
-		for (i = 0; i < 9; i++) {
+		for (i = first; i < first + 2 * count; i += 2) {
 			if (pattern & (0x100 >> i)) continue;
 			if (best < 0 || w[i] > w[best]) best = i;
 		}
 		pattern |= 0x100 >> best;
-		if (w[best] < wide_min) wide_min = w[best];
+		if (w[best] < *wide_min) *wide_min = w[best];
 	}
-	for (i = 0; i < 9; i++) {
-		if (!(pattern & (0x100 >> i)) && w[i] > nmax) nmax = w[i];
+	for (i = first; i < first + 2 * count; i += 2) {
+		if (!(pattern & (0x100 >> i)) && w[i] > *narrow_max) {
+			*narrow_max = w[i];
+		}
 	}
-	*narrow_max = nmax;
+	return pattern;
+}
 
-	/* Wide and narrow must be clearly apart, or it is noise */
-	if ((UH)wide_min * 10 < (UH)nmax * S3_BC_MIN_RATIO_X10) return -1;
+/* Wide and narrow must be clearly apart, or it is noise */
+LOCAL BOOL apart(UH wide_min, UH narrow_max)
+{
+	return (UW)wide_min * 10 >= (UW)narrow_max * S3_BC_MIN_RATIO_X10;
+}
+
+LOCAL INT find_char(UH pattern)
+{
+	INT	i;
 
 	for (i = 0; i < s3_code39_len; i++) {
 		if (s3_code39[i].pattern == pattern) return s3_code39[i].ch;
@@ -394,12 +503,53 @@ LOCAL INT decode_char(const UB *w, UB *narrow_max)
 	return -1;
 }
 
+/* One character from 9 widths.  Returns the character, or -1.
+   *narrow_max gets the widest narrow space (for the gap check).
+
+   Bars and spaces are classified SEPARATELY: the sensor's spot is
+   wider than a narrow bar, so a bar measures shorter or longer than a
+   space of the same printed width depending on where the thresholds
+   sit.  Ranking all 9 together let that bias push a narrow element
+   above a wide one, or wide and narrow closer than 1.5x (BARCODE_ERR 1
+   on a good barcode).  Every Code 39 character is either 2 wide bars +
+   1 wide space, or 0 wide bars + 3 wide spaces ($ / + %). */
+LOCAL INT decode_char(const UH *w, UH *narrow_max)
+{
+	UH	bars, spaces;
+	UH	bw, bn, sw, sn;
+	INT	c;
+
+	/* 2 wide bars + 1 wide space: every letter, digit and '*' */
+	bars   = pick_wide(w, 0, 5, 2, &bw, &bn);
+	spaces = pick_wide(w, 1, 4, 1, &sw, &sn);
+	if (apart(bw, bn) && apart(sw, sn)) {
+		c = find_char(bars | spaces);
+		if (c >= 0) {
+			*narrow_max = sn;
+			return c;
+		}
+	}
+
+	/* 0 wide bars + 3 wide spaces: the widest bar is not much wider
+	   than the others */
+	spaces = pick_wide(w, 1, 4, 3, &sw, &sn);
+	(void)pick_wide(w, 0, 5, 1, &bw, &bn);
+	if (apart(sw, sn) && !apart(bw, bn)) {
+		c = find_char(spaces);
+		if (c >= 0) {
+			*narrow_max = sn;
+			return c;
+		}
+	}
+	return -1;
+}
+
 /* Decode in the order given.  Returns payload length or -S3_BCERR_xxx */
-LOCAL INT decode_dir(const UB *w, INT n, char *text, INT max)
+LOCAL INT decode_dir(const UH *w, INT n, char *text, INT max)
 {
 	INT	k = (n + 1) / 10;	/* characters incl. start and stop */
 	INT	i, c, len = 0;
-	UB	nmax;
+	UH	nmax;
 
 	if (n < 29 || (n + 1) % 10 != 0) return -S3_BCERR_FRAME;
 
@@ -408,7 +558,7 @@ LOCAL INT decode_dir(const UB *w, INT n, char *text, INT max)
 		if (c < 0) return -S3_BCERR_PATTERN;
 
 		/* the gap before this character must look narrow */
-		if (i > 0 && w[10 * i - 1] > 3 * (INT)nmax) return -S3_BCERR_PATTERN;
+		if (i > 0 && w[10 * i - 1] > 3 * (UW)nmax) return -S3_BCERR_PATTERN;
 
 		if (i == 0 || i == k - 1) {
 			if (c != '*') return -S3_BCERR_FRAME;
@@ -421,11 +571,13 @@ LOCAL INT decode_dir(const UB *w, INT n, char *text, INT max)
 	return len;
 }
 
-EXPORT INT s3_code39_decode(const UB *w, INT n, char *text, INT max)
+EXPORT INT s3_code39_decode_rev(const UH *w, INT n, char *text, INT max,
+				BOOL *rev_out)
 {
-	UB	rev[S3_BC_MAX_ELEMS];
+	UH	rev[S3_BC_MAX_ELEMS];
 	INT	i, fwd, bwd;
 
+	*rev_out = FALSE;
 	if (n > S3_BC_MAX_ELEMS) return -S3_BCERR_FRAME;
 
 	fwd = decode_dir(w, n, text, max);
@@ -435,28 +587,24 @@ EXPORT INT s3_code39_decode(const UB *w, INT n, char *text, INT max)
 	   can only decode one way round) */
 	for (i = 0; i < n; i++) rev[i] = w[n - 1 - i];
 	bwd = decode_dir(rev, n, text, max);
-	if (bwd >= 0) return bwd;
+	if (bwd >= 0) {
+		*rev_out = TRUE;
+		return bwd;
+	}
 
 	/* Report the more specific error: right patterns, wrong framing */
 	return (fwd < bwd) ? fwd : bwd;
 }
 
-EXPORT UB s3_bc_lookup(const char *text)
+EXPORT INT s3_code39_decode(const UH *w, INT n, char *text, INT max)
 {
-	INT		i;
-	const char	*a, *b;
+	BOOL	rev;
 
-	for (i = 0; i < s3_bc_table_len; i++) {
-		a = s3_bc_table[i].text;
-		b = text;
-		while (*a != '\0' && *a == *b) { a++; b++; }
-		if (*a == '\0' && *b == '\0') return s3_bc_table[i].cmd;
-	}
-	return NAV_NONE;
+	return s3_code39_decode_rev(w, n, text, max, &rev);
 }
 
 /* ------------------------------------------------------------------ */
-/*  Edge detector (runs in the Barcode ADC ISR, every 1 ms)           */
+/*  Edge detector (runs in the Barcode ADC ISR, every sample)         */
 /* ------------------------------------------------------------------ */
 
 LOCAL UH clamp_adc(W v)
@@ -468,20 +616,32 @@ LOCAL void det_thresholds(S3_BC_DET *d)
 {
 	W white = (W)(d->white_q8 >> 8);
 
-	d->thr_on  = clamp_adc(white + S3_BC_DELTA_ON);
-	d->thr_off = clamp_adc(white + S3_BC_DELTA_OFF);
+	W amp   = (W)d->amp;
+
+	/* 1 Nov: part of the way from white to the black actually seen */
+	d->thr_on  = clamp_adc(white + amp * S3_BC_ON_PCT / 100);
+	d->thr_off = clamp_adc(white + amp * S3_BC_OFF_PCT / 100);
 }
 
 EXPORT void s3_bc_det_init(S3_BC_DET *d, UH white)
 {
 	d->white_q8 = (UW)white << 8;
 	d->black    = FALSE;
+	d->amp      = S3_BC_AMP_INIT;
+	if (d->amp < S3_BC_AMP_MIN) d->amp = S3_BC_AMP_MIN;
 	det_thresholds(d);
 }
 
 EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 {
 	if (d->black) {
+		/* 1 Nov: learn how dark the bars are (only grows) */
+		W lv = (W)adc - (W)(d->white_q8 >> 8);
+
+		if (lv > (W)d->amp) {
+			d->amp = (UH)lv;
+			det_thresholds(d);
+		}
 		if (adc < d->thr_off) {
 			d->black = FALSE;
 			return S3_EDGE_TO_WHITE;
@@ -489,7 +649,7 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 	} else if (adc > d->thr_on) {
 		d->black = TRUE;
 		return S3_EDGE_TO_BLACK;
-	} else if (adc < d->thr_off) {
+	} else if ((W)adc < (W)(d->white_q8 >> 8) + S3_BC_WHITE_BAND) {
 		/* Clearly white: follow the surface brightness slowly */
 		d->white_q8 += (W)(((W)adc << 8) - (W)d->white_q8)
 			       >> S3_BC_WHITE_SHIFT;
@@ -502,19 +662,31 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 /*  Decoder state machine (task, one call per edge)                   */
 /* ------------------------------------------------------------------ */
 
-/* Times are the ISR's 16-bit ms counter, which wraps every 65 s:
-   compare signed differences (valid while they are < 32 s apart) */
-LOCAL H ms_after(UH t, UH since)
+/* Times are the ISR's 16-bit tick counter, which wraps every 16 s:
+   compare signed differences (valid while they are < 8 s apart) */
+LOCAL H t_after(UH t, UH since)
 {
 	return (H)(UH)(t - since);
+}
+
+/* No edge for this long ends the read: S3_BC_EDGE_TIMEOUT_MS, longer
+   when the robot is slow (see subsystem3.h) */
+LOCAL UH edge_timeout(const S3_BC *bc)
+{
+	UW	t = (UW)bc->run_max * S3_BC_TIMEOUT_WIDTHS;
+
+	if (t < S3_MS(S3_BC_EDGE_TIMEOUT_MS)) t = S3_MS(S3_BC_EDGE_TIMEOUT_MS);
+	if (t > S3_MS(S3_BC_SLOW_TIMEOUT_MS)) t = S3_MS(S3_BC_SLOW_TIMEOUT_MS);
+	return (UH)t;
 }
 
 EXPORT void s3_bc_init(S3_BC *bc)
 {
 	bc->state    = S3_BC_WAIT_FOR_BAR;
 	bc->black    = 0;
-	bc->last_ms  = 0;
-	bc->until_ms = 0;
+	bc->last_t   = 0;
+	bc->start_t  = 0;
+	bc->until_t  = 0;
 	bc->hold     = 0;
 	bc->run_max  = 0;
 	bc->n        = 0;
@@ -525,13 +697,15 @@ LOCAL void clear_result(const S3_BC *bc, S3_BC_RESULT *res)
 	res->cmd      = NAV_NONE;
 	res->ch       = 0;
 	res->err      = 0;
+	res->rev      = 0;
 	res->elements = bc->n;
 }
 
-LOCAL INT end_read(S3_BC *bc, UH now_ms, S3_BC_RESULT *res)
+LOCAL INT end_read(S3_BC *bc, UH now, S3_BC_RESULT *res)
 {
 	char	text[8];
 	INT	len;
+	BOOL	rev;
 
 	clear_result(bc, res);
 	bc->state = S3_BC_WAIT_FOR_BAR;
@@ -541,7 +715,7 @@ LOCAL INT end_read(S3_BC *bc, UH now_ms, S3_BC_RESULT *res)
 	}
 
 	bc->state = S3_BC_DECODING;
-	len = s3_code39_decode(bc->elem, bc->n, text, sizeof(text));
+	len = s3_code39_decode_rev(bc->elem, bc->n, text, sizeof(text), &rev);
 	if (len < 0) {
 		bc->state = S3_BC_WAIT_FOR_BAR;
 		res->err = (UB)-len;
@@ -549,8 +723,9 @@ LOCAL INT end_read(S3_BC *bc, UH now_ms, S3_BC_RESULT *res)
 	}
 
 	res->ch  = (len > 0) ? text[0] : 0;
-	res->cmd = s3_bc_lookup(text);
-	if (res->cmd == NAV_NONE) {
+	res->rev = rev ? 1 : 0;
+	res->cmd = NAV_NONE;		/* 1 Nov: the VC maps the letter */
+	if (!s3_bc_is_letter(text)) {
 		bc->state = S3_BC_WAIT_FOR_BAR;
 		res->err = S3_BCERR_UNKNOWN;
 		return S3_BEV_BARCODE_ERR;
@@ -558,11 +733,11 @@ LOCAL INT end_read(S3_BC *bc, UH now_ms, S3_BC_RESULT *res)
 
 	/* Cool-down: the sensor is ignored for 0.5 s (NFR23) */
 	bc->state    = S3_BC_EMIT_NAV_CMD;
-	bc->until_ms = (UH)(now_ms + S3_BC_COOLDOWN_MS);
+	bc->until_t  = (UH)(now + S3_MS(S3_BC_COOLDOWN_MS));
 	return S3_BEV_NAV_CMD;
 }
 
-EXPORT INT s3_bc_abort(S3_BC *bc, UH now_ms, S3_BC_RESULT *res)
+EXPORT INT s3_bc_abort(S3_BC *bc, UH now, S3_BC_RESULT *res)
 {
 	INT	ev = S3_BEV_NONE;
 
@@ -576,11 +751,11 @@ EXPORT INT s3_bc_abort(S3_BC *bc, UH now_ms, S3_BC_RESULT *res)
 	bc->state    = S3_BC_WAIT_FOR_BAR;
 	bc->n        = 0;
 	bc->hold     = 1;	/* the rest of this barcode is not a start */
-	bc->until_ms = (UH)(now_ms + S3_BC_EDGE_TIMEOUT_MS);
+	bc->until_t  = (UH)(now + edge_timeout(bc));
 	return ev;
 }
 
-EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t_ms, S3_BC_RESULT *res)
+EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t, S3_BC_RESULT *res)
 {
 	UH	w;
 
@@ -590,12 +765,13 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t_ms, S3_BC_RESULT *res)
 	case S3_BC_WAIT_FOR_BAR:
 		if (bc->hold) {
 			/* After an abort: every edge restarts the quiet wait */
-			bc->until_ms = (UH)(t_ms + S3_BC_EDGE_TIMEOUT_MS);
+			bc->until_t = (UH)(t + edge_timeout(bc));
 		} else if (black) {
 			/* First bar: start measuring */
 			bc->state   = S3_BC_MEASURING;
 			bc->black   = 1;
-			bc->last_ms = t_ms;
+			bc->last_t  = t;
+			bc->start_t = t;
 			bc->run_max = 0;
 			bc->n       = 0;
 		}
@@ -605,13 +781,12 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t_ms, S3_BC_RESULT *res)
 		/* Two edges to the same level, or more elements than any of
 		   our barcodes: edges were lost, so this read is no good */
 		if ((UINT)black == bc->black || bc->n >= S3_BC_MAX_ELEMS) {
-			return s3_bc_abort(bc, t_ms, res);
+			return s3_bc_abort(bc, t, res);
 		}
-		w = (UH)(t_ms - bc->last_ms);	/* the element just finished */
-		if (w > S3_BC_WIDTH_MAX) w = S3_BC_WIDTH_MAX;	/* cannot happen */
-		bc->elem[bc->n++] = (UB)w;
-		if (w > bc->run_max) bc->run_max = (UB)w;
-		bc->last_ms = t_ms;
+		w = (UH)(t - bc->last_t);	/* the element just finished */
+		bc->elem[bc->n++] = w;
+		if (w > bc->run_max) bc->run_max = w;
+		bc->last_t  = t;
 		bc->black   = (UB)black;
 		return S3_BEV_NONE;
 
@@ -620,36 +795,38 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t_ms, S3_BC_RESULT *res)
 	}
 }
 
-EXPORT INT s3_bc_poll(S3_BC *bc, UH now_ms, S3_BC_RESULT *res)
+EXPORT INT s3_bc_poll(S3_BC *bc, UH now, S3_BC_RESULT *res)
 {
 	H	quiet;
 
 	switch (bc->state) {
 	case S3_BC_EMIT_NAV_CMD:
-		if (ms_after(now_ms, bc->until_ms) >= 0) {
+		if (t_after(now, bc->until_t) >= 0) {
 			bc->state = S3_BC_WAIT_FOR_BAR;
 		}
 		return S3_BEV_NONE;
 
 	case S3_BC_WAIT_FOR_BAR:
-		if (bc->hold && ms_after(now_ms, bc->until_ms) >= 0) {
+		if (bc->hold && t_after(now, bc->until_t) >= 0) {
 			bc->hold = 0;
 		}
 		return S3_BEV_NONE;
 
 	case S3_BC_MEASURING:
-		/* Edges drained this cycle may be newer than now_ms: then
+		/* Edges drained this cycle may be newer than now: then
 		   quiet is negative, i.e. not quiet */
-		quiet = ms_after(now_ms, bc->last_ms);
+		quiet = t_after(now, bc->last_t);
 
 		/* Quiet zone after a whole number of characters: done.  An
 		   inter-character gap is narrow, so it never gets here. */
 		if (!bc->black && bc->n >= 29 && (bc->n + 1) % 10 == 0 &&
-		    quiet > 2 * (H)bc->run_max) {
-			return end_read(bc, now_ms, res);
+		    (W)quiet > 2 * (W)bc->run_max) {
+			return end_read(bc, now, res);
 		}
-		if (quiet >= S3_BC_EDGE_TIMEOUT_MS) {
-			return end_read(bc, now_ms, res);
+		/* 30 Oct: otherwise the read stays open S3_BC_READ_MAX_MS from
+		   its first bar, then ends (a partial read is discarded) */
+		if (t_after(now, bc->start_t) >= (H)S3_MS(S3_BC_READ_MAX_MS)) {
+			return end_read(bc, now, res);
 		}
 		return S3_BEV_NONE;
 
@@ -799,7 +976,7 @@ EXPORT ER subsystem3_start(void)
 	ID	tid;
 	ER	er;
 
-	/* Sensors and the 1 ms Barcode ADC ISR.  Done here, in usermain(),
+	/* Sensors and the Barcode ADC ISR.  Done here, in usermain(),
 	   so the interrupt is enabled on core 0. */
 	er = drv_ir_init();
 	if (er < E_OK) {

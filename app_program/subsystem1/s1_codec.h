@@ -30,6 +30,13 @@
  *	  id(6): 0..63, changes with every new command (duplicate filter) |
  *	  pad(4)
  *
+ *	MAP (type 2, command code 11), 4 bytes, dashboard -> robot
+ *	(1 Nov: barcode letter -> movement mapping, sent before the demo)
+ *	  header(4) | command(2) = 11 | id(6) |
+ *	  forward(5) | U-turn(5) | left(5) | right(5)
+ *	  each letter 0..25 = 'A'..'Z' (26..31 invalid); the four letters
+ *	  must be different.  32 bits exactly, no padding.
+ *
  *	ACK (type 3), 2 bytes, robot -> dashboard, only on rejection
  *	  header(4) | result(1): 0 INVALID, 1 FAILED | echoed id(6) | pad(5)
  */
@@ -51,6 +58,7 @@
 
 #define S1_HB_LEN		5
 #define S1_CMD_LEN		2
+#define S1_MAP_LEN		4	/* MAP command (1 Nov) */
 #define S1_ACK_LEN		2
 
 #define S1_B2_BITS		26
@@ -67,7 +75,16 @@
 #define S1_CMD_START		0	/* 00 */
 #define S1_CMD_STOP		1	/* 01 */
 #define S1_CMD_ESTOP		2	/* 10 */
-#define S1_CMD_INVALID		3	/* 11, also returned for bad messages */
+#define S1_CMD_INVALID		3	/* 11 in a 2-byte command, also returned for bad messages */
+#define S1_CMD_MAP		4	/* 11 in a 4-byte message: letter mapping (1 Nov) */
+
+/* MAP: order of the four letters in the message */
+#define S1_MAP_FORWARD		0
+#define S1_MAP_UTURN		1
+#define S1_MAP_LEFT		2
+#define S1_MAP_RIGHT		3
+#define S1_MAP_COUNT		4
+#define S1_MAP_LETTER_BITS	5
 
 #define S1_ACK_INVALID		0
 #define S1_ACK_FAILED		1
@@ -89,5 +106,16 @@ int s1_encode_ack(uint8_t out[S1_ACK_LEN], int result, uint8_t id);
 /* Returns S1_CMD_START / STOP / ESTOP and writes *id, or S1_CMD_INVALID
  * if the message is not a valid command of this version. */
 int s1_decode_command(const uint8_t *buf, int len, uint8_t *id);
+
+/* 1 Nov: a MAP message.  Returns S1_CMD_MAP and writes *id and
+ * letters[S1_MAP_FORWARD..S1_MAP_RIGHT] as 'A'..'Z', or S1_CMD_INVALID
+ * (wrong type/version/length/code, a letter > 'Z', or a letter used
+ * twice).  s1_decode_command() still handles the 2-byte commands. */
+int s1_decode_map(const uint8_t *buf, int len, uint8_t *id,
+		  char letters[S1_MAP_COUNT]);
+
+/* Builds a MAP message (dashboard side, and the tests). Returns S1_MAP_LEN. */
+int s1_encode_map(uint8_t out[S1_MAP_LEN], uint8_t id,
+		  const char letters[S1_MAP_COUNT]);
 
 #endif /* S1_CODEC_H */

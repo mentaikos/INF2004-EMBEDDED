@@ -46,13 +46,37 @@ IMPORT void	lsm303_bus_init(void);
 /* TRUE if a device answers at addr (bring-up scan) */
 IMPORT BOOL	lsm303_probe(UB addr);
 
-/* Bus init + check IRA_REG_M = 0x48 + configure both sensors.  TRUE = OK */
+/* Bus init, find the chip, configure it.  TRUE = the accelerometer works
+   (with or without a known magnetometer, see lsm303_chip()). */
 IMPORT BOOL	lsm303_init(void);
+
+/* Which chip lsm303_init() found */
+#define LSM303_CHIP_NONE	0
+#define LSM303_CHIP_DLHC	1	/* LSM303DLHC: accel + mag */
+#define LSM303_CHIP_AGR		2	/* LSM303AGR:  accel + mag (other registers) */
+#define LSM303_CHIP_ACC_ONLY	3	/* accel works, magnetometer unknown */
+#define LSM303_CHIP_D		4	/* LSM303D: accel + mag, one address */
+IMPORT UINT	lsm303_chip(void);
+IMPORT const char *lsm303_chip_name(void);
+
+/* IDs read by the last lsm303_init() (0 = no answer), for the fault log:
+   accel WHO_AM_I_A (0x0F), DLHC IRA_REG_M (0x0A), AGR WHO_AM_I_M (0x4F),
+   LSM303D WHO_AM_I at 0x1E (0x0F) */
+IMPORT void	lsm303_last_ids(UB *acc_id, UB *ira, UB *agr_id, UB *d_id);
 
 /* Read both sensors (robot axes).  s->ok = FALSE on any I2C error. */
 IMPORT void	lsm303_read(IMU_SAMPLE *s);
 
+/* Bring-up diagnostics: idle line levels (bit 0 SDA, bit 1 SCL), bus
+   scan, single register read */
+IMPORT UINT	lsm303_line_levels(void);
+IMPORT INT	lsm303_scan(UB *found, INT max);
+IMPORT BOOL	lsm303_read_reg(UB addr, UB reg, UB *val);
+
 /* Diagnostics: transfers that failed (NACK / time-out), wraps */
 IMPORT UH	lsm303_error_count(void);
+
+/* Diagnostics: times SDA was found stuck low and clocked free (wraps) */
+IMPORT UH	lsm303_bus_recoveries(void);
 
 #endif /* DRV_LSM303_H */
