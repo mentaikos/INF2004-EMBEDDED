@@ -1050,7 +1050,25 @@ LOCAL void tick(void)
 				script_run(&c, 1);
 			}
 #else
-			enter_follow();
+			/* 4 Nov: follow at once only if the line sensors see
+			   the line.  START used to go straight to LINE_FOLLOW,
+			   so after a STOP part-way through a turn (junction,
+			   search, bypass) the robot drove off at cruise speed
+			   pointing the wrong way, and only began searching
+			   VC_LOST_CHECK_MS (2.5 s, ~50 cm) later.  Now it
+			   searches first (LINE_SEARCH: turns +-30, 60, 90 deg
+			   until the sensors cross the line, then follows; no
+			   line within 3 s = FAULT).  A robot placed centred on
+			   the line also reads "not seen" (both sensors white,
+			   line between them), so it makes one small search
+			   turn, crosses the line and follows from there. */
+			if (line_seen()) {
+				enter_follow();
+			} else {
+				tm_printf((UB*)"vc: START: line not under the sensors,"
+					  " searching for it first\n");
+				enter_search();
+			}
 #endif
 		} else if (since(vc.t_state) > VC_S5_READY_MS) {
 			tm_printf((UB*)"vc: START abandoned: obstacle scan not"

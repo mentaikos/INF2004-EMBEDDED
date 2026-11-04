@@ -46,7 +46,7 @@ LOCAL UH		bc_overflows_seen;
 
 /* State kept between cycles that is not in lt or bc (task only) */
 LOCAL struct {
-	UB	last_nav : 2;	/* NAV_xxx; 1 Nov: always 0, the VC maps letters */
+	UB	last_nav : 2;	/* 4 Nov: barcodes decoded, mod 4 (telemetry) */
 	UB	nav_valid : 1;
 	UB	calibrated : 1;
 	UB	overflow : 1;	/* bc_ring overflowed (sticky) */
@@ -114,8 +114,11 @@ LOCAL void send_steer(void)
 #if S3_BC_HOLD_STRAIGHT
 	static UB	held;
 
-	/* 30 Oct: drive straight while a barcode is being read */
-	if (bc.state == S3_BC_MEASURING) {
+	/* 30 Oct: drive straight while a barcode is being read.
+	   4 Nov: only while its edges keep coming (S3_BC_HOLD_QUIET_MS);
+	   a single black line (junction, curve) no longer holds it 5 s */
+	if (bc.state == S3_BC_MEASURING &&
+	    (H)(drv_ir_ticks() - bc.last_t) < (H)S3_MS(S3_BC_HOLD_QUIET_MS)) {
 #if S3_BC_STEER_LIMIT > 0
 		if (steer >  S3_BC_STEER_LIMIT) steer =  S3_BC_STEER_LIMIT;
 		if (steer < -S3_BC_STEER_LIMIT) steer = -S3_BC_STEER_LIMIT;
@@ -262,6 +265,8 @@ LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 		   it and maps it to a movement (mapping sent by MQTT). */
 		dg.barcodes_ok++;
 		s3.nav_valid = 1;
+		s3.last_nav = (UB)(s3.last_nav + 1);	/* 4 Nov: count, wraps at 4 */
+		if (s1_set_barcode != NULL) s1_set_barcode(res->ch);	/* dashboard */
 		send_vc(EVT_BARCODE, (UW)(UB)res->ch | ((UW)res->rev << 8));
 		tm_printf((UB*)"s3: BARCODE READ: '%c' (scanned %s)\n", res->ch,
 			  res->rev ? "right->left" : "left->right");

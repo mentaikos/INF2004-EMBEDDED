@@ -23,7 +23,10 @@
  *
  *	HEARTBEAT (type 1), 5 bytes, robot -> dashboard, every 1 s
  *	  header(4) | seq(8) | mission state(3) | uptime s(16) |
- *	  link losses(4, saturates at 15) | pad(5)
+ *	  link losses(4, saturates at 15) | last barcode(5)
+ *	  last barcode (4 Nov, was 5 bits of padding): the last letter Line &
+ *	  Barcode decoded, 0 = none yet, 1..26 = 'A'..'Z'.  Same length, so
+ *	  a dashboard that does not know the field still reads the rest.
  *
  *	COMMAND (type 2), 2 bytes, dashboard -> robot
  *	  header(4) | command(2): 00 START, 01 STOP, 10 E-STOP (11 invalid) |
@@ -97,9 +100,10 @@ uint64_t s1_get_bits(const uint8_t *buf, uint32_t *pos, uint32_t nbits);
 int s1_encode_telemetry(uint8_t out[S1_TLM_LEN], int wifi_loss,
 			const uint64_t slots[4]);
 
+/* barcode: last letter decoded, 'A'..'Z', or 0 = none (4 Nov) */
 int s1_encode_heartbeat(uint8_t out[S1_HB_LEN], uint8_t seq,
 			uint8_t mission_state, uint32_t uptime_s,
-			uint32_t link_losses);
+			uint32_t link_losses, char barcode);
 
 int s1_encode_ack(uint8_t out[S1_ACK_LEN], int result, uint8_t id);
 

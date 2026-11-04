@@ -37,6 +37,7 @@ LOCAL  ID	mtx_s1_tlm;	/* protects the telemetry slots            */
 
 LOCAL volatile UW	s1_link_losses;		/* link losses since boot  */
 LOCAL volatile UB	s1_mission_state = 1;	/* IDLE                    */
+LOCAL volatile UB	s1_barcode;		/* last letter read, 0 = none */
 
 /* One 64-bit word per buddy, so two buddies never write the same word.
    Written by the owners, read by the Telemetry Publisher, always under
@@ -99,6 +100,13 @@ EXPORT void s1_tlm_snapshot(UD out[S1_SLOT_COUNT])
 EXPORT void s1_set_mission_state(UINT state)
 {
 	s1_mission_state = (UB)(state & 0x7u);	/* 3 bits */
+}
+
+EXPORT void s1_set_barcode(char letter)
+{
+	if (letter >= 'A' && letter <= 'Z') {
+		s1_barcode = (UB)letter;	/* one byte store */
+	}
 }
 
 LOCAL BOOL s1_link_up(void)
@@ -357,7 +365,8 @@ LOCAL void s1_heartbeat_task(INT stacd, void *exinf)
 			continue;
 		}
 		s1_encode_heartbeat(hb, seq++, s1_mission_state,
-				    now_ms() / 1000u, s1_link_losses);
+				    now_ms() / 1000u, s1_link_losses,
+				    (char)s1_barcode);
 		(void)s1_tx(MQTT_UTK_T_HEARTBEAT, hb, S1_HB_LEN);
 	}
 }

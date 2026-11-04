@@ -39,11 +39,16 @@ LOCAL volatile UB	shock_seq;	/* IMU task only: shocks seen, wraps */
 LOCAL volatile UB	shock_acked;	/* Telemetry only: last one published */
 LOCAL UW		shock_tlm_until; /* IMU task only: hold in telemetry */
 
+/* 4 Nov: tk_get_otm (time since boot), not tk_get_tim.  tk_get_tim is
+   a calendar clock that starts near 0xC804FC00, not 0, so at power-on
+   (W)(shock_tlm_until - sys_ms()) with shock_tlm_until = 0 was
+   POSITIVE: the telemetry shock bit read 1 from boot (for ~10 days, or
+   until a real shock), and the dashboard showed SHOCK with none seen. */
 LOCAL UW sys_ms(void)
 {
 	SYSTIM	tim;
 
-	tk_get_tim(&tim);
+	tk_get_otm(&tim);
 	return tim.lo;
 }
 

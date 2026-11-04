@@ -127,7 +127,9 @@ IMPORT BOOL	s3_is_calibrated(void);
  *  Publisher sends it every 500 ms.  Subsystem 3 never writes MQTT.
  *	[7:6] line_state   S3_LINE_xxx
  *	[5:4] bc_state     S3_BC_xxx
- *	[3:2] last_nav     NAV_xxx (00 = LEFT, also before the first barcode)
+ *	[3:2] last_nav     4 Nov: barcodes decoded, modulo 4 (the dashboard
+ *	                   sees a new read; the letter is in Buddy 1's
+ *	                   heartbeat).  Was NAV_xxx, unused since 1 Nov.
  *	[1]   bc_err       read failed in the last second (held 1 s so the
  *	                   500 ms publisher cannot miss it)
  *	[0]   bc_overflow  bc_ring lost edges since start (sticky)
@@ -146,6 +148,7 @@ IMPORT UB	s3_tlm_slot(UW sts);	/* g_s3_status -> 8-bit slot */
 #define S1_SLOT_B3		1
 #endif
 IMPORT ER	s1_tlm_set_slot(UINT slot, UD bits) __attribute__((weak));
+IMPORT void	s1_set_barcode(char letter) __attribute__((weak));	/* 4 Nov */
 
 /* ---------------------------------------------------------------------
  *  Diagnostic counters, for the console and the tests only (not sent).
@@ -356,6 +359,16 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    the bars.  S3_BC_STEER_LIMIT 0 = the pure hold again. */
 #define S3_BC_HOLD_STRAIGHT	1
 #define S3_BC_STEER_LIMIT	10	/* inner wheel >= v x (1 - 2x10/64) */
+/* 4 Nov (video: overshot the loop right after the junction): ANY black
+   under the barcode sensor opens a read -- the crossing line at a
+   junction, or the track line itself on a curve -- and a read that is
+   not a barcode stays open the whole S3_BC_READ_MAX_MS (5 s, ~1 m), so
+   the steering stayed limited to +-10 and the robot could not take the
+   next curve.  The limit now holds only while edges keep coming: a real
+   barcode has an edge every ~50-200 ms (8 / 28 mm bars at 15 cm/s);
+   after this long with no new edge it is released (the read itself
+   still runs, so a real barcode is still decoded). */
+#define S3_BC_HOLD_QUIET_MS	400
 
 /* Trim: cancels the robot's own pull to one side (unequal motors or
    wheels).  Every new touch of the left edge means it drifted right, so
