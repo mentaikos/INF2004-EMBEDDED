@@ -403,7 +403,14 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	if (lt->state == S3_LINE_JUNCTION) {
 		steer = 0;
 	} else if (!left && !center) {
-		steer = (W)S3_STEER_SEEK * pos + lt->trim + lt->bend; /* pos = +-1 */
+		/* 4 Nov: centred = no drift at first, then a slow ramp */
+		W	seek = 0;
+
+		if (lt->white_ms > S3_SEEK_DELAY_MS) {
+			seek = (W)(lt->white_ms - S3_SEEK_DELAY_MS) / S3_SEEK_RAMP_MS + 1;
+			if (seek > S3_STEER_SEEK) seek = S3_STEER_SEEK;
+		}
+		steer = seek * pos + lt->trim + lt->bend; /* pos = +-1 */
 	} else {
 		steer = (W)S3_STEER_KP * pos + (W)S3_STEER_KD * (pos - lt->pos)
 			+ lt->trim + lt->bend;
@@ -821,6 +828,11 @@ EXPORT INT s3_bc_poll(S3_BC *bc, UH now, S3_BC_RESULT *res)
 		   inter-character gap is narrow, so it never gets here. */
 		if (!bc->black && bc->n >= 29 && (bc->n + 1) % 10 == 0 &&
 		    (W)quiet > 2 * (W)bc->run_max) {
+			return end_read(bc, now, res);
+		}
+		/* 4 Nov: a few elements, then nothing: a line, not a barcode */
+		if (bc->n < S3_BC_HOLD_MIN_ELEMS &&
+		    quiet >= (H)S3_MS(S3_BC_HOLD_QUIET_MS)) {
 			return end_read(bc, now, res);
 		}
 		/* 30 Oct: otherwise the read stays open S3_BC_READ_MAX_MS from

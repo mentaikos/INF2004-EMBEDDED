@@ -342,9 +342,25 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    KD was 6: touching the opposite edge after a drift changes the
    position by 3, so it kicked the split to ~60 % and the robot swung
    hard left and right.  Tune on the track. */
-#define S3_STEER_KP		6	/* 30 Oct: was 7 (edge touch 14 -> 12, slightly softer) */
-#define S3_STEER_KD		2
-#define S3_STEER_SEEK		8	/* both white: ~12 % split */
+/* 4 Nov (video 20261104_192347, straight with junctions): still a
+   visible left-right yaw.  An edge touch was 12 (the inner wheel at 63 %
+   of the outer at once) plus a KD kick of 2-8: each touch overshot to
+   the other edge.  Now a touch starts at 8 and the KD kick is halved;
+   a touch that lasts (a curve) still grows through the bend
+   (S3_BEND_STEP every 20 ms), so curves keep their full steering. */
+#define S3_STEER_KP		4	/* 30 Oct: 7 -> 6; 4 Nov: 6 -> 4 (edge touch 12 -> 8) */
+#define S3_STEER_KD		1	/* 4 Nov: was 2 */
+#define S3_STEER_SEEK		8	/* both white: ~12 % split (the most) */
+/* 4 Nov (straight-line weave): the drift used to start at full SEEK the
+   moment both sensors went white, in the SAME direction as the edge
+   correction just made, so the robot kept turning until it hit the
+   other edge: a built-in left-right weave.  Now, with the line between
+   the sensors (centred), only the trim is sent for S3_SEEK_DELAY_MS;
+   then the drift grows by 1 every S3_SEEK_RAMP_MS up to S3_STEER_SEEK,
+   so a line that really slipped away is still found (LINE_LOST after
+   500 ms keeps the full SEEK sign for the VC's search). */
+#define S3_SEEK_DELAY_MS	150
+#define S3_SEEK_RAMP_MS		20
 /* 30 Oct (team decision): while a barcode is being read (first bar until
    the read ends: decoded, dropped, or the 3 s limit), the steering sent
    to Motion Control is held at the learnt trim only, so the robot drives
@@ -369,6 +385,13 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    after this long with no new edge it is released (the read itself
    still runs, so a real barcode is still decoded). */
 #define S3_BC_HOLD_QUIET_MS	400
+/* 4 Nov (curves): the limit only starts once the read has this many
+   elements (3 bars + 3 spaces): a line crossing gives 1-2, a barcode
+   29.  And never while the tracker is in a curve (|bend| >=
+   S3_BEND_CURVE).  A read with fewer elements and no edge for
+   S3_BC_HOLD_QUIET_MS is a line, not a barcode: it is dropped at once
+   so a real barcode right after it is not missed. */
+#define S3_BC_HOLD_MIN_ELEMS	6
 
 /* Trim: cancels the robot's own pull to one side (unequal motors or
    wheels).  Every new touch of the left edge means it drifted right, so
@@ -476,8 +499,10 @@ IMPORT INT	s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms);
    sets the quiet wait after an abort).  A full pass of the track
    barcode took 2.7 s first bar -> last bar on the robot.  Replaces
    NFR22's 200 ms no-edge discard: update the report. */
-#define S3_BC_READ_MAX_MS	5000	/* longest a read stays open (1 Nov: was 3000; the 42 cm
-					   barcode takes 2.8 s at 15 cm/s, +quiet) */
+#define S3_BC_READ_MAX_MS	3000	/* longest a read stays open (1 Nov: was 3000; the 42 cm
+					   barcode takes 2.8 s at 15 cm/s, +quiet.  4 Nov: 3000
+					   again -- demo barcodes are at most an A4 long,
+					   297 mm = 2.0 s at 15 cm/s) */
 #define S3_BC_COOLDOWN_MS	500	/* NFR23: ignore sensor after a command */
 #define S3_BC_MAX_ELEMS		49	/* up to 5 characters incl. '*' '*' */
 #define S3_BC_MIN_RATIO_X10	15	/* narrowest wide >= 1.5 x widest narrow */

@@ -349,7 +349,13 @@ LOCAL void test_line(INT *pass, INT *fail)
 	s3_line_step(&lt, 0, 1, 20);
 	ev2 = (lt.state == S3_LINE_DRIFTING && lt.steer > 0);
 	s3_line_step(&lt, 0, 0, 20);
-	TEST_CHECK("S3-U11", ev1 && ev2 && lt.state == S3_LINE_ON_LINE &&
+	/* 4 Nov: centred = no drift at first (trim only), then towards
+	   the last side once S3_SEEK_DELAY_MS has passed */
+	ev3 = (lt.steer == lt.trim);
+	for (i = 0; i < (S3_SEEK_DELAY_MS + 3 * S3_SEEK_RAMP_MS) / 20; i++) {
+		s3_line_step(&lt, 0, 0, 20);
+	}
+	TEST_CHECK("S3-U11", ev1 && ev2 && ev3 && lt.state == S3_LINE_ON_LINE &&
 		   lt.steer > 0 && lt.steer < 2 * S3_STEER_KP,
 		   "line between sensors: steer towards the sensor on the line");
 
@@ -384,9 +390,9 @@ LOCAL void test_line(INT *pass, INT *fail)
 	s3_line_step(&lt, 1, 0, 20);
 	s3_line_step(&lt, 0, 0, 20);
 	s3_line_step(&lt, 0, 0, 20);
-	ev1 = (lt.steer < 0 && lt.steer > -2 * S3_STEER_KP && !lt.gap &&
-	       lt.state == S3_LINE_ON_LINE);
 	for (i = 0; i < 6; i++) s3_line_step(&lt, 0, 0, 20);
+	ev1 = (lt.steer < 0 && lt.steer > -2 * S3_STEER_KP &&
+	       lt.state == S3_LINE_ON_LINE);	/* 4 Nov: after the seek delay */
 	ev2 = lt.gap;
 	for (i = 0; i < S3_LINE_LOST_MS / 20; i++) s3_line_step(&lt, 0, 0, 20);
 	TEST_CHECK("S3-U18", ev1 && ev2 && lt.state == S3_LINE_LOST &&
@@ -401,7 +407,7 @@ LOCAL void test_line(INT *pass, INT *fail)
 		s3_line_step(&lt, 1, 0, 20);
 		s3_line_step(&lt, 0, 0, 20);
 	}
-	ev1 = (lt.trim == -S3_TRIM_MAX && lt.steer < -S3_STEER_SEEK);
+	ev1 = (lt.trim == -S3_TRIM_MAX && lt.steer < 0);	/* 4 Nov: no seek yet */
 	s3_line_step(&lt, 0, 1, 20);
 	TEST_CHECK("S3-U21", ev1 && lt.trim == -S3_TRIM_MAX + S3_TRIM_STEP,
 		   "trim learns the robot's pull, bounded, moves back");

@@ -118,7 +118,9 @@ LOCAL void send_steer(void)
 	   4 Nov: only while its edges keep coming (S3_BC_HOLD_QUIET_MS);
 	   a single black line (junction, curve) no longer holds it 5 s */
 	if (bc.state == S3_BC_MEASURING &&
-	    (H)(drv_ir_ticks() - bc.last_t) < (H)S3_MS(S3_BC_HOLD_QUIET_MS)) {
+	    (H)(drv_ir_ticks() - bc.last_t) < (H)S3_MS(S3_BC_HOLD_QUIET_MS) &&
+	    bc.n >= S3_BC_HOLD_MIN_ELEMS &&			/* 4 Nov: looks like a barcode */
+	    lt.bend < S3_BEND_CURVE && lt.bend > -S3_BEND_CURVE) {	/* not in a curve */
 #if S3_BC_STEER_LIMIT > 0
 		if (steer >  S3_BC_STEER_LIMIT) steer =  S3_BC_STEER_LIMIT;
 		if (steer < -S3_BC_STEER_LIMIT) steer = -S3_BC_STEER_LIMIT;
