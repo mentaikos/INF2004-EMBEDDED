@@ -28,8 +28,9 @@ Bit layouts match app_program/subsystem1/s1_codec.h (MSB-first, 4-bit header:
         [6:0] left speed, [13:7] right speed (cm/s, signed), [25:14] distance
         (mm, wraps every 4096 mm)
   B3   8 bits  Line & Barcode          (subsystem3.h s3_tlm_slot)
-        [7:6] line state, [5:4] barcode state, [3:2] last command,
-        [1] barcode error (held 1 s), [0] edge overflow (sticky)
+        [7:6] line state, [5:4] barcode state, [3:2] barcodes decoded
+        (mod 4; 4 Nov, was the unused last command), [1] barcode error
+        (held 1 s), [0] edge overflow (sticky)
   B4  44 bits  IMU                     (subsystem4.h s4_tlm_slot, s4_pack.h)
         [43:13] word 0: [2:0] state, [11:3] pitch 0.1 deg signed,
                 [20:12] heading deg, [29:21] turn rate deg/s signed,
@@ -37,6 +38,9 @@ Bit layouts match app_program/subsystem1/s1_codec.h (MSB-first, 4-bit header:
         [12:2]  word 1: [4:0] hump mm, [8:5] hump count, [10:9] I2C fails
         [1] shock (held 1 s)
   B5  55 bits  Obstacle Scan           (not filled by the robot yet: shown raw)
+Heartbeat, last 5 bits (4 Nov, were padding): last barcode letter decoded,
+0 = none, 1..26 = 'A'..'Z'.  A new read is seen from B3's counter, the
+letter from the next heartbeat (at most 1 s later).
 """
 import argparse
 import csv
@@ -100,8 +104,11 @@ def decode_heartbeat(data):
     t, v = header(b)
     if (t, v) != (T_HEARTBEAT, VERSION):
         return None
-    return {"seq": b.get(8), "state": STATES[b.get(3)],
-            "uptime_s": b.get(16), "link_losses": b.get(4)}
+    d = {"seq": b.get(8), "state": STATES[b.get(3)],
+         "uptime_s": b.get(16), "link_losses": b.get(4)}
+    code = b.get(5)                    # 4 Nov: last barcode, 0 = none
+    d["barcode"] = chr(ord("A") + code - 1) if 1 <= code <= 26 else None
+    return d
 
 
 def decode_ack(data):
@@ -162,7 +169,8 @@ def encode_command(name, cmd_id):
 # ================================================================ slot decoders
 LINE_STATES = ["ON_LINE", "DRIFTING", "JUNCTION", "LOST"]
 BC_STATES = ["WAITING", "MEASURING", "DECODING", "SENT (cool-down)"]
-NAV_NAMES = ["LEFT", "RIGHT", "STRAIGHT", "U-TURN"]
+MOVE_NAMES = {"forward": "STRAIGHT ON", "uturn": "U-TURN", "left": "LEFT",
+              "right": "RIGHT"}
 IMU_STATES = ["CALIBRATING", "LEVEL", "CLIMBING", "DESCENDING", "SHOCK",
               "FAULT", "6?", "7?"]
 
@@ -182,7 +190,7 @@ def decode_b2(b2):
 def decode_b3(b3):
     return {"line": LINE_STATES[(b3 >> 6) & 3],
             "barcode": BC_STATES[(b3 >> 4) & 3],
-            "nav": NAV_NAMES[(b3 >> 2) & 3],
+            "reads": (b3 >> 2) & 3,     # barcodes decoded, mod 4
             "bc_err": (b3 >> 1) & 1,
             "overflow": b3 & 1}
 
@@ -244,6 +252,14 @@ class Robot:
         # whose id is one of the last 4 it accepted (subsystem1.c,
         # RECENT_IDS), so random ids made ~1 press in 16 do nothing.
         self.next_id = random.randrange(64)
+        # Barcodes (4 Nov): letter from the heartbeat, new reads from the
+        # telemetry counter
+        self.bc_letter = None                 # last letter the robot read
+        self.bc_prev_count = None
+        self.bc_pending = 0                   # reads seen, letter not yet
+        self.bc_reads = 0                     # reads seen by this dashboard
+        self.bc_time = None
+        self.map_sent = None                  # last MAP sent from this page
         self.log = []
         self.log_id = 0
         self.csv_file = open(log_path, "a", newline="")
@@ -330,6 +346,16 @@ class Robot:
             self._note(f"heartbeat UNDECODABLE {data.hex()}", "bad")
             return
         self.hb, self.hb_time = d, now
+        if d["barcode"]:
+            self.bc_letter = d["barcode"]
+        if self.bc_pending and self.bc_letter:
+            more = (f" ({self.bc_pending} barcodes since the last update,"
+                    " this is the latest)" if self.bc_pending > 1 else "")
+            self._note(f"barcode read: '{self.bc_letter}' -> "
+                       f"{self._meaning(self.bc_letter)}{more}", "barcode")
+            self.bc_reads += self.bc_pending
+            self.bc_pending = 0
+            self.bc_time = now
         if d["state"] != self.last_state:
             self._note(f"mission state: {self.last_state or '-'} -> {d['state']}",
                        "bad" if d["state"] in ("E_STOPPED", "FAULT") else "info")
@@ -341,12 +367,25 @@ class Robot:
             self._note(f"telemetry UNDECODABLE {data.hex()}", "bad")
             return
         b2 = decode_b2(d["b2"])
+        b3 = decode_b3(d["b3"])
+        if self.bc_prev_count is not None and b3["reads"] != self.bc_prev_count:
+            self.bc_pending += (b3["reads"] - self.bc_prev_count) % 4
+        self.bc_prev_count = b3["reads"]
         if self.prev_dist is not None:
             self.odo_mm += dist_diff(self.prev_dist, b2["dist_mm"])
         self.prev_dist = b2["dist_mm"]
-        self.tlm = {"b2": b2, "b3": decode_b3(d["b3"]), "b4": decode_b4(d["b4"]),
+        self.tlm = {"b2": b2, "b3": b3, "b4": decode_b4(d["b4"]),
                     "b5": d["b5"], "wifi_loss": d["wifi_loss"],
                     "odo_cm": round(self.odo_mm / 10, 1)}
+
+    def _meaning(self, letter):
+        """What the robot will do for this letter, by the last map sent."""
+        if not self.map_sent:
+            return "no map sent from this dashboard yet"
+        for k, v in self.map_sent.items():
+            if v == letter:
+                return MOVE_NAMES[k] + " at the next junction"
+        return "not in the map: straight on at the next junction"
 
     def _ack(self, data):
         d = decode_ack(data)
@@ -364,13 +403,15 @@ class Robot:
             self.next_id = (self.next_id + 1) % 64
             return cmd_id
 
-    def send(self, payload, what):
+    def send(self, payload, what, map_letters=None):
         cmd_id = payload[1]
         with self.cv:
             ok = self.broker == "connected"
             if ok:
                 info = self.client.publish("robot/cmd", payload[0], qos=1)
                 ok = info.rc == mqtt.MQTT_ERR_SUCCESS
+            if ok and map_letters:
+                self.map_sent = dict(map_letters)
             self.sent[cmd_id] = what
             self.last_cmd = (f"Last sent: {what}  id={cmd_id}  bytes={payload[0].hex()}"
                              f"  at {time.strftime('%H:%M:%S')}" +
@@ -397,6 +438,10 @@ class Robot:
                 "hb": self.hb,
                 "hb_age": None if self.hb_time is None else round(now - self.hb_time, 1),
                 "tlm": self.tlm, "last_cmd": self.last_cmd,
+                "bc": {"letter": self.bc_letter, "reads": self.bc_reads,
+                       "meaning": self._meaning(self.bc_letter) if self.bc_letter else None,
+                       "age": None if self.bc_time is None else round(now - self.bc_time),
+                       "map": self.map_sent},
                 "timing": {"tlm": timing("telemetry"), "hb": timing("heartbeat"),
                            "rec": {"ok": ok, "n": len(self.reconnects)}},
                 "log": self.log[-60:]}
@@ -474,7 +519,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(400, json.dumps({"error": str(e).replace("--map", "Map")}))
                 return
             what = "MAP " + " ".join(f"{k}={m[k]}" for k in MAP_ORDER)
-            ok = self.robot.send((encode_map(m, cmd_id), cmd_id), what)
+            ok = self.robot.send((encode_map(m, cmd_id), cmd_id), what, m)
         else:
             self._reply(404, '{"error": "not found"}')
             return
@@ -622,6 +667,14 @@ dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; 
 #log { height: 190px; overflow-y: auto; font: 13px/1.5 ui-monospace, Menlo, monospace;
        background: var(--chip); border-radius: 6px; padding: 8px 10px; }
 #log .bad, #log .refused { color: var(--red); }
+#log .barcode { color: var(--blue); font-weight: 700; }
+.bcrow { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.letter { flex: 0 0 64px; height: 64px; border-radius: 10px; display: flex;
+          align-items: center; justify-content: center; font-size: 38px; font-weight: 800;
+          background: var(--chip); color: var(--muted); transition: background .3s, color .3s; }
+.letter.on { background: var(--blue); color: #fff; }
+.letter.flash { background: var(--amber); color: #fff; }
+.bcinfo { font-size: 14px; } .bcinfo b { font-size: 15px; }
 .wide { grid-column: 1 / -1; }
 #toast { position: fixed; left: 50%; top: 16px; transform: translateX(-50%);
          background: var(--red); color: #fff; padding: 12px 18px; border-radius: 8px;
@@ -675,10 +728,16 @@ dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; 
     </section>
     <section class="card">
       <h2>Line &amp; Barcode (B3)</h2>
+      <div class="bcrow">
+        <div class="letter" id="bc-letter">–</div>
+        <div class="bcinfo"><div><b>Last barcode read</b></div>
+          <div id="bc-mean">No barcode read yet.</div>
+          <div id="bc-when" class="sub" style="margin-top:2px"></div></div>
+      </div>
       <dl>
         <dt>Line</dt><dd id="l-line">—</dd>
         <dt>Barcode reader</dt><dd id="l-bc">—</dd>
-        <dt>Last barcode command</dt><dd id="l-nav">—</dd>
+        <dt>Barcodes read</dt><dd id="l-reads">—</dd>
         <dt>Barcode error</dt><dd id="l-err">—</dd>
         <dt>Edge overflow</dt><dd id="l-ovf">—</dd>
       </dl>
@@ -788,7 +847,7 @@ function render(s) {
   if (t) {
     set("m-l", signed(t.b2.left_cm_s) + " cm/s"); set("m-r", signed(t.b2.right_cm_s) + " cm/s");
     set("m-d", t.b2.dist_mm + " mm (wraps at 4096)"); set("m-o", t.odo_cm.toFixed(1) + " cm");
-    set("l-line", t.b3.line, t.b3.line === "LOST"); set("l-bc", t.b3.barcode); set("l-nav", t.b3.nav);
+    set("l-line", t.b3.line, t.b3.line === "LOST"); set("l-bc", t.b3.barcode);
     set("l-err", t.b3.bc_err ? "YES" : "no", t.b3.bc_err); set("l-ovf", t.b3.overflow ? "YES" : "no", t.b3.overflow);
     set("i-state", t.b4.state); set("i-pitch", signed(t.b4.pitch_deg.toFixed(1)) + "°");
     set("i-hdg", t.b4.heading_deg + "°"); set("i-rate", signed(t.b4.rate_dps) + "°/s");
@@ -798,6 +857,15 @@ function render(s) {
     set("o-raw", t.b5 === 0 ? "0 (not sent yet)" : "0x" + t.b5.toString(16));
     set("o-wifi", t.wifi_loss ? "1 (frame held during Wi-Fi loss)" : "0");
   }
+  if (s.bc.letter) {
+    const L = $("bc-letter"), fresh = s.bc.age !== null && s.bc.age < 3;
+    if (L.textContent !== s.bc.letter || fresh) L.textContent = s.bc.letter;
+    L.className = "letter " + (fresh ? "flash" : "on");
+    $("bc-mean").textContent = s.bc.meaning;
+    $("bc-when").textContent = s.bc.age === null ? "read before this dashboard started"
+      : s.bc.age < 5 ? "just now" : s.bc.age + " s ago";
+  }
+  set("l-reads", s.bc.reads + " since the dashboard started");
   const tm = s.timing, fmt = x => x ? "n=" + x.n + "  mean " + x.mean + "  max " + x.max + " ms" : "—";
   set("t-tlm", fmt(tm.tlm)); set("t-hb", fmt(tm.hb));
   if (tm.rec.n) { const pct = Math.round(100 * tm.rec.ok / tm.rec.n);
@@ -826,7 +894,6 @@ function connect() {
 }
 connect();
 </script>
-</body>
 </html>
 """
 
