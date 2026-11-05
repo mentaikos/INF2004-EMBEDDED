@@ -152,8 +152,11 @@ LOCAL void cmd_follow(INT cm_s)
 	cmd(S2_CMD_PACK(S2_CMD_MOVE_FOLLOW, cm_s, 0, 0));
 }
 
+LOCAL UB	cur_limit;	/* 4 Nov: last SPEED_LIMIT sent, cm/s */
+
 LOCAL void cmd_limit(INT cm_s)
 {
+	cur_limit = (UB)cm_s;
 	cmd(S2_CMD_PACK(S2_CMD_SPEED_LIMIT, cm_s, 0, 0));
 }
 
@@ -255,6 +258,26 @@ LOCAL void track_line_side(void)
    something ahead */
 LOCAL UB	slow_zone;
 
+/* 4 Nov: curve slow-down and lost-in-a-curve grace (VC_CURVE_xxx,
+   VC_LOST_GRACE_MS in vehicle_controller.h) */
+LOCAL UB	in_curve;	/* steering says: in a curve */
+LOCAL UB	lost_grace;	/* line lost in a curve, following on */
+LOCAL UH	t_straight;	/* last time the steering was curve-sized */
+LOCAL UH	t_lost;		/* when lost_grace began */
+
+/* One speed cap for all the reasons above: the lowest one wins.  Sent
+   to Motion Control only when it changes. */
+LOCAL void update_limit(void)
+{
+	INT	want = S2_MAX_SPEED_CM_S;
+
+	if (slow_zone) want = VC_SLOW_CM_S;
+#if VC_CURVE_STEER > 0
+	if ((in_curve || lost_grace) && VC_CURVE_CM_S < want) want = VC_CURVE_CM_S;
+#endif
+	if (want != (INT)cur_limit) cmd_limit(want);
+}
+
 LOCAL void check_slow_zone(void)
 {
 #if VC_SLOW_ZONE_CM > 0
@@ -266,12 +289,37 @@ LOCAL void check_slow_zone(void)
 
 	if (near && !slow_zone) {
 		slow_zone = 1;
-		cmd_limit(VC_SLOW_CM_S);
 		tm_printf((UB*)"vc: something %d cm ahead, slowing to %d cm/s\n",
 			  (INT)r, VC_SLOW_CM_S);
 	} else if (clear && slow_zone) {
 		slow_zone = 0;
-		cmd_limit(S2_MAX_SPEED_CM_S);
+	}
+#endif
+}
+
+/* 4 Nov: in a curve while Line & Barcode's steering is curve-sized;
+   out of it once it has been small for VC_CURVE_HOLD_MS */
+LOCAL void check_curve(void)
+{
+#if VC_CURVE_STEER > 0
+	S3_STS_FIELDS	f;
+	INT		a;
+
+	s3_sts_unpack(s3_get_status(), &f);
+	a = (f.steer < 0) ? -f.steer : f.steer;
+	if (a >= VC_CURVE_STEER) {
+		t_straight = now_ms();
+		if (!in_curve) {
+			in_curve = 1;
+			tm_printf((UB*)"vc: curve, slowing to %d cm/s\n", VC_CURVE_CM_S);
+		}
+	} else if (in_curve) {
+		if (a >= VC_CURVE_STEER / 2) {
+			t_straight = now_ms();
+		} else if (since(t_straight) >= VC_CURVE_HOLD_MS) {
+			in_curve = 0;
+			tm_printf((UB*)"vc: curve done, back to cruise speed\n");
+		}
 	}
 #endif
 }
@@ -280,6 +328,8 @@ LOCAL void enter_follow(void)
 {
 	script_clear();
 	slow_zone = 0;
+	in_curve = 0;				/* 4 Nov */
+	lost_grace = 0;
 	cmd_limit(S2_MAX_SPEED_CM_S);		/* lift any obstacle cap */
 	cmd_follow(VC_CRUISE_CM_S);
 	vc.lost_in_hump = 0;
@@ -323,6 +373,9 @@ LOCAL void enter_complete(void)
 LOCAL void enter_search(void)
 {
 	script_clear();
+	in_curve = 0;				/* 4 Nov: search turns at the */
+	lost_grace = 0;				/* usual speed */
+	update_limit();
 	vc.search_i = 0;
 	vc.side_right = (line_side >= 0);
 	{
@@ -935,8 +988,19 @@ LOCAL void handle_event(UW w)
 
 	case EVT_LINE_LOST:
 		if (st == VC_ST_LINE_FOLLOW) {
-			if (s4_in_hump()) vc.lost_in_hump = 1;	/* tilted sensors */
-			else enter_search();
+			if (s4_in_hump()) {
+				vc.lost_in_hump = 1;	/* tilted sensors */
+			} else if (in_curve) {
+				/* 4 Nov: lost in a curve: Line & Barcode keeps
+				   arcing towards it; follow on slowly first */
+				lost_grace = 1;
+				t_lost = now_ms();
+				update_limit();
+				tm_printf((UB*)"vc: line lost in a curve, following on"
+					  " slowly for up to %d ms\n", VC_LOST_GRACE_MS);
+			} else {
+				enter_search();
+			}
 		} else if (st == VC_ST_HUMP_TRAVERSE) {
 			vc.lost_in_hump = 1;
 		}
@@ -1050,25 +1114,15 @@ LOCAL void tick(void)
 				script_run(&c, 1);
 			}
 #else
-			/* 4 Nov: follow at once only if the line sensors see
-			   the line.  START used to go straight to LINE_FOLLOW,
-			   so after a STOP part-way through a turn (junction,
-			   search, bypass) the robot drove off at cruise speed
-			   pointing the wrong way, and only began searching
-			   VC_LOST_CHECK_MS (2.5 s, ~50 cm) later.  Now it
-			   searches first (LINE_SEARCH: turns +-30, 60, 90 deg
-			   until the sensors cross the line, then follows; no
-			   line within 3 s = FAULT).  A robot placed centred on
-			   the line also reads "not seen" (both sensors white,
-			   line between them), so it makes one small search
-			   turn, crosses the line and follows from there. */
-			if (line_seen()) {
-				enter_follow();
-			} else {
-				tm_printf((UB*)"vc: START: line not under the sensors,"
-					  " searching for it first\n");
-				enter_search();
-			}
+			/* 5 Nov: START follows the line at once, no search
+			   first (team decision, video IMG_7771: the 4 Nov
+			   search-first twisted the robot left and right for
+			   ~3 s, because a robot placed centred on the line
+			   reads "not seen" -- the line runs between the
+			   sensors).  Place the robot on the line before
+			   START: a robot pointing off the line only searches
+			   after VC_LOST_CHECK_MS. */
+			enter_follow();
 #endif
 		} else if (since(vc.t_state) > VC_S5_READY_MS) {
 			tm_printf((UB*)"vc: START abandoned: obstacle scan not"
@@ -1082,10 +1136,22 @@ LOCAL void tick(void)
 	case VC_ST_HUMP_TRAVERSE:
 		relay_recovery();
 		check_slow_zone();
+		check_curve();				/* 4 Nov */
 		track_line_side();
+		/* 4 Nov: lost in a curve: back on it, or time to search */
+		if (st == VC_ST_LINE_FOLLOW && lost_grace) {
+			if (line_seen()) {
+				lost_grace = 0;
+				tm_printf((UB*)"vc: back on the line\n");
+			} else if (since(t_lost) >= VC_LOST_GRACE_MS) {
+				enter_search();
+				break;
+			}
+		}
+		update_limit();
 		/* Line & Barcode reports LINE_LOST only on the change; after a
 		   turn or a bypass it may already be LOST, so check the state */
-		if (st == VC_ST_LINE_FOLLOW && !vc.lost_in_hump &&
+		if (st == VC_ST_LINE_FOLLOW && !vc.lost_in_hump && !lost_grace &&
 		    since(vc.t_state) > VC_LOST_CHECK_MS && line_lost_now() &&
 		    !s4_in_hump()) {
 			enter_search();

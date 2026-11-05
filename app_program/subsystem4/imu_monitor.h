@@ -65,6 +65,27 @@
    the rear axle still on the flat. */
 #define IMU_WHEELBASE_MM	120	/* MEASURE: front-to-rear axle distance */
 
+/* 5 Nov: hump under ONE wheel only (the track ramp is under the right
+   wheel).  The robot then mostly ROLLS (tilts sideways) about the other
+   wheel, and the pitch seen depends on where the caster is: the pitch
+   formulas above gave 15 mm on the 10 mm ramp.  The wheel's lift is
+   exact from the roll instead:  height = track x sin(peak roll).
+   Used when the peak roll is at least IMU_ONE_WHEEL_ROLL_MDEG (3 deg =
+   a 5 mm lift); a hump under both wheels has almost no roll and keeps
+   the pitch formulas.  Either wheel works (the size of the roll is
+   used, not its sign). */
+#define IMU_TRACK_MM		95	/* MEASURE: left to right wheel, centre of
+					   the tyre contact (= S2_TRACK_MM) */
+#define IMU_ONE_WHEEL_ROLL_MDEG	3000
+#define IMU_ROLL_LPF_DIV	2	/* lighter than the pitch's 4: the 50 ms median
+					   below already rejects noise and jolts */
+/* 5 Nov: the peak roll is taken from the median of the last
+   IMU_PEAK_HOLD_N samples (5 x 10 ms = 50 ms): the wheel hitting the
+   ramp's edge jolts the accelerometer for a sample or two, and that
+   jolt is not tilt.  The ramp's top lasts far longer (10 mm ramp at
+   20 cm/s: ~200 ms). */
+#define IMU_PEAK_HOLD_N		5
+
 /* Height sum (Version C gap 2 / row 14): 0.01 mm units, clamped to
    +-63 mm = +-6300, which needs 14 bits signed -> int16 (H) */
 #define IMU_SUM_MAX_CMM		6300
@@ -121,6 +142,7 @@ typedef struct {
 
 	/* filtered orientation */
 	W	pitch_mdeg;		/* +-180000 -> 19 bits */
+	W	roll_mdeg;		/* 5 Nov: sideways tilt, + = right side up */
 	W	heading_mdeg;		/* 0..359999 -> 19 bits */
 	W	rate_cdps;		/* turn rate, 0.01 deg/s */
 	W	mag_f[2];		/* filtered field X, Y, counts x 16 */
@@ -136,9 +158,13 @@ typedef struct {
 	H	hump_sum_cmm;		/* 0.01 mm, +-6300 */
 	H	hump_sum_peak_cmm;
 	W	hump_peak_mdeg;
+	W	hump_peak_roll_mdeg;	/* 5 Nov: peak of the 50 ms median |roll| */
+	H	hold_roll[IMU_PEAK_HOLD_N];	/* last |roll|s, 0.1 deg */
+	UB	hold_i, hold_n;		/* ring index, samples in it */
 	UB	last_hump_mm;		/* 0..31 */
 	UB	hump_count;		/* saturates at 255, packed to 4 bits */
 	W	last_peak_mdeg;		/* peak pitch of the last hump (console log) */
+	W	last_peak_roll_mdeg;	/* 5 Nov: peak |roll| of the last hump */
 
 	/* shock and faults */
 	UW	shock_until_ms;

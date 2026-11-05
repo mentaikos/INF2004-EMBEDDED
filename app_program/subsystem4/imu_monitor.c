@@ -108,6 +108,9 @@ LOCAL void reset_hump(IMU_MONITOR *m)
 	m->hump_sum_cmm      = 0;
 	m->hump_sum_peak_cmm = 0;
 	m->hump_peak_mdeg    = 0;
+	m->hump_peak_roll_mdeg = 0;	/* 5 Nov */
+	m->hold_i            = 0;
+	m->hold_n            = 0;
 }
 
 EXPORT void imu_restart(IMU_MONITOR *m)
@@ -158,16 +161,44 @@ LOCAL void abort_hump(IMU_MONITOR *m, IMU_EVENT *out, INT *n)
 /* Final height, rounded ONCE to whole mm and clamped to 5 bits */
 LOCAL UB hump_result_mm(const IMU_MONITOR *m)
 {
-	W	geo = (IMU_WHEELBASE_MM * imu_sin_q14(m->hump_peak_mdeg)
-		       + IMU_Q14_ONE / 2) / IMU_Q14_ONE;
-	W	sum = div_round(m->hump_sum_peak_cmm, 100);
-	W	h = (sum > geo) ? sum : geo;
+	W	geo, sum, h;
+
+	/* 5 Nov: one wheel over the hump (the robot rolled): the wheel's
+	   lift is track x sin(roll), whatever the pitch did */
+	if (m->hump_peak_roll_mdeg >= IMU_ONE_WHEEL_ROLL_MDEG) {
+		h = (IMU_TRACK_MM * imu_sin_q14(m->hump_peak_roll_mdeg)
+		     + IMU_Q14_ONE / 2) / IMU_Q14_ONE;
+		return (UB)s4_clamp(h, 0, S4_HUMP_MAX_MM);
+	}
+
+	/* both wheels: from the pitch, as before */
+	geo = (IMU_WHEELBASE_MM * imu_sin_q14(m->hump_peak_mdeg)
+	       + IMU_Q14_ONE / 2) / IMU_Q14_ONE;
+	sum = div_round(m->hump_sum_peak_cmm, 100);
+	h = (sum > geo) ? sum : geo;
 
 	return (UB)s4_clamp(h, 0, S4_HUMP_MAX_MM);
 }
 
+/* 5 Nov: median of the last IMU_PEAK_HOLD_N values.  A jolt of one
+   or two samples (the wheel hitting the ramp's edge) never becomes the
+   peak, and noise does not pull it down the way the minimum did. */
+LOCAL W held_median(const H *v)
+{
+	H	t[IMU_PEAK_HOLD_N], x;
+	INT	i, j;
+
+	for (i = 0; i < IMU_PEAK_HOLD_N; i++) {		/* insertion sort, 5 values */
+		x = v[i];
+		for (j = i; j > 0 && t[j - 1] > x; j--) t[j] = t[j - 1];
+		t[j] = x;
+	}
+	return t[IMU_PEAK_HOLD_N / 2];
+}
+
 LOCAL void update_orientation(IMU_MONITOR *m, const IMU_SAMPLE *s, W dt_ms)
 {
+	W	ax = (W)s->ax - m->acc_off[0];	/* 5 Nov: for the roll */
 	W	ay = (W)s->ay - m->acc_off[1];
 	W	az = (W)s->az - m->acc_off[2];
 	W	raw, mx, my, hdg, rate;
@@ -177,6 +208,10 @@ LOCAL void update_orientation(IMU_MONITOR *m, const IMU_SAMPLE *s, W dt_ms)
 	/* pitch, low-pass */
 	raw = imu_atan2_mdeg(ay, az);
 	m->pitch_mdeg += (raw - m->pitch_mdeg) / IMU_PITCH_LPF_DIV;
+
+	/* 5 Nov: roll (X = right), low-pass like the pitch */
+	raw = imu_atan2_mdeg(ax, az);
+	m->roll_mdeg += (raw - m->roll_mdeg) / IMU_ROLL_LPF_DIV;
 
 	/* hard-iron: track min/max on each axis as the robot turns */
 	mv[0] = s->mx; mv[1] = s->my; mv[2] = s->mz;
@@ -266,6 +301,7 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 			}
 			m->acc_off[2] -= 1000;	/* keep 1 g on Z */
 			m->pitch_mdeg = 0;
+			m->roll_mdeg  = 0;	/* 5 Nov */
 			m->calibrated = 1;
 			m->state      = S4_ST_LEVEL;
 			reset_hump(m);
@@ -321,6 +357,21 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 			m->hump_sum_peak_cmm = m->hump_sum_cmm;
 		}
 		if (p > m->hump_peak_mdeg) m->hump_peak_mdeg = p;
+		/* 5 Nov: peak of the 50 ms median of |roll|
+		   (the pitch peak stays as it was: on the short black hump at
+		   speed, holding it 50 ms cut the real crest) */
+		{
+			W	r = (m->roll_mdeg < 0) ? -m->roll_mdeg : m->roll_mdeg;
+			W	held;
+
+			m->hold_roll[m->hold_i] = (H)s4_clamp(r / 100, 0, 1800);
+			m->hold_i = (UB)((m->hold_i + 1) % IMU_PEAK_HOLD_N);
+			if (m->hold_n < IMU_PEAK_HOLD_N) m->hold_n++;
+			if (m->hold_n >= IMU_PEAK_HOLD_N) {
+				held = held_median(m->hold_roll) * 100;
+				if (held > m->hump_peak_roll_mdeg) m->hump_peak_roll_mdeg = held;
+			}
+		}
 	}
 
 	switch (m->state) {
@@ -354,6 +405,7 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 				} else {
 					m->last_hump_mm = hump_result_mm(m);
 					m->last_peak_mdeg = m->hump_peak_mdeg;
+					m->last_peak_roll_mdeg = m->hump_peak_roll_mdeg;
 					if (m->hump_count < 255) m->hump_count++;
 					push(out, &n, IMU_EV_HUMP_END, m->last_hump_mm);
 					reset_hump(m);

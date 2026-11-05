@@ -55,6 +55,25 @@
    S5_DETECT_CM (25) stop at full speed and coasted into its own turning
    circle before the scan.  0 = off. */
 #define VC_SLOW_ZONE_CM		50
+/* 4-5 Nov (videos: ran wide on the loop; IMG_7771: yaw on the
+   straight): slow-down while steering.  While following, a Line &
+   Barcode steering value of at least VC_CURVE_STEER caps the speed at
+   VC_CURVE_CM_S; it is lifted once the steering has stayed below
+   VC_CURVE_STEER / 2 for VC_CURVE_HOLD_MS.  Since 4 Nov a straight-line
+   edge correction is only 8 (S3_STEER_KP 4), at most ~17 with the KD
+   kick and full trim; a curve's growing bend, or a drift that the soft
+   correction did not catch, goes past 20.  Slower = a tighter arc for
+   the same steering, so the robot gets back to the line before it
+   swings across it.  0 = off. */
+#define VC_CURVE_STEER		20	/* 5 Nov: was 26 (sized for KP 6) */
+#define VC_CURVE_CM_S		12
+#define VC_CURVE_HOLD_MS	300
+/* 4 Nov: line lost IN a curve (VC_CURVE_STEER or more): keep following
+   slowly for this long first -- Line & Barcode keeps arcing towards
+   the side the line went (its bend) and usually rolls back onto it --
+   and only then stop and sweep (LINE_SEARCH).  Lost on a straight:
+   LINE_SEARCH at once, as before. */
+#define VC_LOST_GRACE_MS	600
 #define VC_TURN_CM_S		15	/* wheel speed while turning (27 Oct: was 15) */
 #define VC_JUNCTION_ADV_CM	5	/* sensors are ahead of the axle */
 #define VC_JUNCTION_COOLDOWN_MS	800	/* same junction is not counted twice */

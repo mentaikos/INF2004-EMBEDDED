@@ -103,6 +103,44 @@ static void run(IMU_MONITOR *m, UW *t, float *x_rear, float *dist, long *dist_se
 	}
 }
 
+/* 5 Nov: hump under the RIGHT wheel only.  Left wheel and caster stay
+   on the floor; the caster is lc mm behind the axle.  The body rolls
+   asin(z / track) and pitches asin((z / 2) / lc).  jolt_g: one-sample
+   forward jolt as the wheel hits the ramp (0 = none). */
+static void run_one_wheel(IMU_MONITOR *m, UW *t, const hump_t *hp, float speed,
+			  float length, float noise_g, float lc, float jolt_g,
+			  result_t *r)
+{
+	const float T = IMU_TRACK_MM;
+	int steps = (int)(length / (speed * IMU_PERIOD_MS / 1000.0f));
+	float x = 0, dist = 0; long sent = 0; int jolted = 0;
+
+	for (int k = 0; k < steps; k++) {
+		float dx = speed * IMU_PERIOD_MS / 1000.0f;
+		x += dx;
+		float z = profile(hp, 1, x);
+		float roll = asinf(fminf(1.0f, z / T));
+		float pitch = asinf(fminf(1.0f, (z / 2) / lc));
+		dist += dx;
+		long now_mm = lroundf(dist);
+		INT dd = (INT)(now_mm - sent);
+		sent = now_mm;
+
+		IMU_SAMPLE s = { TRUE,
+			mg(0.01f + sinf(roll) * cosf(pitch) + noise(noise_g)),
+			mg(-0.02f + sinf(pitch) + noise(noise_g)),
+			mg(0.03f + cosf(roll) * cosf(pitch) + noise(noise_g)),
+			200, 50, -300 };
+		if (jolt_g > 0 && !jolted && z > 0.5f) {	/* wheel meets the ramp */
+			s.ay += mg(jolt_g);
+			jolted = 1;
+		}
+		*t += IMU_PERIOD_MS;
+		IMU_EVENT ev[IMU_MAX_EVENTS];
+		count(r, ev, imu_step(m, &s, dd, *t, ev));
+	}
+}
+
 static void calibrate(IMU_MONITOR *m, UW *t)
 {
 	imu_init(m);
@@ -132,6 +170,26 @@ static void hump_case(const char *name, float h, float half, float speed,
 	if (r.nh) CHECK(abs(r.heights[0] - (int)h) <= tol, "height %d mm vs true %.0f mm (tol %d)",
 			r.heights[0], h, tol);
 }
+
+static void one_wheel_case(const char *name, float h, float half, float speed,
+			   float noise_g, float lc, float jolt_g, int tol)
+{
+	IMU_MONITOR m; UW t = 0;
+	result_t r = {0};
+	hump_t hp = { 300.0f, h, half };
+
+	calibrate(&m, &t);
+	run_one_wheel(&m, &t, &hp, speed, 300.0f + 2 * half + 600.0f, noise_g,
+		      lc, jolt_g, &r);
+	printf("%s: h=%.0f mm under the right wheel, caster %.0f mm behind,"
+	       " %.0f mm/s, noise %.2f g, jolt %.1f g\n", name, h, lc, speed,
+	       noise_g, jolt_g);
+	CHECK(r.starts == 1 && r.ends == 1, "one HUMP_START and one HUMP_END (got %d/%d)",
+	      r.starts, r.ends);
+	if (r.nh) CHECK(abs(r.heights[0] - (int)h) <= tol, "height %d mm vs true %.0f mm (tol %d)",
+			r.heights[0], h, tol);
+}
+
 
 int main(void)
 {
@@ -261,6 +319,14 @@ int main(void)
 			      n ? rate_sum / n : 0);
 		}
 	}
+
+	printf("== 5 Nov: hump under ONE wheel (the track ramp) ==\n");
+	one_wheel_case("Ramp, right wheel, caster 60 mm", 10.0f, 60.0f, 200.0f, 0.02f, 60.0f, 0, 1);
+	one_wheel_case("Ramp, right wheel, caster close", 10.0f, 60.0f, 200.0f, 0.02f, 40.0f, 0, 1);
+	one_wheel_case("Ramp, right wheel, jolt at the edge", 10.0f, 60.0f, 200.0f, 0.02f, 40.0f, 0.5f, 1);
+	one_wheel_case("Ramp, right wheel, noisy", 10.0f, 60.0f, 200.0f, 0.08f, 40.0f, 0, 2);
+	one_wheel_case("Ramp, right wheel, slow", 10.0f, 60.0f, 100.0f, 0.02f, 40.0f, 0, 1);
+	one_wheel_case("Black hump, right wheel", 25.0f, 80.0f, 200.0f, 0.02f, 40.0f, 0, 2);
 
 	printf("== Packing ==\n");
 	{
