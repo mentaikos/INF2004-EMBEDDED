@@ -245,6 +245,34 @@ IMPORT void	s3_bind_vc(ID mbf_vc_evt, ID flg_fault);
    first bar).  With black ~3700: ON ~2100, OFF ~1600; paper ~830. */
 #define S3_BC_AMP_INIT		1800	/* black - white assumed before any bar */
 #define S3_BC_AMP_MIN		800	/* never below (noise) */
+/* 5 Nov (log 19:22: "dropped: 1 elements" over a barcode the sensor
+   visibly crossed): the learnt black level only ever grew, so one very
+   dark mark (the track tape, which reads darker than printed toner)
+   raised the black switch level above the printed bars for good.  Now
+   it is forgotten after S3_BC_AMP_FORGET_MS of white: each barcode is
+   judged on its own bars.  Within a barcode the longest white is a
+   wide gap (21 mm = 175 ms at 12 cm/s); forgetting there is harmless,
+   the next bar is re-learnt. */
+#define S3_BC_AMP_FORGET_MS	300
+/* 5 Nov (capture 20:48): with the sensor mounted higher, the thick
+   (21 mm) bars read only ~+1300 above white and the thin (7 mm) bars
+   ~+90, so no level relative to the thick bars can see the thin ones.
+   S3_BC_LOW_CONTRAST 1: fixed levels just above white (black above
+   white + S3_BC_LC_ON, white again below white + S3_BC_LC_OFF), the
+   ISR averages S3_BC_LC_AVG samples (2 ms, ~0.3 mm) against noise, and
+   white only follows readings within S3_BC_LC_BAND of it.  The 20:48
+   trace replayed this way decodes to 'X' (200/200 with noise up to
+   2x the measured; +80 started to miss the thinnest bar, +81).  Needs the paper between the
+   bars to read like the floor (true on 5 Nov; on 1 Nov the paper read
+   ~+450 and this mode would fail): the real fix is the sensor lower,
+   then 0. */
+#ifndef S3_BC_LOW_CONTRAST
+#define S3_BC_LOW_CONTRAST	1	/* 5 Nov: ON, tuned to the sensor as mounted now (0 = learnt levels) */
+#endif
+#define S3_BC_LC_ON		65	/* thin bars peaked +81..+101 (capture 20:48) */
+#define S3_BC_LC_OFF		40	/* white noise sd ~6 */
+#define S3_BC_LC_BAND		40
+#define S3_BC_LC_AVG		8	/* power of two */
 /* 60 / 48: centred near (paper + black) / 2, the midpoint the blurred
    narrow bars and gaps swing around (paper ~650 > floor ~204).  Fitted
    to the 1 Nov trace: also reads 3 mm bars if the sensor is sharp
@@ -267,6 +295,7 @@ typedef struct {
 	UH	thr_on;		/* go black above this (12 bits) */
 	UH	thr_off;	/* go white below this (12 bits) */
 	UH	amp;		/* 1 Nov: darkest bar so far - white (12 bits) */
+	UH	white_n;	/* 5 Nov: samples since the last black, saturates */
 	UB	black;		/* current level, after hysteresis: 0/1 */
 } S3_BC_DET;
 
@@ -392,6 +421,11 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    S3_BC_HOLD_QUIET_MS is a line, not a barcode: it is dropped at once
    so a real barcode right after it is not missed. */
 #define S3_BC_HOLD_MIN_ELEMS	6
+/* 5 Nov: the drop of a short read ("a line, not a barcode") waits
+   longer than the steering release above: at 400 ms a slow pass of the
+   big barcode (21 mm wide bar, < 5 cm/s) was dropped after 1-2
+   elements.  800 ms: still drops a junction / curve line quickly. */
+#define S3_BC_DROP_QUIET_MS	800
 
 /* Trim: cancels the robot's own pull to one side (unequal motors or
    wheels).  Every new touch of the left edge means it drifted right, so
@@ -499,13 +533,28 @@ IMPORT INT	s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms);
    sets the quiet wait after an abort).  A full pass of the track
    barcode took 2.7 s first bar -> last bar on the robot.  Replaces
    NFR22's 200 ms no-edge discard: update the report. */
-#define S3_BC_READ_MAX_MS	3000	/* longest a read stays open (1 Nov: was 3000; the 42 cm
+#define S3_BC_READ_MAX_MS	5000	/* 5 Nov: 5000 again: the 328 mm barcode (Barcode_Sample.pdf)
+					   takes 2.7 s at the 12 cm/s curve speed, +quiet.  (1 Nov: was 3000; the 42 cm
 					   barcode takes 2.8 s at 15 cm/s, +quiet.  4 Nov: 3000
 					   again -- demo barcodes are at most an A4 long,
 					   297 mm = 2.0 s at 15 cm/s) */
 #define S3_BC_COOLDOWN_MS	500	/* NFR23: ignore sensor after a command */
 #define S3_BC_MAX_ELEMS		49	/* up to 5 characters incl. '*' '*' */
 #define S3_BC_MIN_RATIO_X10	15	/* narrowest wide >= 1.5 x widest narrow */
+/* 1 Nov: speed-tolerant decoding (subsystem3.c, decode_char_fit): each
+   character is matched against all 44 Code 39 patterns with a speed
+   that may change steadily across it (e.g. the VC slowing for a curve
+   on the barcode).  Accepted if the best fit's rms error <
+   S3_BC_FIT_MAX_PCT % and the next best pattern fits at least
+   S3_BC_FIT_MARGIN_X10 / 10 x worse.  The 1 Nov "Y" read (two wide bars
+   73 / 145 ms, wide gap only 1.2x) failed the 1.5x rank check above. */
+#define S3_BC_FIT_MAX_PCT	30
+#define S3_BC_FIT_MARGIN_X10	15
+/* 5 Nov: the barcode sensor read darker than white + this, but never
+   reached the black level, for a whole pass: printed once per pass
+   ("s3: barcode sensor saw grey ... never black"), so a sensor that is
+   too high / beside the bars shows in the log instead of silence. */
+#define S3_BC_GREY_DELTA	300
 
 /* 1 Nov: no letter -> command table any more.  Every barcode whose
    payload is ONE letter 'A'..'Z' is a valid read (S3_BEV_NAV_CMD, ch

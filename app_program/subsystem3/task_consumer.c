@@ -337,6 +337,35 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 						  t, &res), &res);
 		}
 		report_barcode(s3_bc_poll(&bc, now, &res), &res);
+
+#if S3_DEBUG_BARCODE
+		/* 5 Nov: the sensor went darker than white + S3_BC_GREY_DELTA
+		   but no edge came at all (so nothing else is printed): say so
+		   once, 1 s after the grey ended, with the levels */
+		{
+			static UH	grey_max, grey_t;
+			static UB	grey_edges;
+			INT		white = drv_ir_white();
+
+			if (grey_max == 0 && n == 0) grey_edges = 0;	/* new episode */
+			if (n > 0) grey_edges = 1;
+			if ((INT)raw > white + S3_BC_GREY_DELTA) {
+				if (raw > grey_max) grey_max = raw;
+				grey_t = now;
+			} else if (grey_max != 0 &&
+				   (H)(now - grey_t) > (H)S3_MS(1000)) {
+				if (!grey_edges) {
+					tm_printf((UB*)"s3: barcode sensor saw grey up to %d"
+						  " but never black (black needs > %d,"
+						  " white %d): sensor too high, or not"
+						  " over the bars?\n", grey_max,
+						  drv_ir_threshold(), white);
+				}
+				grey_max = 0;
+				grey_edges = 0;
+			}
+		}
+#endif
 	}
 
 	if (s3.err_hold > 0) s3.err_hold--;

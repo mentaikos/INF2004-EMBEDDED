@@ -200,6 +200,24 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U25", ok == 52,
 		   "A-Z decode the same both ways, direction flagged");
 
+	/* S3-U26 (1 Nov): the real "Y" read from the robot (speed changed
+	   ~2x inside the start '*'; the 1.5x rank check alone rejected it)
+	   decodes to Y, both ways round */
+	{
+		static const UH y[29] = { 182, 560, 195, 205, 730, 445, 1452, 465,
+			377, 465, 1085, 812, 250, 250, 817, 287, 247, 275, 262, 282,
+			250, 880, 405, 485, 1402, 457, 1237, 297, 260 };
+		BOOL	rv1, rv2;
+		INT	l1, l2, k;
+
+		l1 = s3_code39_decode_rev(y, 29, text, sizeof(text), &rv1);
+		ok = (l1 == 1 && text[0] == 'Y' && !rv1);
+		for (k = 0; k < 29; k++) r[k] = y[28 - k];
+		l2 = s3_code39_decode_rev(r, 29, text, sizeof(text), &rv2);
+		ok = ok && l2 == 1 && text[0] == 'Y' && rv2;
+		TEST_CHECK("S3-U26", ok, "real uneven-speed Y read decodes, both ways");
+	}
+
 	/* S3-U05: 20 reads of every letter A..Z with +-25 % width noise */
 	ok = 0;
 	for (i = 0; i < 20 * 26; i++) {
@@ -287,8 +305,15 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	ok = 0;
 	/* 29 Oct: levels follow S3_BC_DELTA_ON/OFF and S3_BC_WHITE_BAND */
 /* 1 Nov: before any bar the levels come from S3_BC_AMP_INIT */
+#if S3_BC_LOW_CONTRAST		/* 5 Nov: fixed levels above white */
+#define T_ON0	S3_BC_LC_ON
+#define T_OFF0	S3_BC_LC_OFF
+#define T_DRIFT	30		/* inside S3_BC_LC_BAND */
+#else
 #define T_ON0	(S3_BC_AMP_INIT * S3_BC_ON_PCT / 100)
 #define T_OFF0	(S3_BC_AMP_INIT * S3_BC_OFF_PCT / 100)
+#define T_DRIFT	200
+#endif
 #define T_MID	((T_ON0 + T_OFF0) / 2)
 	for (i = 0; i < 100; i++) {	/* between thr_off/on */
 		ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
@@ -296,13 +321,28 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	ok += (s3_bc_detect(&f.det, T_WHITE + T_ON0 + 100) != S3_EDGE_TO_BLACK);
 	ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
 	ok += (s3_bc_detect(&f.det, T_WHITE + T_OFF0 - 100) != S3_EDGE_TO_WHITE);
-	for (i = 0; i < S3_MS(10000); i++) {	/* surface gets 200 darker */
-		s3_bc_detect(&f.det, T_WHITE + 200);
+	for (i = 0; i < S3_MS(10000); i++) {	/* surface gets darker */
+		s3_bc_detect(&f.det, T_WHITE + T_DRIFT);
 	}
-	ok += (s3_bc_detect(&f.det, T_WHITE + T_ON0 + 100) != S3_EDGE_NONE);
+	ok += (s3_bc_detect(&f.det, T_WHITE + T_ON0 + T_DRIFT / 4) != S3_EDGE_NONE);
 	ok += (s3_bc_detect(&f.det, T_BLACK) != S3_EDGE_TO_BLACK);
 	TEST_CHECK("S3-U17", ok == 0,
 		   "edge detector: hysteresis, white baseline follows light");
+
+	/* S3-U27 (5 Nov): after a very dark mark (track tape), the learnt
+	   black is forgotten after S3_BC_AMP_FORGET_MS of white, so a
+	   weaker printed bar is seen again; before that it is not */
+	s3_bc_det_init(&f.det, T_WHITE);
+	ok = (s3_bc_detect(&f.det, 4000) == S3_EDGE_TO_BLACK);
+	for (i = 0; i < 10; i++) s3_bc_detect(&f.det, 4000);	/* learns ~3700 */
+	ok = ok && (s3_bc_detect(&f.det, T_WHITE) == S3_EDGE_TO_WHITE);
+	for (i = 0; i < S3_MS(50); i++) s3_bc_detect(&f.det, T_WHITE);
+#if !S3_BC_LOW_CONTRAST
+	ok = ok && (s3_bc_detect(&f.det, T_WHITE + 1500) == S3_EDGE_NONE);	/* too weak now */
+#endif
+	for (i = 0; i < S3_MS(S3_BC_AMP_FORGET_MS); i++) s3_bc_detect(&f.det, T_WHITE);
+	ok = ok && (s3_bc_detect(&f.det, T_WHITE + 1500) == S3_EDGE_TO_BLACK);	/* seen again */
+	TEST_CHECK("S3-U27", ok, "learnt black forgotten after white: weaker bars seen");
 
 	/* S3-U21: speed range.  Fast: 50 cm/s over 1 mm / 2.5 mm bars
 	   (narrow 2 ms, wide 5 ms) with +-15 % width jitter.  Slow:

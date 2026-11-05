@@ -127,6 +127,25 @@ LOCAL void bc_alarm_handler(UINT intno)
 	bc_ticks = tick;
 	bc_samples++;
 
+#if S3_BC_LOW_CONTRAST
+	/* 5 Nov: moving average of S3_BC_LC_AVG samples (2 ms) */
+	{
+		static UH	avg_buf[S3_BC_LC_AVG];
+		static UW	avg_sum;
+		static UB	avg_i, avg_full;
+
+		if (!avg_full) {		/* first sample: fill */
+			for (avg_i = 0; avg_i < S3_BC_LC_AVG; avg_i++) avg_buf[avg_i] = value;
+			avg_sum = (UW)value * S3_BC_LC_AVG;
+			avg_i = 0;
+			avg_full = 1;
+		}
+		avg_sum += (UW)value - avg_buf[avg_i];
+		avg_buf[avg_i] = value;
+		avg_i = (UB)((avg_i + 1) & (S3_BC_LC_AVG - 1));
+		value = (UH)(avg_sum / S3_BC_LC_AVG);
+	}
+#endif
 	edge = bc_edges_on ? s3_bc_detect(&bc_det, value) : S3_EDGE_NONE;
 	if (edge != S3_EDGE_NONE) {
 		head = bc_head;
@@ -551,6 +570,92 @@ LOCAL INT decode_char(const UH *w, UH *narrow_max)
 	return -1;
 }
 
+/* 1 Nov: speed-tolerant decoding (tried FIRST, the rank method above is
+   the fallback).  The robot's speed can change a lot inside one
+   character (the 1 Nov "Y" read: the two wide bars of the start '*'
+   measured 73 and 145 ms).  For every Code 39 pattern, and a wide:narrow
+   ratio of 2, 2.5 or 3, fit a speed that changes linearly across the 9
+   elements (time per unit = a + b x position) and keep the pattern that
+   fits best.  Accepted only if it fits well (rms error
+   < S3_BC_FIT_MAX_PCT % of the time per unit) and clearly better than
+   the next best pattern (S3_BC_FIT_MARGIN_X10 / 10 x). */
+
+/* Squared rms error of the best straight-line speed fit, relative to
+   the mean time per unit, as num / den.  Integer maths (no FPU on the
+   RP2040): widths are scaled to time per half-unit x 60 (narrow = 2
+   half-units, wide = wide2), so no division is needed per element.
+   With widths < 2^15 ticks every term fits in 64 bits.  Returns FALSE
+   if the fitted speed goes to zero or below somewhere. */
+LOCAL BOOL fit_err(const UH *w, UH pattern, INT wide2, D *num, float *den)
+{
+	D	sx = 0, sxx = 0, sy = 0, syy = 0, sxy = 0, dd, nn, a0;
+	D	x[9];
+	INT	i, u, pos = 0;
+
+	for (i = 0; i < 9; i++) {
+		D	y;
+
+		u    = (pattern & (0x100 >> i)) ? wide2 : 2;
+		x[i] = 2 * pos + u;			/* centre, quarter-units */
+		pos += u;
+		y    = (D)w[i] * (60 / u);		/* time per half-unit x 60 */
+		sx += x[i]; sxx += x[i] * x[i];
+		sy += y;    syy += y * y;   sxy += x[i] * y;
+	}
+	dd = 9 * sxx - sx * sx;			/* > 0 */
+	nn = 9 * sxy - sx * sy;			/* slope x dd */
+	a0 = sy * sxx - sx * sxy;		/* intercept x dd */
+	if (a0 + nn * x[0] <= 0 || a0 + nn * x[8] <= 0 || sy <= 0) return FALSE;
+	/* SSE = num / (9 dd); error^2 = (SSE / 9) / mean^2 = num / (dd sy^2) */
+	*num = (9 * syy - sy * sy) * dd - nn * nn;	/* >= 0 */
+	*den = (float)dd * (float)sy * (float)sy;
+	return TRUE;
+}
+
+/* One float division per pattern and ratio (132 per character) */
+LOCAL float frac(D n, float d)
+{
+	return (d > 0) ? (float)n / d : 1e9f;
+}
+
+LOCAL INT decode_char_fit(const UH *w, UH *narrow_max)
+{
+	static const UB	wide2[3] = { 4, 5, 6 };	/* ratio 2, 2.5, 3 */
+	float	best = 1e9f, second = 1e9f, e;
+	D	num;
+	float	den;
+	INT	i, k, bi = -1;
+
+	for (i = 0; i < 9; i++) {
+		if (w[i] >= 0x8000u) return -1;		/* out of range */
+	}
+	for (i = 0; i < s3_code39_len; i++) {
+		float	m = 1e9f;
+
+		for (k = 0; k < 3; k++) {
+			if (fit_err(w, s3_code39[i].pattern, wide2[k], &num, &den)) {
+				e = frac(num, den);
+				if (e < m) m = e;
+			}
+		}
+		if (m < best) { second = best; best = m; bi = i; }
+		else if (m < second) second = m;
+	}
+	/* best, second are squared: compare with squared limits */
+	if (bi < 0 ||
+	    best * 10000 > (float)(S3_BC_FIT_MAX_PCT * S3_BC_FIT_MAX_PCT) ||
+	    second * 100 < best * (float)(S3_BC_FIT_MARGIN_X10 * S3_BC_FIT_MARGIN_X10)) {
+		return -1;
+	}
+	*narrow_max = 0;
+	for (i = 1; i < 9; i += 2) {
+		if (!(s3_code39[bi].pattern & (0x100 >> i)) && w[i] > *narrow_max) {
+			*narrow_max = w[i];
+		}
+	}
+	return s3_code39[bi].ch;
+}
+
 /* Decode in the order given.  Returns payload length or -S3_BCERR_xxx */
 LOCAL INT decode_dir(const UH *w, INT n, char *text, INT max)
 {
@@ -561,7 +666,8 @@ LOCAL INT decode_dir(const UH *w, INT n, char *text, INT max)
 	if (n < 29 || (n + 1) % 10 != 0) return -S3_BCERR_FRAME;
 
 	for (i = 0; i < k; i++) {
-		c = decode_char(&w[10 * i], &nmax);
+		c = decode_char_fit(&w[10 * i], &nmax);	/* 1 Nov: first */
+		if (c < 0) c = decode_char(&w[10 * i], &nmax);
 		if (c < 0) return -S3_BCERR_PATTERN;
 
 		/* the gap before this character must look narrow */
@@ -625,9 +731,15 @@ LOCAL void det_thresholds(S3_BC_DET *d)
 
 	W amp   = (W)d->amp;
 
+#if S3_BC_LOW_CONTRAST
+	(void)amp;			/* 5 Nov: fixed, just above white */
+	d->thr_on  = clamp_adc(white + S3_BC_LC_ON);
+	d->thr_off = clamp_adc(white + S3_BC_LC_OFF);
+#else
 	/* 1 Nov: part of the way from white to the black actually seen */
 	d->thr_on  = clamp_adc(white + amp * S3_BC_ON_PCT / 100);
 	d->thr_off = clamp_adc(white + amp * S3_BC_OFF_PCT / 100);
+#endif
 }
 
 EXPORT void s3_bc_det_init(S3_BC_DET *d, UH white)
@@ -636,6 +748,7 @@ EXPORT void s3_bc_det_init(S3_BC_DET *d, UH white)
 	d->black    = FALSE;
 	d->amp      = S3_BC_AMP_INIT;
 	if (d->amp < S3_BC_AMP_MIN) d->amp = S3_BC_AMP_MIN;
+	d->white_n  = 0;
 	det_thresholds(d);
 }
 
@@ -651,12 +764,26 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 		}
 		if (adc < d->thr_off) {
 			d->black = FALSE;
+			d->white_n = 0;
 			return S3_EDGE_TO_WHITE;
 		}
-	} else if (adc > d->thr_on) {
+		return S3_EDGE_NONE;
+	}
+	/* 5 Nov: white for S3_BC_AMP_FORGET_MS: forget the learnt black */
+	if (d->white_n < 0xFFFFu) d->white_n++;
+	if (d->white_n == (UH)S3_MS(S3_BC_AMP_FORGET_MS) &&
+	    d->amp != S3_BC_AMP_INIT) {
+		d->amp = S3_BC_AMP_INIT;
+		det_thresholds(d);
+	}
+	if (adc > d->thr_on) {
 		d->black = TRUE;
 		return S3_EDGE_TO_BLACK;
+#if S3_BC_LOW_CONTRAST
+	} else if ((W)adc < (W)(d->white_q8 >> 8) + S3_BC_LC_BAND) {
+#else
 	} else if ((W)adc < (W)(d->white_q8 >> 8) + S3_BC_WHITE_BAND) {
+#endif
 		/* Clearly white: follow the surface brightness slowly */
 		d->white_q8 += (W)(((W)adc << 8) - (W)d->white_q8)
 			       >> S3_BC_WHITE_SHIFT;
@@ -832,7 +959,7 @@ EXPORT INT s3_bc_poll(S3_BC *bc, UH now, S3_BC_RESULT *res)
 		}
 		/* 4 Nov: a few elements, then nothing: a line, not a barcode */
 		if (bc->n < S3_BC_HOLD_MIN_ELEMS &&
-		    quiet >= (H)S3_MS(S3_BC_HOLD_QUIET_MS)) {
+		    quiet >= (H)S3_MS(S3_BC_DROP_QUIET_MS)) {	/* 5 Nov: was HOLD_QUIET */
 			return end_read(bc, now, res);
 		}
 		/* 30 Oct: otherwise the read stays open S3_BC_READ_MAX_MS from
