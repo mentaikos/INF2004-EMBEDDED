@@ -65,7 +65,7 @@
    correction did not catch, goes past 20.  Slower = a tighter arc for
    the same steering, so the robot gets back to the line before it
    swings across it.  0 = off. */
-#define VC_CURVE_STEER		20	/* 5 Nov: was 26 (sized for KP 6) */
+#define VC_CURVE_STEER		26	/* 5 Nov: was 26 (sized for KP 6), 20 for KP 4; 6 Nov: 26 again with S3_STEER_KP 6 */
 #define VC_CURVE_CM_S		12
 #define VC_CURVE_HOLD_MS	300
 /* 4 Nov: line lost IN a curve (VC_CURVE_STEER or more): keep following

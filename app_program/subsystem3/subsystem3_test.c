@@ -428,6 +428,22 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U10", ok && f.discard == 1 && f.err == 0 && f.nav == 0,
 		   "partial read discarded at the read time limit");
 
+	/* S3-U30 (6 Nov, video IMG_0848): a slow pass (~4 cm/s: 7 mm /
+	   21 mm bars = 175 / 525 ms, whole barcode ~8.6 s, longer than
+	   the 16-bit clock's 8 s) still decodes; a read that stops half
+	   way is still discarded */
+	feed_init(&f);
+	feed_level(&f, T_WHITE, S3_MS(50));
+	n = make_widths("*X*", S3_MS(175), S3_MS(525), 5, w);
+	feed_elements(&f, w, n, 2000);
+	ok = (f.nav == 1 && f.last.ch == 'X' && f.discard == 0);
+	feed_init(&f);
+	feed_level(&f, T_WHITE, S3_MS(50));
+	feed_elements(&f, w, 14, 0);
+	feed_level(&f, T_WHITE, S3_MS(S3_BC_SLOW_TIMEOUT_MS + 100));
+	TEST_CHECK("S3-U30", ok && f.discard == 1 && f.nav == 0,
+		   "slow 8.6 s pass decodes; a stopped read is discarded");
+
 	/* S3-U16: bc_ring overflow half way through a barcode: it is
 	   discarded with no NAV_CMD, the rest of it is not read as a new
 	   barcode, and the next barcode is read normally (8.3) */

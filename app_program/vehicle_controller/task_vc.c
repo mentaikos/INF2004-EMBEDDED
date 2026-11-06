@@ -306,6 +306,9 @@ LOCAL void check_curve(void)
 	INT		a;
 
 	s3_sts_unpack(s3_get_status(), &f);
+	/* 6 Nov: no speed change while a barcode is being read: a steady
+	   speed over the bars reads better (team) */
+	if (f.bc_state == S3_BC_MEASURING) return;
 	a = (f.steer < 0) ? -f.steer : f.steer;
 	if (a >= VC_CURVE_STEER) {
 		t_straight = now_ms();

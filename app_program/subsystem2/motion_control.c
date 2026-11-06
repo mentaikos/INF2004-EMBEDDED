@@ -364,13 +364,30 @@ LOCAL void finish_goal(void)
 	send_evt(EVT_MOTION_DONE, type);
 }
 
+/* 4 Nov: speed in SPEED_FOLLOW after the start/stop ramp, -1 = not
+   following (re-initialised from the wheels on entry) */
+LOCAL INT	follow_v = -1;
+
 LOCAL void set_targets(void)
 {
 	INT	v, split, corr, avg, rem;
 
+	if (mf.state != S2_ST_SPEED_FOLLOW) follow_v = -1;
+
 	switch (mf.state) {
 	case S2_ST_SPEED_FOLLOW:
 		v = imin(cruise_mm_s, limit_mm_s);
+		/* 4 Nov: the start/stop ramp acts on the speed here; the
+		   wheels then follow the steering at once (drive_wheel) */
+		if (follow_v < 0) follow_v = ((INT)wh[0].ramp + wh[1].ramp) / 2;
+		if (v > follow_v + S2_ACCEL_MM_S_PER_CYC) {
+			follow_v += S2_ACCEL_MM_S_PER_CYC;
+		} else if (v < follow_v - S2_DECEL_MM_S_PER_CYC) {
+			follow_v -= S2_DECEL_MM_S_PER_CYC;
+		} else {
+			follow_v = v;
+		}
+		v = follow_v;
 		split = v * steer / S2_STEER_FULL;	/* + steer: left faster */
 		/* 28 Oct (jiahao16, Fine-Tuning 4bea17a, merged 30 Oct): the
 		   outer wheel keeps the cruise speed and the inner one slows by
@@ -419,15 +436,24 @@ LOCAL void drive_wheel(UINT w, INT dt_ms)
 		}
 	}
 
-	/* acceleration limit (stopping is immediate) */
-	if (tgt == 0) {
-		p->ramp = 0;
-	} else if (tgt > p->ramp + S2_ACCEL_MM_S_PER_CYC) {
-		p->ramp = (H)(p->ramp + S2_ACCEL_MM_S_PER_CYC);
-	} else if (tgt < p->ramp - S2_DECEL_MM_S_PER_CYC) {
-		p->ramp = (H)(p->ramp - S2_DECEL_MM_S_PER_CYC);
-	} else {
-		p->ramp = (H)tgt;
+	/* acceleration limit (stopping is immediate).  4 Nov: in
+	   SPEED_FOLLOW the speed is already ramped in set_targets(), so a
+	   wheel may follow a steering change faster */
+	{
+		INT	up = S2_ACCEL_MM_S_PER_CYC, dn = S2_DECEL_MM_S_PER_CYC;
+
+		if (mf.state == S2_ST_SPEED_FOLLOW) {
+			up = dn = S2_FOLLOW_STEP_MM_S_PER_CYC;
+		}
+		if (tgt == 0) {
+			p->ramp = 0;
+		} else if (tgt > p->ramp + up) {
+			p->ramp = (H)(p->ramp + up);
+		} else if (tgt < p->ramp - dn) {
+			p->ramp = (H)(p->ramp - dn);
+		} else {
+			p->ramp = (H)tgt;
+		}
 	}
 
 	if (p->ramp == 0) {

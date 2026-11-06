@@ -107,6 +107,14 @@
 					   the inner wheel took 300 ms to slow for a
 					   curve (jiahao16, Fine-Tuning 4bea17a) */
 #define S2_DECEL_MM_S_PER_CYC	40	/* slowing down (2000 mm/s^2), Fine-Tuning */
+/* 4 Nov (line-follow weave): in SPEED_FOLLOW the two limits above now
+   apply to the robot's SPEED only (follow_v in set_targets()); each
+   wheel may then change by up to S2_FOLLOW_STEP_MM_S_PER_CYC per cycle,
+   so a steering correction reaches the wheels in 1 cycle instead of 3-5
+   (that delay made the robot overshoot each edge of the line and swing
+   from side to side).  MOVE(d) / TURN (obstacle bypass, junction turns)
+   are unchanged. */
+#define S2_FOLLOW_STEP_MM_S_PER_CYC	80
 #define S2_HEADING_K_MM_S	4	/* heading hold: mm/s per count of L/R difference (15 made the robot weave, 27 Oct) */
 #define S2_STEER_FULL		64	/* steer value giving a 100 % speed split */
 #define S2_STEER_TIMEOUT_MS	100	/* no steer message -> steer 0 */

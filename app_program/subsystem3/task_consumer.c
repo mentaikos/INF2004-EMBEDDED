@@ -117,22 +117,30 @@ LOCAL void send_steer(void)
 	/* 30 Oct: drive straight while a barcode is being read.
 	   4 Nov: only while its edges keep coming (S3_BC_HOLD_QUIET_MS);
 	   a single black line (junction, curve) no longer holds it 5 s */
+	/* 6 Nov: from the FIRST bar (see S3_BC_HOLD_EARLY_QUIET_MS) */
 	if (bc.state == S3_BC_MEASURING &&
-	    (H)(drv_ir_ticks() - bc.last_t) < (H)S3_MS(S3_BC_HOLD_QUIET_MS) &&
-	    bc.n >= S3_BC_HOLD_MIN_ELEMS &&			/* 4 Nov: looks like a barcode */
-	    lt.bend < S3_BEND_CURVE && lt.bend > -S3_BEND_CURVE) {	/* not in a curve */
+	    ((bc.n >= S3_BC_HOLD_MIN_ELEMS &&			/* '*' passed: a barcode */
+	      (H)(drv_ir_ticks() - bc.last_t) < (H)S3_MS(S3_BC_HOLD_QUIET_MS)) ||
+	     (!bc.nostart &&					/* '*' not failed yet */
+	      (H)(drv_ir_ticks() - bc.last_t) < (H)S3_MS(S3_BC_HOLD_EARLY_QUIET_MS)))) {
 #if S3_BC_STEER_LIMIT > 0
 		if (steer >  S3_BC_STEER_LIMIT) steer =  S3_BC_STEER_LIMIT;
 		if (steer < -S3_BC_STEER_LIMIT) steer = -S3_BC_STEER_LIMIT;
 #else
 		steer = lt.trim;
 #endif
-		if (!held) tm_printf((UB*)"s3: barcode: steering limited to +-%d\n",
-				      S3_BC_STEER_LIMIT);
-		held = 1;
+		/* 6 Nov: printed once the '*' passed (mat marks would flood
+		   the log) */
+		if (held < 2 && bc.n >= S3_BC_HOLD_MIN_ELEMS) {
+			tm_printf((UB*)"s3: barcode: start '*' seen, steering limited"
+				  " to +-%d\n", S3_BC_STEER_LIMIT);
+			held = 2;
+		} else if (held == 0) {
+			held = 1;
+		}
 	} else if (held) {
+		if (held == 2) tm_printf((UB*)"s3: barcode: steering released\n");
 		held = 0;
-		tm_printf((UB*)"s3: barcode: steering released\n");
 	}
 #endif
 	if (motion_send_steer(steer) == E_OK) {

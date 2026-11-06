@@ -376,7 +376,7 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
  * --------------------------------------------------------------------- */
 
 #define S3_JUNCTION_SAMPLES	2	/* both black this many cycles */
-#define S3_LINE_LOST_MS	 500	/* both white for MORE than this (> 150 ms,
+#define S3_LINE_LOST_MS	1000	/* 6 Nov: was 500.  Both white for MORE than this (> 150 ms,
 					   NFR21): longer than one weave across
 					   the gap between the sensors */
 #define S3_LINE_GAP_MS		150	/* both white this long: gap = 1 */
@@ -394,7 +394,15 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    the other edge.  Now a touch starts at 8 and the KD kick is halved;
    a touch that lasts (a curve) still grows through the bend
    (S3_BEND_STEP every 20 ms), so curves keep their full steering. */
-#define S3_STEER_KP		4	/* 30 Oct: 7 -> 6; 4 Nov: 6 -> 4 (edge touch 12 -> 8) */
+/* 6 Nov (smoother line following): together with Motion Control's
+   faster steering response (S2_FOLLOW_STEP_MM_S_PER_CYC, subsystem2.h),
+   KP 6 cut the simulated straight-line yaw swing from ~34 to ~20 deg
+   (median over sensor spacing 24-30 mm, motor lag, 5 % wheel pull);
+   curves of 15 cm radius still held.  Straighter driving keeps both
+   sensors white for longer (up to ~0.8 s in the simulation), so
+   S3_LINE_LOST_MS went 500 -> 1000.  Tune on the track: weave still ->
+   KP 7-8; jerky -> 5. */
+#define S3_STEER_KP		6	/* 30 Oct: 7 -> 6; 4 Nov: 6 -> 4; 6 Nov: 4 -> 6 */
 #define S3_STEER_KD		1	/* 4 Nov: was 2 */
 #define S3_STEER_SEEK		8	/* both white: ~12 % split (the most) */
 /* 4 Nov (straight-line weave): the drift used to start at full SEEK the
@@ -438,6 +446,25 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    S3_BC_HOLD_QUIET_MS is a line, not a barcode: it is dropped at once
    so a real barcode right after it is not missed. */
 #define S3_BC_HOLD_MIN_ELEMS	10	/* 5 Nov: was 6.  10 = the '*' start check passed (s3_bc_edge) */
+/* 6 Nov (team: drive straight and steady over the barcode; video
+   IMG_0848): the limit above started only after the start '*' (10
+   elements), so the '*' itself was read while the robot still swung
+   from side to side -- the barcode sensor sits at the right front
+   corner, so each swing sped it up and slowed it down (in a simulation
+   of the robot it even stopped or went backwards) and the '*' did not
+   decode.  The limit now starts at the FIRST bar, also while the
+   tracker has a "bend" (the weave builds one on a straight too; the
+   4 Nov rule "never in a bend" kept the limit off on most passes):
+     - first bar until the '*' check (9 elements): limited while edges
+       keep coming, released after S3_BC_HOLD_EARLY_QUIET_MS without
+       one (a line crossed in a curve: a moment only);
+     - '*' passed: limited, released after S3_BC_HOLD_QUIET_MS;
+     - '*' failed (mat marks): released for the rest of that read.
+   The VC also keeps the speed unchanged during a read (task_vc.c,
+   check_curve), so the robot does not slow down half way across.
+   Simulation (robot + line tracker + sensor at the right front corner,
+   big barcode): read 1% -> ~68% of passes, line never lost. */
+#define S3_BC_HOLD_EARLY_QUIET_MS	300
 /* 5 Nov: the drop of a short read ("a line, not a barcode") waits
    longer than the steering release above: at 400 ms a slow pass of the
    big barcode (21 mm wide bar, < 5 cm/s) was dropped after 1-2
@@ -472,6 +499,26 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    white, the bend fades by 1 per cycle.  (28 Oct fix, restored 30 Oct:
    it had been lost in a merge, which brought the weave back.) */
 #define S3_BEND_CURVE		12
+/* 6 Nov (logs 16:43 / 16:49: "curve" on the straight, the robot
+   slowed to 12 cm/s again and again; inner wheel stopped in curves):
+   the bend grew from the 2nd cycle of any edge touch, and in a
+   left-right swing each touch lasts long enough to build a bend that
+   throws the robot across to the other edge -- a slow swing that the
+   VC reads as curves.  The bend now grows only once the same edge has
+   stayed touched for S3_BEND_DELAY cycles (a real curve keeps it
+   touched; a swing does not).  Simulation (robot + motors + VC):
+   straight speed 83 -> 148 mm/s, slowed as a "curve" 96 % -> 32 % of
+   the time; curves of 11, 15 and 25 cm radius still held both ways
+   (25 cycles lost the 11 cm ones: 12 keeps a margin).
+   6 Nov (log 17:00, 12 cycles): straight fine, but half way round a
+   curve the robot ran wide: in a real curve the line flickers on and
+   off the sensor and the inner sensor touches too; each time the bend
+   restarted and had to wait the whole delay again.  Now: 8 cycles, and
+   none at all for S3_BEND_CURVE_MEM_MS after a curve was seen (|bend|
+   >= S3_BEND_CURVE).  Simulation with 20 % sensor flicker: no curve
+   lost (11-25 cm radius, both ways), straight 106-142 mm/s. */
+#define S3_BEND_DELAY		8	/* cycles (160 ms); 6 Nov: was 12 */
+#define S3_BEND_CURVE_MEM_MS	1500
 
 #define S3_TRIM_STEP		2
 #define S3_TRIM_MAX		6	/* +-25 % split at most */
@@ -511,6 +558,8 @@ typedef struct {
 	B	steer;		/* steering byte for this cycle */
 	B	trim;		/* learnt drift correction, +-S3_TRIM_MAX */
 	B	bend;		/* curve correction, +-S3_BEND_MAX */
+	UB	touch_n;	/* 6 Nov: cycles the same edge has stayed touched */
+	UH	curve_ms;	/* 6 Nov: a curve (|bend| >= S3_BEND_CURVE) was seen this recently */
 } S3_LINE;
 
 IMPORT void	s3_line_init(S3_LINE *lt);
@@ -550,7 +599,11 @@ IMPORT INT	s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms);
    sets the quiet wait after an abort).  A full pass of the track
    barcode took 2.7 s first bar -> last bar on the robot.  Replaces
    NFR22's 200 ms no-edge discard: update the report. */
-#define S3_BC_READ_MAX_MS	5000	/* 5 Nov: 5000 again: the 328 mm barcode (Barcode_Sample.pdf)
+/* 6 Nov (video IMG_0848): the robot crossed an A4 barcode at only
+   ~4 cm/s (~7 s), so the 5 s limit cut every read after 9-11 elements.
+   12 s = 297 mm at 2.5 cm/s.  A read whose edges stop (robot stopped)
+   still ends after S3_BC_SLOW_TIMEOUT_MS without an edge. */
+#define S3_BC_READ_MAX_MS	12000	/* 6 Nov: was 5000.  5 Nov: 5000 again: the 328 mm barcode (Barcode_Sample.pdf)
 					   takes 2.7 s at the 12 cm/s curve speed, +quiet.  (1 Nov: was 3000; the 42 cm
 					   barcode takes 2.8 s at 15 cm/s, +quiet.  4 Nov: 3000
 					   again -- demo barcodes are at most an A4 long,
@@ -606,12 +659,13 @@ typedef struct {
 } S3_BC_RESULT;
 
 /* Element widths are ticks between edges.  An element can never reach
-   S3_BC_READ_MAX_MS (12000 ticks) plus one 20 ms cycle without the
-   read ending, so a halfword holds every width.  Used only by the task. */
+   S3_BC_SLOW_TIMEOUT_MS (6 Nov: a read ends after that long without an
+   edge) plus one 20 ms cycle, so a halfword holds every width.  Used only by the task. */
 typedef struct {
 	UB	state : 2;	/* S3_BC_xxx */
 	UB	black : 1;	/* level after the last edge */
 	UB	hold : 1;	/* after an abort: wait for a quiet gap */
+	UB	nostart : 1;	/* 6 Nov: this read failed the '*' start check */
 	UB	n;		/* elements stored, 0..S3_BC_MAX_ELEMS */
 	UH	run_max;	/* widest element of this read, ticks */
 	UH	last_t;		/* time of the last edge (16-bit tick clock) */

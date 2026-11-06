@@ -325,6 +325,8 @@ EXPORT void s3_line_init(S3_LINE *lt)
 	lt->side_left  = 0;	/* no side yet: drift right first */
 	lt->trim       = 0;
 	lt->bend       = 0;
+	lt->touch_n    = 0;
+	lt->curve_ms   = 0;
 }
 
 /* Coarse line position from the two sensors (FR9): - = left, + = right */
@@ -394,13 +396,32 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 		lt->trim = (B)(lt->trim + S3_TRIM_STEP);
 	}
 
+	/* 6 Nov: how long the same edge has stayed touched */
+	if ((pos == 2 || pos == -2) && pos == lt->pos) {
+		if (lt->touch_n < 255) lt->touch_n++;
+	} else {
+		lt->touch_n = 0;
+	}
+
+	/* 6 Nov: remember a curve for a while (no delay inside it) */
+	if (lt->bend >= S3_BEND_CURVE || lt->bend <= -S3_BEND_CURVE) {
+		lt->curve_ms = S3_BEND_CURVE_MEM_MS;
+	} else if (lt->curve_ms > dt_ms) {
+		lt->curve_ms = (UH)(lt->curve_ms - dt_ms);
+	} else {
+		lt->curve_ms = 0;
+	}
+
 	/* Bend: grows while the curve keeps the line on one side */
 	if (lt->state == S3_LINE_JUNCTION) {
 		lt->bend = 0;
 	} else if ((pos == 2 && lt->bend < 0) || (pos == -2 && lt->bend > 0)) {
 		lt->bend = 0;			/* other edge: overshoot, restart */
 	} else if ((pos == 2 || pos == -2) && pos == lt->pos) {
-		lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP : -S3_BEND_STEP));
+		/* 6 Nov: only once the touch has lasted S3_BEND_DELAY */
+		if (lt->touch_n > S3_BEND_DELAY || lt->curve_ms > 0) {
+			lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP : -S3_BEND_STEP));
+		}
 	} else if (!left && !center) {
 		/* 30 Oct: restores the 28 Oct straight-line fix (lost in a
 		   merge): grow while white only once a curve is confirmed */
@@ -829,6 +850,7 @@ EXPORT void s3_bc_init(S3_BC *bc)
 	bc->start_t  = 0;
 	bc->until_t  = 0;
 	bc->hold     = 0;
+	bc->nostart  = 0;
 	bc->run_max  = 0;
 	bc->n        = 0;
 }
@@ -935,6 +957,7 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t, S3_BC_RESULT *res)
 			bc->start_t = t;
 			bc->run_max = 0;
 			bc->n       = 0;
+			bc->nostart = 0;
 		}
 		return S3_BEV_NONE;
 
@@ -960,6 +983,7 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t, S3_BC_RESULT *res)
 				if (bc->elem[i] > bc->run_max) bc->run_max = bc->elem[i];
 			}
 			bc->n = 7;
+			bc->nostart = 1;	/* 6 Nov: steering released */
 		}
 		return S3_BEV_NONE;
 
@@ -1001,10 +1025,24 @@ EXPORT INT s3_bc_poll(S3_BC *bc, UH now, S3_BC_RESULT *res)
 		    quiet >= (H)S3_MS(S3_BC_DROP_QUIET_MS)) {	/* 5 Nov: was HOLD_QUIET */
 			return end_read(bc, now, res);
 		}
-		/* 30 Oct: otherwise the read stays open S3_BC_READ_MAX_MS from
-		   its first bar, then ends (a partial read is discarded) */
-		if (t_after(now, bc->start_t) >= (H)S3_MS(S3_BC_READ_MAX_MS)) {
+		/* 6 Nov: a read that has stopped (robot stopped on it):
+		   no edge for S3_BC_SLOW_TIMEOUT_MS ends it (a partial read
+		   is discarded).  Also keeps quiet well inside 16 bits. */
+		if (quiet >= (H)S3_MS(S3_BC_SLOW_TIMEOUT_MS)) {
 			return end_read(bc, now, res);
+		}
+		/* 30 Oct: otherwise the read stays open S3_BC_READ_MAX_MS from
+		   its first bar, then ends (a partial read is discarded).
+		   6 Nov: measured as the elements so far plus the open one,
+		   in 32 bits, so the limit may pass the 16-bit clock's 8 s */
+		{
+			UW	el = (quiet > 0) ? (UW)quiet : 0;
+			INT	i;
+
+			for (i = 0; i < bc->n; i++) el += bc->elem[i];
+			if (el >= (UW)S3_MS(S3_BC_READ_MAX_MS)) {
+				return end_read(bc, now, res);
+			}
 		}
 		return S3_BEV_NONE;
 
