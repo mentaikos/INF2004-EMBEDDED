@@ -746,6 +746,7 @@ EXPORT void s3_bc_det_init(S3_BC_DET *d, UH white)
 {
 	d->white_q8 = (UW)white << 8;
 	d->black    = FALSE;
+	d->pend     = 0;
 	d->amp      = S3_BC_AMP_INIT;
 	if (d->amp < S3_BC_AMP_MIN) d->amp = S3_BC_AMP_MIN;
 	d->white_n  = 0;
@@ -762,12 +763,15 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 			d->amp = (UH)lv;
 			det_thresholds(d);
 		}
-		if (adc < d->thr_off) {
-			d->black = FALSE;
-			d->white_n = 0;
-			return S3_EDGE_TO_WHITE;
+		if (adc >= d->thr_off) {
+			d->pend = 0;
+			return S3_EDGE_NONE;
 		}
-		return S3_EDGE_NONE;
+		if (++d->pend < S3_BC_SETTLE) return S3_EDGE_NONE;
+		d->pend = 0;
+		d->black = FALSE;
+		d->white_n = 0;
+		return S3_EDGE_TO_WHITE;
 	}
 	/* 5 Nov: white for S3_BC_AMP_FORGET_MS: forget the learnt black */
 	if (d->white_n < 0xFFFFu) d->white_n++;
@@ -776,7 +780,10 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 		d->amp = S3_BC_AMP_INIT;
 		det_thresholds(d);
 	}
+	if (adc <= d->thr_on) d->pend = 0;
 	if (adc > d->thr_on) {
+		if (++d->pend < S3_BC_SETTLE) return S3_EDGE_NONE;
+		d->pend = 0;
 		d->black = TRUE;
 		return S3_EDGE_TO_BLACK;
 #if S3_BC_LOW_CONTRAST
@@ -889,6 +896,26 @@ EXPORT INT s3_bc_abort(S3_BC *bc, UH now, S3_BC_RESULT *res)
 	return ev;
 }
 
+/* 5 Nov (track run 21:33): with the low-contrast levels the mat's
+   marks (tile seams, logos, the line's edge in a curve) opened long
+   "reads" of 30+ elements; they held the steering limit through curves
+   and could swallow a real barcode.  Every Code 39 barcode starts with
+   '*' (or ends with it, read backwards), so the first 9 elements must
+   be '*' one way round.  If not, the oldest bar + space are dropped and
+   the check repeats on the next pair: marks never lock on, and a real
+   barcode locks on as soon as its '*' has gone by. */
+LOCAL BOOL is_start(const UH *w)
+{
+	UH	r[9], nmax;
+	INT	i;
+
+	if (decode_char_fit(w, &nmax) == '*' || decode_char(w, &nmax) == '*') {
+		return TRUE;
+	}
+	for (i = 0; i < 9; i++) r[i] = w[8 - i];
+	return decode_char_fit(r, &nmax) == '*' || decode_char(r, &nmax) == '*';
+}
+
 EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t, S3_BC_RESULT *res)
 {
 	UH	w;
@@ -922,6 +949,18 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t, S3_BC_RESULT *res)
 		if (w > bc->run_max) bc->run_max = w;
 		bc->last_t  = t;
 		bc->black   = (UB)black;
+		/* 5 Nov: not a '*' start: slide on by one bar + space */
+		if (bc->n == 9 && !is_start(bc->elem)) {
+			INT	i;
+
+			bc->start_t = (UH)(bc->start_t + bc->elem[0] + bc->elem[1]);
+			bc->run_max = 0;
+			for (i = 0; i < 7; i++) {
+				bc->elem[i] = bc->elem[i + 2];
+				if (bc->elem[i] > bc->run_max) bc->run_max = bc->elem[i];
+			}
+			bc->n = 7;
+		}
 		return S3_BEV_NONE;
 
 	default:

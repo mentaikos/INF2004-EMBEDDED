@@ -269,10 +269,26 @@ IMPORT void	s3_bind_vc(ID mbf_vc_evt, ID flg_fault);
 #ifndef S3_BC_LOW_CONTRAST
 #define S3_BC_LOW_CONTRAST	1	/* 5 Nov: ON, tuned to the sensor as mounted now (0 = learnt levels) */
 #endif
-#define S3_BC_LC_ON		65	/* thin bars peaked +81..+101 (capture 20:48) */
-#define S3_BC_LC_OFF		40	/* white noise sd ~6 */
+/* 5 Nov (capture 21:58): the small barcode's thin bars peak only
+   +55..+70 (big one +81..+101), so 65 / 40 never saw them.  32 / 20,
+   with S3_BC_SETTLE below: small 'Z' and big 'X' traces both decode
+   200/200 in both directions, also with 2x the noise or the small
+   bars 30% fainter; random mat marks still never hold the steering. */
+#define S3_BC_LC_ON		32	/* was 65 */
+#define S3_BC_LC_OFF		20	/* was 40; white noise sd ~6 */
 #define S3_BC_LC_BAND		40
 #define S3_BC_LC_AVG		8	/* power of two */
+/* 5 Nov (capture 21:58, small barcode 'Z'): the thick bars fade out
+   slowly (+60..+40 for ~20 ms) and single noisy samples there crossed
+   both levels, making a 0.25 ms bar.  A level change now counts only
+   after S3_BC_SETTLE samples in a row past the level; both edges are
+   late by the same time, so the widths do not change.  Elements
+   shorter than that are not seen (4 ms = 0.6 mm at 15 cm/s). */
+#if S3_BC_LOW_CONTRAST
+#define S3_BC_SETTLE		S3_MS(4)	/* 3 ms still missed some (replay) */
+#else
+#define S3_BC_SETTLE		1		/* every sample, as before */
+#endif
 /* 60 / 48: centred near (paper + black) / 2, the midpoint the blurred
    narrow bars and gaps swing around (paper ~650 > floor ~204).  Fitted
    to the 1 Nov trace: also reads 3 mm bars if the sensor is sharp
@@ -297,6 +313,7 @@ typedef struct {
 	UH	amp;		/* 1 Nov: darkest bar so far - white (12 bits) */
 	UH	white_n;	/* 5 Nov: samples since the last black, saturates */
 	UB	black;		/* current level, after hysteresis: 0/1 */
+	UB	pend;		/* 5 Nov: samples past the level so far */
 } S3_BC_DET;
 
 IMPORT void	s3_bc_det_init(S3_BC_DET *d, UH white);
@@ -420,7 +437,7 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    S3_BEND_CURVE).  A read with fewer elements and no edge for
    S3_BC_HOLD_QUIET_MS is a line, not a barcode: it is dropped at once
    so a real barcode right after it is not missed. */
-#define S3_BC_HOLD_MIN_ELEMS	6
+#define S3_BC_HOLD_MIN_ELEMS	10	/* 5 Nov: was 6.  10 = the '*' start check passed (s3_bc_edge) */
 /* 5 Nov: the drop of a short read ("a line, not a barcode") waits
    longer than the steering release above: at 400 ms a slow pass of the
    big barcode (21 mm wide bar, < 5 cm/s) was dropped after 1-2

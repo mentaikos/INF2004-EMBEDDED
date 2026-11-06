@@ -129,6 +129,115 @@ LOCAL void feed_elements(FEED *f, const UH *w, INT n, UW quiet_ms)
 	feed_level(f, T_WHITE, S3_MS(quiet_ms));
 }
 
+/* 5 Nov: one level for S3_BC_SETTLE samples (a level change needs
+   that many in a row): the edge it gave, if any */
+LOCAL INT det_hold(S3_BC_DET *d, UH level)
+{
+	INT	i, e, edge = S3_EDGE_NONE;
+
+	for (i = 0; i < S3_BC_SETTLE; i++) {
+		e = s3_bc_detect(d, level);
+		if (e != S3_EDGE_NONE) edge = e;
+	}
+	return edge;
+}
+
+#if S3_BC_LOW_CONTRAST
+/* 5 Nov: the small barcode ('Z') as the robot's sensor saw it (capture
+   21:58, one ADC value per 2 ms; the start of the first '*', missed
+   by the capture, is rebuilt from its own thin bar and spaces).  Thin
+   bars only +55..+70 above the floor (~172), thick bars +1300 with
+   slow tails. */
+LOCAL const UH real_z[] = {
+	188, 184, 198, 203, 213, 200, 202, 207, 224, 210, 228, 238,
+	237, 228, 234, 242, 209, 232, 220, 208, 208, 204, 193, 185,
+	175, 197, 189, 182, 179, 175, 179, 172, 173, 172, 179, 161,
+	177, 176, 161, 158, 166, 165, 174, 172, 165, 177, 171, 185,
+	166, 184, 182, 178, 176, 179, 172, 172, 181, 173, 178, 177,
+	173, 173, 175, 165, 174, 182, 182, 179, 160, 192, 177, 175,
+	176, 201, 194, 192, 185, 195, 213, 216, 219, 217, 236, 235,
+	226, 233, 232, 240, 228, 220, 217, 212, 216, 212, 185, 193,
+	186, 181, 182, 185, 189, 180, 181, 177, 182, 177, 188, 184,
+	198, 203, 282, 322, 447, 654, 829, 945, 1053, 1125, 1172, 1200,
+	1242, 1268, 1274, 1289, 1290, 1304, 1305, 1316, 1338, 1354, 1370, 1397,
+	1388, 1400, 1388, 1357, 1338, 1311, 1268, 1254, 1204, 1148, 1068, 969,
+	837, 716, 560, 380, 288, 280, 259, 244, 229, 235, 232, 221,
+	198, 197, 186, 197, 178, 180, 197, 187, 181, 173, 171, 184,
+	183, 182, 185, 176, 176, 197, 179, 181, 194, 194, 196, 198,
+	205, 209, 225, 233, 243, 281, 316, 404, 596, 762, 889, 1016,
+	1088, 1166, 1186, 1188, 1213, 1208, 1232, 1248, 1247, 1261, 1264, 1257,
+	1265, 1285, 1350, 1300, 1290, 1300, 1297, 1283, 1269, 1279, 1268, 1251,
+	1224, 1168, 1096, 1007, 889, 742, 556, 364, 278, 269, 255, 251,
+	237, 230, 213, 209, 211, 213, 189, 193, 229, 201, 185, 193,
+	186, 181, 182, 185, 189, 180, 181, 177, 182, 177, 188, 184,
+	198, 203, 213, 200, 202, 207, 224, 210, 228, 238, 237, 228,
+	234, 242, 209, 232, 220, 208, 208, 204, 193, 200, 194, 187,
+	178, 169, 181, 178, 168, 182, 187, 185, 194, 179, 175, 182,
+	185, 203, 195, 213, 216, 219, 217, 236, 235, 226, 233, 232,
+	240, 228, 220, 217, 212, 216, 212, 193, 185, 175, 197, 189,
+	182, 179, 175, 179, 172, 173, 172, 179, 161, 177, 176, 161,
+	158, 166, 165, 174, 172, 165, 177, 171, 185, 166, 184, 182,
+	178, 176, 179, 172, 172, 181, 173, 178, 177, 173, 173, 175,
+	165, 174, 182, 182, 179, 160, 192, 177, 175, 176, 201, 194,
+	192, 185, 204, 216, 204, 222, 216, 240, 241, 276, 290, 361,
+	517, 710, 882, 1025, 1152, 1219, 1291, 1342, 1361, 1372, 1388, 1413,
+	1418, 1461, 1464, 1483, 1485, 1491, 1476, 1444, 1413, 1405, 1352, 1326,
+	1292, 1249, 1201, 1158, 1115, 1048, 931, 777, 604, 427, 284, 283,
+	253, 244, 239, 228, 235, 226, 210, 204, 197, 188, 204, 193,
+	195, 194, 189, 163, 188, 171, 174, 178, 180, 180, 169, 181,
+	177, 193, 207, 209, 216, 203, 222, 211, 214, 234, 266, 294,
+	370, 547, 798, 965, 1091, 1197, 1266, 1328, 1367, 1388, 1412, 1429,
+	1442, 1454, 1462, 1467, 1484, 1483, 1485, 1494, 1481, 1463, 1459, 1443,
+	1426, 1403, 1347, 1305, 1226, 1130, 1026, 884, 728, 551, 387, 293,
+	276, 256, 245, 223, 233, 218, 230, 211, 217, 200, 205, 190,
+	200, 196, 186, 193, 184, 195, 179, 173, 190, 179, 181, 188,
+	182, 182, 193, 178, 188, 190, 198, 202, 203, 201, 213, 205,
+	218, 206, 214, 230, 225, 223, 234, 222, 235, 216, 217, 226,
+	219, 206, 193, 206, 205, 195, 199, 178, 196, 189, 177, 177,
+	181, 176, 185, 190, 194, 174, 171, 181, 189, 184, 194, 188,
+	204, 201, 209, 201, 203, 213, 219, 220, 232, 234, 227, 230,
+	233, 229, 226, 222, 222, 217, 207, 195, 203, 202, 202, 196,
+	189, 180, 189, 183, 177, 179, 190, 187, 181, 186, 196, 177,
+	190, 201, 194, 206, 198, 202, 226, 225, 212, 224, 230, 224,
+	221, 225, 221, 227, 226, 207, 207, 197, 206, 198, 192, 184,
+	191, 197, 186, 182, 179, 185, 170, 168, 184, 169, 174, 166,
+	170, 171, 184, 173, 165, 178, 176, 164, 171, 169, 177, 160,
+	176, 171, 180, 170, 177, 168, 171, 185, 151, 173, 181, 168,
+	178, 158, 180, 178, 186, 170, 175, 186, 184, 173, 176, 184,
+	176, 186, 193, 187, 202, 193, 203, 214, 215, 195, 211, 223,
+	225, 226, 227, 225, 229, 237, 224, 217, 210, 217, 195, 218,
+	203, 203, 210, 203, 196, 189, 191, 189, 189, 188, 177, 180,
+	188, 186, 181, 182, 193, 203, 186, 193, 198, 206, 213, 220,
+	226, 231, 248, 251, 290, 346, 479, 651, 854, 934, 1081, 1177,
+	1231, 1288, 1332, 1355, 1392, 1425, 1432, 1462, 1468, 1483, 1481, 1489,
+	1462, 1443, 1425, 1400, 1406, 1386, 1364, 1337, 1305, 1273, 1216, 1137,
+	1030, 878, 711, 505, 320, 280, 266, 255, 237, 237, 226, 202,
+	201, 205, 200, 202, 188, 185, 186, 172, 195, 181, 176, 184,
+	193, 170, 171, 174, 188, 180, 184, 179, 194, 198, 201, 206,
+	211, 211, 216, 237, 230, 243, 252, 293, 363, 533, 709, 873,
+	1003, 1118, 1196, 1279, 1318, 1349, 1364, 1369, 1370, 1369, 1363, 1371,
+	1379, 1385, 1403, 1403, 1385, 1381, 1387, 1380, 1352, 1325, 1291, 1272,
+	1213, 1153, 1052, 930, 805, 624, 445, 306, 290, 264, 252, 234,
+	234, 228, 211, 205, 216, 202, 202, 194, 187, 186, 184, 188,
+	163, 175, 186, 178, 185, 179, 188, 177, 182, 193, 184, 201,
+	208, 202, 202, 201, 210, 222, 219, 228, 232, 228, 236, 219,
+	217, 229, 230, 225, 216, 212, 218, 197,
+};
+#define REAL_Z_N	((INT)(sizeof(real_z) / sizeof(real_z[0])))
+
+/* Feed real_z (forwards or backwards) through detector and decoder */
+LOCAL void feed_real_z(FEED *f, BOOL backwards)
+{
+	INT	i;
+
+	feed_level(f, 172, S3_MS(400));
+	for (i = 0; i < REAL_Z_N; i++) {
+		feed_level(f, real_z[backwards ? REAL_Z_N - 1 - i : i], S3_MS(2));
+	}
+	feed_level(f, 172, S3_MS(600));
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /*  Barcode tests                                                     */
 /* ------------------------------------------------------------------ */
@@ -217,6 +326,45 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 		ok = ok && l2 == 1 && text[0] == 'Y' && rv2;
 		TEST_CHECK("S3-U26", ok, "real uneven-speed Y read decodes, both ways");
 	}
+
+	/* S3-U28 (5 Nov): 20 random marks on the mat, then a barcode with
+	   no quiet gap before it: the marks never pass the '*' start check
+	   (so the steering limit never engages on them), and the barcode
+	   right after them is read */
+	{
+		UH	g[40];
+		INT	k, maxn = 0;
+
+		feed_init(&f);
+		feed_level(&f, T_WHITE, S3_MS(50));
+		for (k = 0; k < 40; k++) g[k] = (UH)(S3_MS(3) + rnd(S3_MS(40)));
+		for (k = 0; k < 40; k++) {
+			feed_level(&f, (k % 2 == 0) ? T_BLACK : T_WHITE, g[k]);
+			if (f.bc.state == S3_BC_MEASURING && f.bc.n > maxn) maxn = f.bc.n;
+		}
+		n = make_widths("*K*", T_NARROW, T_WIDE, 0, w);
+		feed_elements(&f, w, n, 300);
+		TEST_CHECK("S3-U28", maxn < S3_BC_HOLD_MIN_ELEMS && f.nav == 1 &&
+			   f.last.ch == 'K',
+			   "mat marks never pass the start check; barcode after them read");
+	}
+
+#if S3_BC_LOW_CONTRAST
+	/* S3-U29 (5 Nov): the real small 'Z' (thin bars +55..+70, noisy
+	   thick-bar tails) reads as Z, both directions, exactly once */
+	{
+		INT	k;
+
+		ok = 0;
+		for (k = 0; k < 2; k++) {
+			feed_init(&f);
+			s3_bc_det_init(&f.det, 172);	/* this floor */
+			feed_real_z(&f, (BOOL)k);
+			ok += (f.nav == 1 && f.err == 0 && f.last.ch == 'Z');
+		}
+		TEST_CHECK("S3-U29", ok == 2, "real faint small 'Z' trace decodes, both ways");
+	}
+#endif
 
 	/* S3-U05: 20 reads of every letter A..Z with +-25 % width noise */
 	ok = 0;
@@ -318,14 +466,22 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	for (i = 0; i < 100; i++) {	/* between thr_off/on */
 		ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
 	}
-	ok += (s3_bc_detect(&f.det, T_WHITE + T_ON0 + 100) != S3_EDGE_TO_BLACK);
-	ok += (s3_bc_detect(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
-	ok += (s3_bc_detect(&f.det, T_WHITE + T_OFF0 - 100) != S3_EDGE_TO_WHITE);
+	ok += (det_hold(&f.det, T_WHITE + T_ON0 + 100) != S3_EDGE_TO_BLACK);
+	ok += (det_hold(&f.det, T_WHITE + T_MID) != S3_EDGE_NONE);
+	ok += (det_hold(&f.det, T_WHITE + T_OFF0 - 100) != S3_EDGE_TO_WHITE);
 	for (i = 0; i < S3_MS(10000); i++) {	/* surface gets darker */
 		s3_bc_detect(&f.det, T_WHITE + T_DRIFT);
 	}
-	ok += (s3_bc_detect(&f.det, T_WHITE + T_ON0 + T_DRIFT / 4) != S3_EDGE_NONE);
-	ok += (s3_bc_detect(&f.det, T_BLACK) != S3_EDGE_TO_BLACK);
+	ok += (det_hold(&f.det, T_WHITE + T_ON0 + T_DRIFT / 4) != S3_EDGE_NONE);
+	ok += (det_hold(&f.det, T_BLACK) != S3_EDGE_TO_BLACK);
+#if S3_BC_SETTLE > 1
+	/* 5 Nov: a spike shorter than S3_BC_SETTLE is not an edge */
+	det_hold(&f.det, T_WHITE);
+	for (i = 0; i < S3_BC_SETTLE - 1; i++) {
+		ok += (s3_bc_detect(&f.det, T_WHITE) != S3_EDGE_NONE);
+	}
+	ok += (s3_bc_detect(&f.det, T_BLACK) != S3_EDGE_NONE);	/* still black */
+#endif
 	TEST_CHECK("S3-U17", ok == 0,
 		   "edge detector: hysteresis, white baseline follows light");
 
@@ -333,15 +489,15 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	   black is forgotten after S3_BC_AMP_FORGET_MS of white, so a
 	   weaker printed bar is seen again; before that it is not */
 	s3_bc_det_init(&f.det, T_WHITE);
-	ok = (s3_bc_detect(&f.det, 4000) == S3_EDGE_TO_BLACK);
+	ok = (det_hold(&f.det, 4000) == S3_EDGE_TO_BLACK);
 	for (i = 0; i < 10; i++) s3_bc_detect(&f.det, 4000);	/* learns ~3700 */
-	ok = ok && (s3_bc_detect(&f.det, T_WHITE) == S3_EDGE_TO_WHITE);
+	ok = ok && (det_hold(&f.det, T_WHITE) == S3_EDGE_TO_WHITE);
 	for (i = 0; i < S3_MS(50); i++) s3_bc_detect(&f.det, T_WHITE);
 #if !S3_BC_LOW_CONTRAST
-	ok = ok && (s3_bc_detect(&f.det, T_WHITE + 1500) == S3_EDGE_NONE);	/* too weak now */
+	ok = ok && (det_hold(&f.det, T_WHITE + 1500) == S3_EDGE_NONE);	/* too weak now */
 #endif
 	for (i = 0; i < S3_MS(S3_BC_AMP_FORGET_MS); i++) s3_bc_detect(&f.det, T_WHITE);
-	ok = ok && (s3_bc_detect(&f.det, T_WHITE + 1500) == S3_EDGE_TO_BLACK);	/* seen again */
+	ok = ok && (det_hold(&f.det, T_WHITE + 1500) == S3_EDGE_TO_BLACK);	/* seen again */
 	TEST_CHECK("S3-U27", ok, "learnt black forgotten after white: weaker bars seen");
 
 	/* S3-U21: speed range.  Fast: 50 cm/s over 1 mm / 2.5 mm bars
@@ -353,7 +509,12 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	for (i = 0; i < 20; i++) {
 		feed_init(&f);
 		feed_level(&f, T_WHITE, S3_MS(50));
+#if S3_BC_SETTLE > 1
+		/* 5 Nov: low-contrast mode ignores elements under 4 ms */
+		n = make_widths("*Z*", S3_MS(6), S3_MS(15), 15, w);
+#else
 		n = make_widths("*Z*", S3_MS(2), S3_MS(5), 15, w);
+#endif
 		feed_elements(&f, w, n, 300);
 		ok += (f.nav == 1 && f.last.ch == 'Z');
 
