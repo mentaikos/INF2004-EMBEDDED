@@ -326,7 +326,9 @@ EXPORT void s3_line_init(S3_LINE *lt)
 	lt->trim       = 0;
 	lt->bend       = 0;
 	lt->touch_n    = 0;
+	lt->touch_pos  = 0;
 	lt->curve_ms   = 0;
+	lt->slip_ms    = 0;
 }
 
 /* Coarse line position from the two sensors (FR9): - = left, + = right */
@@ -397,12 +399,25 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	}
 
 	/* 6 Nov: how long the same edge has stayed touched */
-	if ((pos == 2 || pos == -2) && pos == lt->pos) {
+	if (pos == 2 || pos == -2) {
+		if (pos != lt->touch_pos) {		/* other edge: new touch */
+			lt->touch_pos = pos;
+			lt->touch_n = 0;
+		}
 		if (lt->touch_n < 255) lt->touch_n++;
-	} else {
-		lt->touch_n = 0;
+	} else if (lt->state == S3_LINE_JUNCTION ||
+		   lt->white_ms > S3_BEND_TOUCH_GAP_MS) {
+		lt->touch_n = 0;			/* a flicker does not end it */
 	}
 
+	/* 6 Nov: a long touch: the line may slip outside next */
+	if (lt->touch_n > S3_BEND_DELAY) {
+		lt->slip_ms = S3_BEND_SLIP_MS;
+	} else if (lt->slip_ms > dt_ms) {
+		lt->slip_ms = (UH)(lt->slip_ms - dt_ms);
+	} else {
+		lt->slip_ms = 0;
+	}
 	/* 6 Nov: remember a curve for a while (no delay inside it) */
 	if (lt->bend >= S3_BEND_CURVE || lt->bend <= -S3_BEND_CURVE) {
 		lt->curve_ms = S3_BEND_CURVE_MEM_MS;
@@ -417,7 +432,7 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 		lt->bend = 0;
 	} else if ((pos == 2 && lt->bend < 0) || (pos == -2 && lt->bend > 0)) {
 		lt->bend = 0;			/* other edge: overshoot, restart */
-	} else if ((pos == 2 || pos == -2) && pos == lt->pos) {
+	} else if ((pos == 2 || pos == -2) && (pos == lt->pos || lt->touch_n > 1)) {
 		/* 6 Nov: only once the touch has lasted S3_BEND_DELAY */
 		if (lt->touch_n > S3_BEND_DELAY || lt->curve_ms > 0) {
 			lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP : -S3_BEND_STEP));
@@ -425,11 +440,14 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	} else if (!left && !center) {
 		/* 30 Oct: restores the 28 Oct straight-line fix (lost in a
 		   merge): grow while white only once a curve is confirmed */
-		if (lt->bend >= S3_BEND_CURVE || lt->bend <= -S3_BEND_CURVE) {
-			/* in a curve: the line slipped outside the sensor */
+		if (lt->bend >= S3_BEND_CURVE || lt->bend <= -S3_BEND_CURVE ||
+		    lt->curve_ms > 0 ||		/* 6 Nov: or just in a curve */
+		    lt->slip_ms > 0) {		/* 6 Nov: or after a long touch */
+			/* in a curve: the line slipped outside the sensor;
+			   6 Nov: grow towards where it was last seen */
 			if (lt->white_ms > S3_BEND_WHITE_MS) {
-				lt->bend = (B)(lt->bend + (lt->bend > 0 ? S3_BEND_STEP
-								  : -S3_BEND_STEP));
+				lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP
+								   : -S3_BEND_STEP));
 			}
 		} else if (lt->bend > 0) {
 			lt->bend--;		/* straight: a short touch fades */

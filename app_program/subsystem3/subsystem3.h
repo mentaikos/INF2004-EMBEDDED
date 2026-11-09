@@ -517,8 +517,34 @@ IMPORT UH	drv_ir_overflow_count(void);	/* edges lost, ring full */
    none at all for S3_BEND_CURVE_MEM_MS after a curve was seen (|bend|
    >= S3_BEND_CURVE).  Simulation with 20 % sensor flicker: no curve
    lost (11-25 cm radius, both ways), straight 106-142 mm/s. */
-#define S3_BEND_DELAY		8	/* cycles (160 ms); 6 Nov: was 12 */
+/* 6 Nov (videos IMG_0855 / IMG_0858, right curve lost half way): two
+   more holes, both found by a simulation with a flickering sensor:
+   (1) going in, every 1-cycle white flicker restarted the count, so on
+   a tight curve the bend never built up -- the count now survives
+   white gaps up to S3_BEND_TOUCH_GAP_MS; (2) half way round, the outer
+   sensor touched (the robot turned a little too far), the bend
+   restarted from 0, and with the line between the sensors only the
+   small seek drift was left: the robot slid out of the curve.  Inside
+   the curve memory the bend now grows again while both are white,
+   towards the side the line was last seen (as it already did for a
+   bend >= S3_BEND_CURVE).  Simulation, curves of 7-25 cm radius, motor
+   lag 80/150 ms, 0/20 % flicker, both ways: off course 19/160 (line43)
+   -> 0/160; straight 106 -> 112 mm/s. */
+#define S3_BEND_DELAY		10	/* cycles (200 ms); 6 Nov: 12, 8, now 10 */
+#define S3_BEND_TOUCH_GAP_MS	60	/* white this long ends a touch */
 #define S3_BEND_CURVE_MEM_MS	1500
+/* 6 Nov (log 18:55: line lost at the END of the right curve, where it
+   turns into the next part of the track): a simulation of whole curves
+   with exits and S-bends (7-15 cm radius) still ran off 17/96 times --
+   mostly when the robot came into a curve fast, touched the line just
+   past S3_BEND_DELAY (bend only ~7) and the line then slipped outside
+   both sensors: below S3_BEND_CURVE the bend faded and only the small
+   seek drift was left.  A touch longer than S3_BEND_DELAY now also
+   lets the bend grow while white ("slipped outside") for
+   S3_BEND_SLIP_MS; it does NOT skip the delay on the next touch (that
+   brought the weave back on the straights).  Simulation: off course
+   17/96 -> 0/96; straight ~99 mm/s (line43 108, steady41 82). */
+#define S3_BEND_SLIP_MS		1000
 
 #define S3_TRIM_STEP		2
 #define S3_TRIM_MAX		6	/* +-25 % split at most */
@@ -559,7 +585,9 @@ typedef struct {
 	B	trim;		/* learnt drift correction, +-S3_TRIM_MAX */
 	B	bend;		/* curve correction, +-S3_BEND_MAX */
 	UB	touch_n;	/* 6 Nov: cycles the same edge has stayed touched */
+	B	touch_pos;	/* 6 Nov: that edge, +-2 (0 = none yet) */
 	UH	curve_ms;	/* 6 Nov: a curve (|bend| >= S3_BEND_CURVE) was seen this recently */
+	UH	slip_ms;	/* 6 Nov: a touch longer than S3_BEND_DELAY ended this recently */
 } S3_LINE;
 
 IMPORT void	s3_line_init(S3_LINE *lt);

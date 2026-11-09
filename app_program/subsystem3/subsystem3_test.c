@@ -629,6 +629,21 @@ LOCAL void test_line(INT *pass, INT *fail)
 	TEST_CHECK("S3-U21", ev1 && lt.trim == -S3_TRIM_MAX + S3_TRIM_STEP,
 		   "trim learns the robot's pull, bounded, moves back");
 
+	/* S3-U31 (6 Nov, videos IMG_0855/0858): in a curve the line
+	   flickers on the right sensor (white 1 cycle in 4): the bend still
+	   builds past S3_BEND_CURVE; then the left sensor touches once
+	   (turned too far) and both go white: the bend rebuilds towards
+	   where the line was last seen (left) instead of leaving only the
+	   small seek drift (line43: bend stayed 0) */
+	s3_line_init(&lt);
+	for (i = 0; i < 60; i++) s3_line_step(&lt, 0, (i % 4) != 3, 20);
+	ev1 = (lt.bend >= S3_BEND_CURVE);
+	s3_line_step(&lt, 1, 0, 20);			/* outer sensor: overshoot */
+	for (i = 0; i < 25; i++) s3_line_step(&lt, 0, 0, 20);	/* 500 ms white */
+	TEST_CHECK("S3-U31", ev1 && lt.bend <= -S3_BEND_CURVE &&
+		   lt.steer < -(S3_STEER_SEEK + S3_TRIM_MAX),
+		   "curve: flicker builds the bend; it rebuilds after an overshoot");
+
 	*pass += test_pass_;
 	*fail += test_fail_;
 }

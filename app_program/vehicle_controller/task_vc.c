@@ -262,6 +262,8 @@ LOCAL UB	slow_zone;
    VC_LOST_GRACE_MS in vehicle_controller.h) */
 LOCAL UB	in_curve;	/* steering says: in a curve */
 LOCAL UB	lost_grace;	/* line lost in a curve, following on */
+LOCAL W		turn_avg_q8;	/* 6 Nov: averaged L - R wheel speed, cm/s x256 */
+LOCAL UH	t_avg;		/* 6 Nov: last averaging step */
 LOCAL UH	t_straight;	/* last time the steering was curve-sized */
 LOCAL UH	t_lost;		/* when lost_grace began */
 
@@ -272,7 +274,7 @@ LOCAL void update_limit(void)
 	INT	want = S2_MAX_SPEED_CM_S;
 
 	if (slow_zone) want = VC_SLOW_CM_S;
-#if VC_CURVE_STEER > 0
+#if VC_CURVE_TURN_CM_S > 0
 	if ((in_curve || lost_grace) && VC_CURVE_CM_S < want) want = VC_CURVE_CM_S;
 #endif
 	if (want != (INT)cur_limit) cmd_limit(want);
@@ -301,23 +303,36 @@ LOCAL void check_slow_zone(void)
    out of it once it has been small for VC_CURVE_HOLD_MS */
 LOCAL void check_curve(void)
 {
-#if VC_CURVE_STEER > 0
+#if VC_CURVE_TURN_CM_S > 0
 	S3_STS_FIELDS	f;
+	UW		m = motion_get_status();
 	INT		a;
 
 	s3_sts_unpack(s3_get_status(), &f);
+	/* 6 Nov (logs 19:03 / 19:10: stayed at 12 cm/s after a curve):
+	   a curve is decided from how the robot REALLY turns -- the left
+	   minus right wheel speed (cm/s, Motion's status), averaged over
+	   ~VC_CURVE_AVG_N x 20 ms -- not from the steering: in a left-right
+	   swing on a straight the steering is often large, but the wheels
+	   turn both ways and the average stays near 0.  One 20 ms step per
+	   call at most. */
+	if (since(t_avg) >= VC_TICK_MS) {
+		t_avg = now_ms();
+		turn_avg_q8 += ((((W)s2_sts_speed_l(m) - (W)s2_sts_speed_r(m)) << 8)
+				- turn_avg_q8) / VC_CURVE_AVG_N;
+	}
 	/* 6 Nov: no speed change while a barcode is being read: a steady
 	   speed over the bars reads better (team) */
 	if (f.bc_state == S3_BC_MEASURING) return;
-	a = (f.steer < 0) ? -f.steer : f.steer;
-	if (a >= VC_CURVE_STEER) {
+	a = (INT)((turn_avg_q8 < 0 ? -turn_avg_q8 : turn_avg_q8) >> 8);
+	if (a >= VC_CURVE_TURN_CM_S) {
 		t_straight = now_ms();
 		if (!in_curve) {
 			in_curve = 1;
 			tm_printf((UB*)"vc: curve, slowing to %d cm/s\n", VC_CURVE_CM_S);
 		}
 	} else if (in_curve) {
-		if (a >= VC_CURVE_STEER / 2) {
+		if (a >= VC_CURVE_DONE_CM_S) {
 			t_straight = now_ms();
 		} else if (since(t_straight) >= VC_CURVE_HOLD_MS) {
 			in_curve = 0;
@@ -332,6 +347,7 @@ LOCAL void enter_follow(void)
 	script_clear();
 	slow_zone = 0;
 	in_curve = 0;				/* 4 Nov */
+	turn_avg_q8 = 0;			/* 6 Nov */
 	lost_grace = 0;
 	cmd_limit(S2_MAX_SPEED_CM_S);		/* lift any obstacle cap */
 	cmd_follow(VC_CRUISE_CM_S);

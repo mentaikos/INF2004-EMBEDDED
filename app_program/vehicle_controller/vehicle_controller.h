@@ -65,9 +65,19 @@
    correction did not catch, goes past 20.  Slower = a tighter arc for
    the same steering, so the robot gets back to the line before it
    swings across it.  0 = off. */
-#define VC_CURVE_STEER		26	/* 5 Nov: was 26 (sized for KP 6), 20 for KP 4; 6 Nov: 26 again with S3_STEER_KP 6 */
+/* 6 Nov (logs 19:03 / 19:10): "curve" is now decided from the robot's
+   REAL turning: left minus right wheel speed (cm/s), averaged over
+   VC_CURVE_AVG_N x 20 ms (task_vc.c, check_curve).  Curve at
+   VC_CURVE_TURN_CM_S or more; done when below VC_CURVE_DONE_CM_S for
+   VC_CURVE_HOLD_MS.  A 13 cm curve at 12 cm/s turns ~9 cm/s; a swing on
+   a straight averages ~0.  Simulation (track shapes, 7-15 cm curves):
+   all curves held; straights after a curve slow 98 % (line45) ->
+   43 % (steering average) -> 24 % (this).  0 = off. */
+#define VC_CURVE_TURN_CM_S	5
+#define VC_CURVE_DONE_CM_S	2
+#define VC_CURVE_AVG_N		25	/* 25 x 20 ms = 0.5 s */
 #define VC_CURVE_CM_S		12
-#define VC_CURVE_HOLD_MS	300
+#define VC_CURVE_HOLD_MS	300	/* 6 Nov: 800 for single values; 300 again with the average */
 /* 4 Nov: line lost IN a curve (VC_CURVE_STEER or more): keep following
    slowly for this long first -- Line & Barcode keeps arcing towards
    the side the line went (its bend) and usually rolls back onto it --
