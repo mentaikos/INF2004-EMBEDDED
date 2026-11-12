@@ -39,8 +39,17 @@ EXPORT INT vc_nav_script(UINT nav, UW *cmds)
 		}
 		return 1 + VC_UTURN_TURNS;
 	}
-	cmds[1] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, angle, 0);
-	return 2;
+	/* 12 Nov: LEFT / RIGHT also turn on until the compass and the line
+	   sensors end it (task_vc.c); without the compass task_vc.c keeps
+	   only the first TURN, as a fixed 90 */
+	{
+		INT	i;
+
+		for (i = 1; i <= VC_LR_TURNS; i++) {
+			cmds[i] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, angle * 2, 0);
+		}
+		return 1 + VC_LR_TURNS;
+	}
 }
 
 /*

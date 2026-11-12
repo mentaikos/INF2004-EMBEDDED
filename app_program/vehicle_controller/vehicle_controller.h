@@ -121,6 +121,19 @@
 #define VC_UTURN_IMU_BLIND_DEG	140
 #define VC_UTURN_IMU_MAX_DEG	240
 #define VC_UTURN_TURNS		3	/* <= VC_SCRIPT_MAX - 1 */
+/* 12 Nov (video IMG_6244: LEFT turned ~50 deg): LEFT and RIGHT at a
+   junction work the same way as the U-turn, with the compass: the
+   line sensors are ignored until VC_LR_IMU_BLIND_DEG (off the line
+   the robot came along, which carries on past a crossing), then the
+   first black -- the side line, ~90 deg -- stops the turn and line
+   following starts.  VC_LR_IMU_MAX_DEG with no line: search.  The
+   compass read ~1.24 x the real angle (U-turn: 223 for ~180), so
+   45 is ~36 real and 160 ~130 real.  IMU not calibrated: the old
+   fixed TURN of 90, then line following.  0 = always the old way. */
+#define VC_LR_IMU		1
+#define VC_LR_IMU_BLIND_DEG	45
+#define VC_LR_IMU_MAX_DEG	160
+#define VC_LR_TURNS		2	/* TURN commands of 180 (as commanded; ~113 deg each on the mat) */
 #define VC_JUNCTION_COOLDOWN_MS	800	/* same junction is not counted twice */
 #define VC_LINE_SEARCH_MS	3000	/* NFR18: LINE_SEARCH timeout */
 #define VC_SEARCH_STEP_DEG	30	/* sweep: +30, -60, +90, -120 ... */

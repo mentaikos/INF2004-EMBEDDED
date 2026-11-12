@@ -60,10 +60,10 @@ EXPORT void vc_test(void)
 
 	/* VC-U02: barcode command -> junction script (12 Nov: distances in mm) */
 	n = vc_nav_script(NAV_LEFT, c);
-	ok = n == 2 && is_cmd(c[0], S2_CMD_MOVE_DIST, 0, VC_NAV_ADV_MM) &&
-	     is_cmd(c[1], S2_CMD_TURN, -90, 0);
+	ok = n == 1 + VC_LR_TURNS && is_cmd(c[0], S2_CMD_MOVE_DIST, 0, VC_NAV_ADV_MM) &&
+	     is_cmd(c[1], S2_CMD_TURN, -180, 0);	/* 12 Nov: ended by compass + line */
 	n = vc_nav_script(NAV_RIGHT, c);
-	ok = ok && n == 2 && is_cmd(c[1], S2_CMD_TURN, 90, 0);
+	ok = ok && n == 1 + VC_LR_TURNS && is_cmd(c[1], S2_CMD_TURN, 180, 0);
 	n = vc_nav_script(NAV_U_TURN, c);
 	ok = ok && n == 1 + VC_UTURN_TURNS && is_cmd(c[1], S2_CMD_TURN, 180, 0) &&
 	     is_cmd(c[VC_UTURN_TURNS], S2_CMD_TURN, 180, 0);	/* 12 Nov */

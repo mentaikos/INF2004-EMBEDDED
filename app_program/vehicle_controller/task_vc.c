@@ -266,6 +266,9 @@ LOCAL UB	uturn_imu;	/* 12 Nov: this U-turn is measured by the compass */
 LOCAL UB	uturn_on;	/* 12 Nov: the drive past the junction is done, turning */
 LOCAL H		uturn_h_prev;	/* 12 Nov: last compass heading, deg */
 LOCAL W		uturn_acc;	/* 12 Nov: heading change so far, deg, signed */
+LOCAL H		uturn_blind;	/* 12 Nov: compass degrees with the line sensors ignored */
+LOCAL H		uturn_max;	/* 12 Nov: compass degrees without the line: search */
+LOCAL const char *nav_name(UINT nav);	/* below */
 LOCAL UH	nav_dist0;	/* 12 Nov: Motion's odometer (mm) when the junction was seen */
 LOCAL UB	lost_grace;	/* line lost in a curve, following on */
 LOCAL W		turn_avg_q8;	/* 6 Nov: averaged L - R wheel speed, cm/s x256 */
@@ -643,11 +646,12 @@ LOCAL void script_done(void)
 
 	switch (vc.state) {
 	case VC_ST_EXECUTE_NAV_CMD:
-		/* 12 Nov: all the U-turn's TURNs done, no line seen */
+		/* 12 Nov: all the turn's TURNs done, no line seen */
 		if (uturn_step != 0) {
 			uturn_step = 0;
-			tm_printf((UB*)"vc: U-turn: line not found (%d deg by compass),"
-				  " searching\n", uturn_imu ? (INT)(uturn_acc < 0 ? -uturn_acc : uturn_acc) : -1);
+			tm_printf((UB*)"vc: %s: line not found (%d deg by compass),"
+				  " searching\n", nav_name(vc.nav),
+				  uturn_imu ? (INT)(uturn_acc < 0 ? -uturn_acc : uturn_acc) : -1);
 			enter_search();
 			break;
 		}
@@ -789,12 +793,31 @@ LOCAL void on_junction(void)
 	vc.bc_letter = 0;			/* done: wait for the next barcode */
 	if (n > 0) {
 		set_state(VC_ST_EXECUTE_NAV_CMD);
-		uturn_step = (vc.nav == NAV_U_TURN) ? 1 : 0;	/* 12 Nov */
+		/* 12 Nov: U-turn, LEFT and RIGHT turn on until the compass and
+		   the line sensors end it (tick).  uturn_* = this nav turn */
+		BOOL	imu_ok = s4_sts_calibrated(s4_get_status_w0()) ? TRUE : FALSE;
+
 		uturn_on = 0;
-		uturn_imu = (VC_UTURN_IMU && uturn_step &&
-			     s4_sts_calibrated(s4_get_status_w0())) ? 1 : 0;
-		if (uturn_step && !uturn_imu) {
-			tm_printf((UB*)"vc: U-turn without the compass (IMU not calibrated)\n");
+		uturn_step = 0;
+		uturn_imu = 0;
+		if (vc.nav == NAV_U_TURN) {
+			uturn_step = 1;
+			uturn_imu = (VC_UTURN_IMU && imu_ok) ? 1 : 0;
+			uturn_blind = VC_UTURN_IMU_BLIND_DEG;
+			uturn_max = VC_UTURN_IMU_MAX_DEG;
+		} else if (VC_LR_IMU && imu_ok) {	/* LEFT / RIGHT */
+			uturn_step = 1;
+			uturn_imu = 1;
+			uturn_blind = VC_LR_IMU_BLIND_DEG;
+			uturn_max = VC_LR_IMU_MAX_DEG;
+		} else {				/* LEFT / RIGHT, no compass */
+			c[1] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S,
+					   s2_cmd_angle(c[1]) / 2, 0);	/* the old 90 */
+			n = 2;
+		}
+		if (!uturn_imu) {
+			tm_printf((UB*)"vc: %s without the compass (IMU not calibrated)\n",
+				  nav_name(vc.nav));
 		}
 		nav_dist0 = (UH)s2_sts_dist(motion_get_status());
 		script_run(c, n);
@@ -1139,15 +1162,16 @@ LOCAL void tick(void)
 		uturn_acc += norm180(h - uturn_h_prev);
 		uturn_h_prev = (H)h;
 		a = (INT)(uturn_acc < 0 ? -uturn_acc : uturn_acc);
-		if (uturn_step == 1 && a >= VC_UTURN_IMU_BLIND_DEG) {
+		if (uturn_step == 1 && a >= uturn_blind) {
 			uturn_step = 2;
-			tm_printf((UB*)"vc: U-turn: %d deg by compass, looking for the line\n", a);
-		} else if (uturn_step == 2 && a >= VC_UTURN_IMU_MAX_DEG) {
+			tm_printf((UB*)"vc: %s: %d deg by compass, looking for the line\n",
+				  nav_name(vc.nav), a);
+		} else if (uturn_step == 2 && a >= uturn_max) {
 			uturn_step = 0;
 			cmd_stop();
 			script_clear();
-			tm_printf((UB*)"vc: U-turn: line not found (%d deg by compass),"
-				  " searching\n", a);
+			tm_printf((UB*)"vc: %s: line not found (%d deg by compass),"
+				  " searching\n", nav_name(vc.nav), a);
 			enter_search();
 			return;
 		}
@@ -1168,10 +1192,10 @@ LOCAL void tick(void)
 				cmd_stop();
 				script_clear();
 				if (uturn_imu) {
-					tm_printf((UB*)"vc: U-turn: back on the line after %d deg by compass\n",
-						  (INT)(uturn_acc < 0 ? -uturn_acc : uturn_acc));
+					tm_printf((UB*)"vc: %s: on the line after %d deg by compass\n",
+						  nav_name(vc.nav), (INT)(uturn_acc < 0 ? -uturn_acc : uturn_acc));
 				} else {
-					tm_printf((UB*)"vc: U-turn: back on the line\n");
+					tm_printf((UB*)"vc: %s: back on the line\n", nav_name(vc.nav));
 				}
 				enter_follow();
 				return;
