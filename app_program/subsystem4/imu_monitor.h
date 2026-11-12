@@ -55,9 +55,14 @@
 #define IMU_PITCH_LEVEL_MDEG	1500	/* also where height summing starts */
 #define IMU_CLIMB_CONFIRM_MS	50
 #define IMU_LEVEL_CONFIRM_MS	100
-#define IMU_MIN_HUMP_TRAVEL_MM	20	/* shorter = false trigger */
-#define IMU_MAX_HUMP_TRAVEL_MM	600	/* never levelled again = abort */
-#define IMU_MAX_STEP_MM		200	/* sanity clamp on one 10 ms step */
+/* 12 Nov (integration, Buddy 2): Motion Control's distance is now real
+   mm (it was 1.89 x real, subsystem2.h S2_ENC_CPR).  These three are
+   x 0.53 (old value in brackets) so hump detection works as before.
+   The height sum (dd x sin pitch) now uses real distance too, so it
+   no longer comes out 1.89 x too high. */
+#define IMU_MIN_HUMP_TRAVEL_MM	11	/* (20) shorter = false trigger */
+#define IMU_MAX_HUMP_TRAVEL_MM	318	/* (600) never levelled again = abort */
+#define IMU_MAX_STEP_MM		106	/* (200) sanity clamp on one 10 ms step */
 
 /* Height = max(sum(dd x sin(pitch)), wheelbase x sin(peak pitch)).  The
    sum alone is only right for humps longer than the car; on our short
@@ -75,7 +80,8 @@
    the pitch formulas.  Either wheel works (the size of the roll is
    used, not its sign). */
 #define IMU_TRACK_MM		95	/* MEASURE: left to right wheel, centre of
-					   the tyre contact (= S2_TRACK_MM) */
+					   the tyre contact (physical; 12 Nov: not
+					   Motion's S2_TRACK_X10_MM, an effective turn value) */
 #define IMU_ONE_WHEEL_ROLL_MDEG	3000
 #define IMU_ROLL_LPF_DIV	2	/* lighter than the pitch's 4: the 50 ms median
 					   below already rejects noise and jolts */

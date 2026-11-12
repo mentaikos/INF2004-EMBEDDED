@@ -58,14 +58,15 @@ EXPORT void vc_test(void)
 	     vc_sts_state(w) == VC_ST_COMPLETE && (w >> 25) == 0;
 	TEST_CHECK("VC-U01", ok, "VC status word pack/unpack and clamping");
 
-	/* VC-U02: barcode command -> junction script */
+	/* VC-U02: barcode command -> junction script (12 Nov: distances in mm) */
 	n = vc_nav_script(NAV_LEFT, c);
-	ok = n == 2 && is_cmd(c[0], S2_CMD_MOVE_DIST, 0, VC_JUNCTION_ADV_CM) &&
+	ok = n == 2 && is_cmd(c[0], S2_CMD_MOVE_DIST, 0, VC_NAV_ADV_MM) &&
 	     is_cmd(c[1], S2_CMD_TURN, -90, 0);
 	n = vc_nav_script(NAV_RIGHT, c);
 	ok = ok && n == 2 && is_cmd(c[1], S2_CMD_TURN, 90, 0);
 	n = vc_nav_script(NAV_U_TURN, c);
-	ok = ok && n == 2 && is_cmd(c[1], S2_CMD_TURN, 180, 0);
+	ok = ok && n == 1 + VC_UTURN_TURNS && is_cmd(c[1], S2_CMD_TURN, 180, 0) &&
+	     is_cmd(c[VC_UTURN_TURNS], S2_CMD_TURN, 180, 0);	/* 12 Nov */
 	ok = ok && vc_nav_script(NAV_STRAIGHT, c) == 0;
 	TEST_CHECK("VC-U02", ok, "LEFT/RIGHT/U-TURN/STRAIGHT junction scripts");
 
@@ -81,9 +82,9 @@ EXPORT void vc_test(void)
 	   past: 20 + depth 10 + half robot 10 + margin 3 - 18 = 25 */
 	ok = n == 5 && lat == 22 &&
 	     is_cmd(c[0], S2_CMD_TURN, 50, 0) &&
-	     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, 29) &&
+	     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, VC_PLAN_MM(29)) &&
 	     is_cmd(c[2], S2_CMD_TURN, -50, 0) &&
-	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0, 25) &&
+	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0, VC_PLAN_MM(25)) &&
 	     is_cmd(c[4], S2_CMD_TURN, -VC_REJOIN_TURN_DEG, 0);
 	n = vc_bypass_script(p, -1, c, &lat);
 	ok = ok && n == 5 && lat == 22 && is_cmd(c[0], S2_CMD_TURN, -50, 0) &&
@@ -93,23 +94,23 @@ EXPORT void vc_test(void)
 	p = make_profile(20, 120, 30, 100, 0, 24);	/* whole sweep */
 	vc_bypass_script(p, 1, c, &lat);
 	ok = ok && lat == VC_BYPASS_MAX_CM && s2_cmd_angle(c[0]) == 60 &&
-	     s2_cmd_dist(c[1]) == 70 && s2_cmd_dist(c[3]) == 89;
+	     s2_cmd_dist(c[1]) == VC_PLAN_MM(70) && s2_cmd_dist(c[3]) == VC_PLAN_MM(89);
 	/* Too close for any diagonal: falls back to a 90 degree turn out */
 	p = make_profile(20, 30, 0, 2, 6, 18);
 	vc_bypass_script(p, 1, c, &lat);
 	ok = ok && is_cmd(c[0], S2_CMD_TURN, 90, 0) &&
-	     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, lat) &&
-	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0, 2 + VC_OBSTACLE_DEPTH_CM +
-		    S5_ROBOT_LENGTH_MM / 20 + VC_PASS_MARGIN_CM);
+	     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, VC_PLAN_MM(lat)) &&
+	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0, VC_PLAN_MM(2 + VC_OBSTACLE_DEPTH_CM +
+		    S5_ROBOT_LENGTH_MM / 20 + VC_PASS_MARGIN_CM));
 #else
 	ok = n == 5 && lat == 7 + S5_ROBOT_WIDTH_MM / 20 + S5_CLEARANCE_MARGIN_MM / 10 +
 	     VC_BYPASS_EXTRA_CM &&
 		 is_cmd(c[0], S2_CMD_TURN, 90, 0) &&
-	     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, lat) &&
+	     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, VC_PLAN_MM(lat)) &&
 	     is_cmd(c[2], S2_CMD_TURN, -90, 0) &&
-	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0,
+	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0, VC_PLAN_MM(
 		    20 + VC_OBSTACLE_DEPTH_CM + S5_ROBOT_LENGTH_MM / 20 +
-		    VC_PASS_MARGIN_CM) &&
+		    VC_PASS_MARGIN_CM)) &&
 	     is_cmd(c[4], S2_CMD_TURN, -VC_REJOIN_TURN_DEG, 0);
 	n = vc_bypass_script(p, -1, c, &lat);
 	ok = ok && n == 5 && is_cmd(c[0], S2_CMD_TURN, -90, 0) &&
@@ -117,7 +118,7 @@ EXPORT void vc_test(void)
 	     is_cmd(c[4], S2_CMD_TURN, VC_REJOIN_TURN_DEG, 0);
 	p = make_profile(20, 120, 30, 100, 0, 24);	/* whole sweep */
 	vc_bypass_script(p, 1, c, &lat);
-	ok = ok && lat == VC_BYPASS_MAX_CM && s2_cmd_dist(c[3]) == S2_DIST_MAX_CM;
+	ok = ok && lat == VC_BYPASS_MAX_CM && s2_cmd_dist(c[3]) == VC_PLAN_MM(VC_PLAN_MAX_CM);
 #endif
 	TEST_CHECK("VC-U03", ok, "bypass script geometry, sides and clamps");
 

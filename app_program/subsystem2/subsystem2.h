@@ -76,20 +76,31 @@
  *     (report 9.5 / testing/subsystem2/TEST_LOG.md S2-M01..S2-M04).
  * ===================================================================== */
 #define S2_WHEEL_DIAM_MM	43	/* measured 27 Oct */
-#define S2_ENC_CPR		220	/* counts per wheel rev, rising edges of A
-				   (S2-M01 26 Oct, hand-turned: L ~220,
-				   R ~217, +-10 %; likely 11 PPR x 1:20) */
-#define S2_TRACK_MM		95	/* TODO wheel centre to wheel centre */
+/* 12 Nov: 415 (was 220).  Bench run twice: MOVE "100 cm" with 220
+   went 53 cm on the floor, so 220 / 0.53 = 415 counts per wheel turn.
+   Every speed (mm/s) and distance (mm) in the robot is now REAL; the
+   tuned values below and in the VC were converted x 0.53 (220/415),
+   so the robot moves as before. */
+#define S2_ENC_CPR		415	/* counts per wheel rev, rising edges of A */
+/* 12 Nov: effective track for turns on the spot, 0.1 mm.  95 mm was a
+   placeholder; x 0.53 keeps every turn exactly as tuned (a TURN 180
+   still turns ~113 deg on the mat, as before).  For true angles set
+   it from a measured turn: 503 x commanded / measured (180 / 113 ->
+   ~800) -- that changes every turn (bypass, search, junction). */
+#define S2_TRACK_X10_MM		503
 /* Motor model from the 27 Oct bench run (wheels lifted, no load):
    duty ~230-300 per mille held ~200 mm/s.  Fitted as deadband 100 +
    0.75 per mille per mm/s, i.e. ~1200 mm/s at full duty unloaded.  On
    the floor the load needs more duty: the integrator supplies it.
    Re-fit on the track (S2-M06) and lower KP if the speed still swings. */
-#define S2_TOP_SPEED_MM_S	800	/* unloaded speed at 100 % duty (1200 x 43/65: the fit used the 65 mm placeholder) */
+#define S2_TOP_SPEED_MM_S	424	/* unloaded speed at 100 % duty (12 Nov: 800 x 0.53, real) */
 #define S2_DEADBAND_PM		100	/* duty (per mille) where a wheel starts */
-#define S2_KFF_Q8		288	/* feed-forward: (1000-100)/800 * 256 */
-#define S2_KP_Q8		96	/* PI gains, Q8 (256 = 1.0); was 512, which */
-#define S2_KI_Q8		16	/* swung duty 0 <-> 400 around the target */
+/* 12 Nov: the gains work on mm/s, now real (x 0.53), so they are
+   / 0.53 to give the same duty as before: 288 -> 544, 96 -> 181,
+   16 -> 30 */
+#define S2_KFF_Q8		544	/* feed-forward: (1000-100)/424 * 256 */
+#define S2_KP_Q8		181	/* PI gains, Q8 (256 = 1.0); was 512, which */
+#define S2_KI_Q8		30	/* swung duty 0 <-> 400 around the target */
 #define S2_I_MAX_PM		300	/* integrator clamp, per mille duty */
 
 /* Derived: micrometres travelled per encoder count (pi ~ 355/113) */
@@ -99,14 +110,15 @@
 /* =====================================================================
  *  4. Behaviour limits (report FR/NFR)
  * ===================================================================== */
-#define S2_MAX_SPEED_CM_S	50	/* command field limit (6 bits) */
-#define S2_REVERSE_MAX_MM_S	100	/* "safe reverse" cap */
-#define S2_SLOW_MM_S		80	/* last 10 % of a MOVE(d)/TURN */
-#define S2_DEFAULT_MM_S		150	/* MOVE(d)/TURN with speed field 0 */
-#define S2_ACCEL_MM_S_PER_CYC	20	/* target ramp (1000 mm/s^2); was 10, then 15:
+/* 12 Nov: all real mm/s now (the old value x 0.53 in brackets) */
+#define S2_MAX_SPEED_MM_S	265	/* "no cap" (was 50 cm/s); command field max 511 */
+#define S2_REVERSE_MAX_MM_S	53	/* "safe reverse" cap (100) */
+#define S2_SLOW_MM_S		42	/* last 10 % of a MOVE(d)/TURN (80) */
+#define S2_DEFAULT_MM_S		79	/* MOVE(d)/TURN with speed field 0 (150) */
+#define S2_ACCEL_MM_S_PER_CYC	11	/* (20; 10.6 rounded) target ramp; was 10, then 15:
 					   the inner wheel took 300 ms to slow for a
 					   curve (jiahao16, Fine-Tuning 4bea17a) */
-#define S2_DECEL_MM_S_PER_CYC	40	/* slowing down (2000 mm/s^2), Fine-Tuning */
+#define S2_DECEL_MM_S_PER_CYC	21	/* (40) slowing down, Fine-Tuning */
 /* 4 Nov (line-follow weave): in SPEED_FOLLOW the two limits above now
    apply to the robot's SPEED only (follow_v in set_targets()); each
    wheel may then change by up to S2_FOLLOW_STEP_MM_S_PER_CYC per cycle,
@@ -114,8 +126,9 @@
    (that delay made the robot overshoot each edge of the line and swing
    from side to side).  MOVE(d) / TURN (obstacle bypass, junction turns)
    are unchanged. */
-#define S2_FOLLOW_STEP_MM_S_PER_CYC	80
-#define S2_HEADING_K_MM_S	4	/* heading hold: mm/s per count of L/R difference (15 made the robot weave, 27 Oct) */
+#define S2_FOLLOW_STEP_MM_S_PER_CYC	42	/* (80) */
+#define S2_HEADING_K_X100	212	/* heading hold: mm/s x 100 per count of L/R difference
+				   (12 Nov: 4 mm/s x 0.53; 15 made the robot weave, 27 Oct) */
 #define S2_STEER_FULL		64	/* steer value giving a 100 % speed split */
 #define S2_STEER_TIMEOUT_MS	100	/* no steer message -> steer 0 */
 #define S2_SPEED_WIN		5	/* speed = counts in the last 5 cycles (100 ms) */
@@ -142,33 +155,34 @@
 
 /* =====================================================================
  *  5. mbf_motion_cmd -- one 32-bit packed word (VC -> Motion)
+ *	12 Nov: speed in mm/s and distance in mm (were cm/s and cm), so
+ *	real values like 10.6 cm/s fit:
  *	[2:0]   type      S2_CMD_*
- *	[8:3]   speed     0..50 cm/s  (MOVE_FOLLOW, SPEED_LIMIT; cruise
- *	                  speed of MOVE_DIST/TURN, 0 = default)
- *	[17:9]  angle     -180..+180 deg, signed, + = turn right (clockwise)
- *	[25:18] distance  -128..+127 cm, signed, - = reverse
- *	[31:26] reserved, 0
+ *	[11:3]  speed     0..S2_MAX_SPEED_MM_S mm/s  (MOVE_FOLLOW, SPEED_LIMIT;
+ *	                  cruise speed of MOVE_DIST/TURN, 0 = default)
+ *	[20:12] angle     -180..+180 deg, signed, + = turn right (clockwise)
+ *	[31:21] distance  -1024..+1023 mm, signed, - = reverse
  *  Senders: use motion_send_cmd(S2_CMD_PACK(...)).  Values are clamped.
  * ===================================================================== */
 #define S2_CMD_MOVE_FOLLOW	0	/* follow the line at speed v */
 #define S2_CMD_MOVE_DIST	1	/* straight for distance d */
 #define S2_CMD_TURN		2	/* turn on the spot by angle */
 #define S2_CMD_STOP		3	/* brake; in STALL_FAULT / STOPPED also resets faults */
-#define S2_CMD_SPEED_LIMIT	4	/* cap all speeds at v (50 = no cap) */
+#define S2_CMD_SPEED_LIMIT	4	/* cap all speeds at v (S2_MAX_SPEED_MM_S = no cap) */
 
 #define S2_CMD_TYPE_SHIFT	0
 #define S2_CMD_TYPE_MASK	0x7u
 #define S2_CMD_SPEED_SHIFT	3
-#define S2_CMD_SPEED_MASK	0x3Fu
-#define S2_CMD_ANGLE_SHIFT	9
+#define S2_CMD_SPEED_MASK	0x1FFu
+#define S2_CMD_ANGLE_SHIFT	12
 #define S2_CMD_ANGLE_MASK	0x1FFu
-#define S2_CMD_DIST_SHIFT	18
-#define S2_CMD_DIST_MASK	0xFFu
+#define S2_CMD_DIST_SHIFT	21
+#define S2_CMD_DIST_MASK	0x7FFu
 
 #define S2_ANGLE_MIN		(-180)
 #define S2_ANGLE_MAX		180
-#define S2_DIST_MIN_CM		(-128)
-#define S2_DIST_MAX_CM		127
+#define S2_DIST_MIN_MM		(-1024)
+#define S2_DIST_MAX_MM		1023
 
 Inline INT s2_clamp(INT v, INT lo, INT hi)
 {
@@ -183,15 +197,15 @@ Inline INT s2_sext(UW v, INT bits)
 	return (INT)(v ^ m) - (INT)m;
 }
 
-Inline UW s2_cmd_pack(UINT type, INT speed_cm_s, INT angle_deg, INT dist_cm)
+Inline UW s2_cmd_pack(UINT type, INT speed_mm_s, INT angle_deg, INT dist_mm)
 {
 	UW	w;
 	w  = ((UW)type & S2_CMD_TYPE_MASK) << S2_CMD_TYPE_SHIFT;
-	w |= ((UW)s2_clamp(speed_cm_s, 0, S2_MAX_SPEED_CM_S)
+	w |= ((UW)s2_clamp(speed_mm_s, 0, S2_MAX_SPEED_MM_S)
 					& S2_CMD_SPEED_MASK) << S2_CMD_SPEED_SHIFT;
 	w |= ((UW)s2_clamp(angle_deg, S2_ANGLE_MIN, S2_ANGLE_MAX)
 					& S2_CMD_ANGLE_MASK) << S2_CMD_ANGLE_SHIFT;
-	w |= ((UW)s2_clamp(dist_cm, S2_DIST_MIN_CM, S2_DIST_MAX_CM)
+	w |= ((UW)s2_clamp(dist_mm, S2_DIST_MIN_MM, S2_DIST_MAX_MM)
 					& S2_CMD_DIST_MASK) << S2_CMD_DIST_SHIFT;
 	return w;
 }
@@ -200,7 +214,7 @@ Inline UW s2_cmd_pack(UINT type, INT speed_cm_s, INT angle_deg, INT dist_cm)
 Inline UINT s2_cmd_type(UW w)  { return (w >> S2_CMD_TYPE_SHIFT) & S2_CMD_TYPE_MASK; }
 Inline INT  s2_cmd_speed(UW w) { return (INT)((w >> S2_CMD_SPEED_SHIFT) & S2_CMD_SPEED_MASK); }
 Inline INT  s2_cmd_angle(UW w) { return s2_sext(w >> S2_CMD_ANGLE_SHIFT, 9); }
-Inline INT  s2_cmd_dist(UW w)  { return s2_sext(w >> S2_CMD_DIST_SHIFT, 8); }
+Inline INT  s2_cmd_dist(UW w)  { return s2_sext(w >> S2_CMD_DIST_SHIFT, 11); }	/* mm */
 
 /* =====================================================================
  *  6. g_motion_status -- one 32-bit packed word, written ONLY by Motion

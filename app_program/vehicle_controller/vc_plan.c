@@ -28,8 +28,18 @@ EXPORT INT vc_nav_script(UINT nav, UW *cmds)
 	}
 	/* Bring the axle over the junction first: the IR sensors are in
 	   front of it, so turning at once would cut the corner. */
-	cmds[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, VC_JUNCTION_ADV_CM);
-	cmds[1] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, angle, 0);
+	cmds[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_NAV_ADV_MM);	/* 12 Nov */
+	/* 12 Nov: a U-turn is VC_UTURN_TURNS turns of 180 (as commanded);
+	   task_vc.c stops it by the compass and the line sensors */
+	if (nav == NAV_U_TURN) {
+		INT	i;
+
+		for (i = 1; i <= VC_UTURN_TURNS; i++) {
+			cmds[i] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, 180, 0);
+		}
+		return 1 + VC_UTURN_TURNS;
+	}
+	cmds[1] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, angle, 0);
 	return 2;
 }
 
@@ -142,14 +152,15 @@ EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm)
 		out_fwd = lat * 100 / tan100[(a - 45) / 5];
 	}
 #endif
-	diag = vc_clamp(diag, VC_BYPASS_MIN_CM, S2_DIST_MAX_CM);
-	fwd = vc_clamp(fwd - out_fwd, VC_BYPASS_MIN_CM, S2_DIST_MAX_CM);
+	diag = vc_clamp(diag, VC_BYPASS_MIN_CM, VC_PLAN_MAX_CM);
+	fwd = vc_clamp(fwd - out_fwd, VC_BYPASS_MIN_CM, VC_PLAN_MAX_CM);
 
-	cmds[0] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, a * side, 0);
-	cmds[1] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, diag);
-	cmds[2] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, -a * side, 0);
-	cmds[3] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_CM_S, 0, fwd);
-	cmds[4] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_CM_S, -VC_REJOIN_TURN_DEG * side, 0);
+	/* 12 Nov: planned cm -> mm driven (VC_PLAN_MM, vehicle_controller.h) */
+	cmds[0] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, a * side, 0);
+	cmds[1] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_PLAN_MM(diag));
+	cmds[2] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, -a * side, 0);
+	cmds[3] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_PLAN_MM(fwd));
+	cmds[4] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, -VC_REJOIN_TURN_DEG * side, 0);
 	if (lat_cm != NULL) *lat_cm = lat;
 	return 5;
 }

@@ -502,7 +502,7 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 			last_seq = s4_shock_seq();
 		}
 
-		/* Turn check, for Buddy 2's S2_TRACK_MM: how far each on-the-spot
+		/* Turn check, for Buddy 2's S2_TRACK_X10_MM: how far each on-the-spot
 		   TURN really turned, by the compass.  Measured 300 ms after
 		   Motion leaves TURN (the heading filter lags ~80 ms).  Only
 		   valid once the car has turned about a quarter turn since

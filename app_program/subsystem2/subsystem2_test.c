@@ -39,26 +39,27 @@ EXPORT void subsystem2_test(void)
 		   "example free slots and blocks within pool size");
 
 	/* S2-U03: command word round trip, incl. negative angle/distance */
-	w = S2_CMD_PACK(S2_CMD_TURN, 30, -90, 0);
-	ok = s2_cmd_type(w) == S2_CMD_TURN && s2_cmd_speed(w) == 30 &&
+	/* 12 Nov: speed in mm/s, distance in mm */
+	w = S2_CMD_PACK(S2_CMD_TURN, 159, -90, 0);
+	ok = s2_cmd_type(w) == S2_CMD_TURN && s2_cmd_speed(w) == 159 &&
 	     s2_cmd_angle(w) == -90 && s2_cmd_dist(w) == 0;
-	w = S2_CMD_PACK(S2_CMD_MOVE_DIST, 20, 0, -100);
+	w = S2_CMD_PACK(S2_CMD_MOVE_DIST, 106, 0, -530);
 	ok = ok && s2_cmd_type(w) == S2_CMD_MOVE_DIST &&
-	     s2_cmd_speed(w) == 20 && s2_cmd_dist(w) == -100;
-	w = S2_CMD_PACK(S2_CMD_TURN, 0, 180, 127);
-	ok = ok && s2_cmd_angle(w) == 180 && s2_cmd_dist(w) == 127;
-	w = S2_CMD_PACK(S2_CMD_TURN, 0, -180, -128);
-	ok = ok && s2_cmd_angle(w) == -180 && s2_cmd_dist(w) == -128;
+	     s2_cmd_speed(w) == 106 && s2_cmd_dist(w) == -530;
+	w = S2_CMD_PACK(S2_CMD_TURN, 0, 180, S2_DIST_MAX_MM);
+	ok = ok && s2_cmd_angle(w) == 180 && s2_cmd_dist(w) == S2_DIST_MAX_MM;
+	w = S2_CMD_PACK(S2_CMD_TURN, 0, -180, S2_DIST_MIN_MM);
+	ok = ok && s2_cmd_angle(w) == -180 && s2_cmd_dist(w) == S2_DIST_MIN_MM;
 	TEST_CHECK("S2-U03", ok, "command word pack/unpack round trip");
 
 	/* S2-U04: values are clamped, nothing spills into other fields */
-	w = S2_CMD_PACK(S2_CMD_MOVE_FOLLOW, 70, 250, 200);
-	ok = s2_cmd_speed(w) == S2_MAX_SPEED_CM_S && s2_cmd_angle(w) == 180 &&
-	     s2_cmd_dist(w) == 127 && (w >> 26) == 0 &&
+	w = S2_CMD_PACK(S2_CMD_MOVE_FOLLOW, 600, 250, 2000);
+	ok = s2_cmd_speed(w) == S2_MAX_SPEED_MM_S && s2_cmd_angle(w) == 180 &&
+	     s2_cmd_dist(w) == S2_DIST_MAX_MM &&
 	     s2_cmd_type(w) == S2_CMD_MOVE_FOLLOW;
-	w = S2_CMD_PACK(S2_CMD_SPEED_LIMIT, -5, -300, -200);
+	w = S2_CMD_PACK(S2_CMD_SPEED_LIMIT, -5, -300, -2000);
 	ok = ok && s2_cmd_speed(w) == 0 && s2_cmd_angle(w) == -180 &&
-	     s2_cmd_dist(w) == -128 && s2_cmd_type(w) == S2_CMD_SPEED_LIMIT;
+	     s2_cmd_dist(w) == S2_DIST_MIN_MM && s2_cmd_type(w) == S2_CMD_SPEED_LIMIT;
 	TEST_CHECK("S2-U04", ok, "command fields clamped to their ranges");
 
 	/* S2-U05: status word round trip and clamping */
@@ -89,7 +90,7 @@ EXPORT void subsystem2_test(void)
 	   motors stay braked; after the VC clears it, Motion is STOPPED. */
 	tk_set_flg(flg_safety, S2_FLG_ESTOP);
 	tk_dly_tsk(3 * S2_PERIOD_MS);
-	motion_send_cmd(S2_CMD_PACK(S2_CMD_MOVE_FOLLOW, 20, 0, 0));
+	motion_send_cmd(S2_CMD_PACK(S2_CMD_MOVE_FOLLOW, 106, 0, 0));
 	tk_dly_tsk(3 * S2_PERIOD_MS);
 	ok = s2_sts_state(motion_get_status()) == S2_ST_E_STOP_BRAKE &&
 	     motor_is_braked();

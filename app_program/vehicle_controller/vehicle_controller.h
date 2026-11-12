@@ -44,13 +44,17 @@
 /* =====================================================================
  *  2. Mission behaviour (PLACEHOLDERS: tune on the track)
  * ===================================================================== */
-#define VC_CRUISE_CM_S		20	/* line following speed (27 Oct: 20 lost the line, slowed to 15;
+/* 12 Nov: every speed below is REAL mm/s and every distance REAL mm
+   (Motion Control's encoder scale was 0.53 too high, subsystem2.h
+   S2_ENC_CPR).  Old value in brackets: x 0.53, so the robot moves
+   as before.  Speeds are mm/s because 10.6 cm/s is not a whole cm/s. */
+#define VC_CRUISE_MM_S		106	/* (20 cm/s) line following speed (27 Oct: 20 lost the line, slowed to 15;
 					   back to 20 after the start-up / sensor-wiring fixes;
 					   30 Oct: 30, then 25, then 22 as asked -- if it loses the line on
 					   curves, go back down or raise Buddy 3's KP) */
-#define VC_SLOW_CM_S		15	/* NFR12: <= 10 cm/s near an obstacle (30 Oct: 15 as asked -- above NFR12) */
+#define VC_SLOW_MM_S		80	/* (15 cm/s = 7.9 real) NFR12: <= 10 cm/s near an obstacle -- now met */
 /* 30 Oct: slow zone.  While following, anything the ultrasonic sees
-   within this far caps the speed at VC_SLOW_CM_S, released again beyond
+   within this far caps the speed at VC_SLOW_MM_S, released again beyond
    VC_SLOW_ZONE_CM + 10.  At 30 cm/s the robot otherwise reached the
    S5_DETECT_CM (25) stop at full speed and coasted into its own turning
    circle before the scan.  0 = off. */
@@ -58,7 +62,7 @@
 /* 4-5 Nov (videos: ran wide on the loop; IMG_7771: yaw on the
    straight): slow-down while steering.  While following, a Line &
    Barcode steering value of at least VC_CURVE_STEER caps the speed at
-   VC_CURVE_CM_S; it is lifted once the steering has stayed below
+   VC_CURVE_MM_S; it is lifted once the steering has stayed below
    VC_CURVE_STEER / 2 for VC_CURVE_HOLD_MS.  Since 4 Nov a straight-line
    edge correction is only 8 (S3_STEER_KP 4), at most ~17 with the KD
    kick and full trim; a curve's growing bend, or a drift that the soft
@@ -68,15 +72,15 @@
 /* 6 Nov (logs 19:03 / 19:10): "curve" is now decided from the robot's
    REAL turning: left minus right wheel speed (cm/s), averaged over
    VC_CURVE_AVG_N x 20 ms (task_vc.c, check_curve).  Curve at
-   VC_CURVE_TURN_CM_S or more; done when below VC_CURVE_DONE_CM_S for
+   VC_CURVE_TURN_MM_S or more; done when below VC_CURVE_DONE_MM_S for
    VC_CURVE_HOLD_MS.  A 13 cm curve at 12 cm/s turns ~9 cm/s; a swing on
    a straight averages ~0.  Simulation (track shapes, 7-15 cm curves):
    all curves held; straights after a curve slow 98 % (line45) ->
    43 % (steering average) -> 24 % (this).  0 = off. */
-#define VC_CURVE_TURN_CM_S	5
-#define VC_CURVE_DONE_CM_S	2
+#define VC_CURVE_TURN_MM_S	26	/* (5 cm/s = 26.5 mm/s) */
+#define VC_CURVE_DONE_MM_S	11	/* (2 cm/s = 10.6 mm/s) */
 #define VC_CURVE_AVG_N		25	/* 25 x 20 ms = 0.5 s */
-#define VC_CURVE_CM_S		12
+#define VC_CURVE_MM_S		64	/* (12 cm/s = 63.5) */
 #define VC_CURVE_HOLD_MS	300	/* 6 Nov: 800 for single values; 300 again with the average */
 /* 4 Nov: line lost IN a curve (VC_CURVE_STEER or more): keep following
    slowly for this long first -- Line & Barcode keeps arcing towards
@@ -84,8 +88,39 @@
    and only then stop and sweep (LINE_SEARCH).  Lost on a straight:
    LINE_SEARCH at once, as before. */
 #define VC_LOST_GRACE_MS	600
-#define VC_TURN_CM_S		15	/* wheel speed while turning (27 Oct: was 15) */
-#define VC_JUNCTION_ADV_CM	5	/* sensors are ahead of the axle */
+#define VC_TURN_MM_S		80	/* (15 cm/s = 79.5) wheel speed while turning */
+#define VC_JUNCTION_ADV_MM	26	/* (5 cm = 26.5 mm) sensors are ahead of the axle */
+/* 12 Nov (video 14:26, U-turn): at a junction the robot pivoted with
+   its line sensors only just past the cross line -- the wheel axle,
+   which it pivots about, was still well before the junction, so it
+   turned too early.  The barcode turns (LEFT / RIGHT / U-TURN) now
+   drive this far after the junction is seen, to put the axle on it.
+   Estimated from the video; set it to the measured distance from the
+   line sensors to the wheel axle (+1-2 cm for the junction being seen
+   a moment late).  The bypass rejoin keeps VC_JUNCTION_ADV_MM.
+   12 Nov: real mm (team: 7 cm, then 9, then 10 cm). */
+#define VC_NAV_ADV_MM		100
+/* 12 Nov: U-turn (like the ideal video: pivot on the junction, end
+   facing back along the same line).  After VC_NAV_ADV_MM, the robot
+   turns on the spot (VC_UTURN_TURNS TURN commands of 180, at
+   VC_TURN_MM_S) and the turn is ended by sensors, not by the angle:
+   the wheels slip in a pivot on the mat (a TURN of 180 gave ~113 deg,
+   a slow one far less), so encoder counts say little about the real
+   angle.  With VC_UTURN_IMU 1 and the IMU calibrated it is measured by
+   the compass (Buddy 4's heading, added up every 20 ms, signed, so
+   compass noise cancels):
+     1. the line sensors are ignored until VC_UTURN_IMU_BLIND_DEG (past
+        the crossing line at ~90 deg);
+     2. then the first black (the line it came along, ~180) stops it
+        and line following starts;
+     3. VC_UTURN_IMU_MAX_DEG with no line, or every TURN done: search.
+   IMU not calibrated ("vc: U-turn without the compass"): the first
+   TURN is the blind part (~113 deg), the next ones end at the first
+   black.  Earlier versions: backup_uturn4 (blind 180 + slow find). */
+#define VC_UTURN_IMU		1
+#define VC_UTURN_IMU_BLIND_DEG	140
+#define VC_UTURN_IMU_MAX_DEG	240
+#define VC_UTURN_TURNS		3	/* <= VC_SCRIPT_MAX - 1 */
 #define VC_JUNCTION_COOLDOWN_MS	800	/* same junction is not counted twice */
 #define VC_LINE_SEARCH_MS	3000	/* NFR18: LINE_SEARCH timeout */
 #define VC_SEARCH_STEP_DEG	30	/* sweep: +30, -60, +90, -120 ... */
@@ -143,18 +178,18 @@
    line and turns towards the bypass side until the line sensors find
    the line again, at most this far, then follows it.  Works on curves. */
 #define VC_ALIGN_MAX_DEG	150
-#define VC_ALIGN_CM_S		10	/* wheel speed of that turn: slower, so
+#define VC_ALIGN_MM_S		53	/* (10 cm/s) wheel speed of that turn: slower, so
 					   the sensors do not overshoot the line */
 /* 30 Oct: line not found on the rejoin (approach driven, or the turn
    onto it lost it): look for it instead of the normal 3 s LINE_SEARCH.
    Turn VC_REJOIN_LOOK_DEG to one side, back, the other side, back; no
-   line: reverse VC_REJOIN_BACK_CM and look again; VC_REJOIN_TRIES looks
+   line: reverse VC_REJOIN_BACK_MM and look again; VC_REJOIN_TRIES looks
    in all, then FAULT.  Line seen within VC_REJOIN_ALONG_DEG of the
    track's direction: just follow it, else turn onto it as above.
    VC_REJOIN_TRIES is at most 3 (2-bit counter). */
 #define VC_REJOIN_TRIES		3
 #define VC_REJOIN_LOOK_DEG	60
-#define VC_REJOIN_BACK_CM	10
+#define VC_REJOIN_BACK_MM	53	/* (10 cm) */
 #define VC_REJOIN_ALONG_DEG	30
 /* Smooth bypass (28-29 Oct): 1 = turn out only as far as needed to miss
    the obstacle's near corner (45..90 deg, from the profile: tan(a) >=
@@ -166,6 +201,16 @@
    either way. */
 #define VC_BYPASS_SMOOTH	1
 #define VC_BYPASS_CORNER_CM	5	/* extra room at the near corner */
+/* 12 Nov: the bypass, rejoin-approach and reverse distances are
+   planned in cm from the ultrasonic (real cm) with the margins above,
+   all tuned while the robot drove only 0.53 of every distance.  To
+   keep those paths exactly as tuned, the planned cm are driven as
+   cm x VC_PLAN_MM_PER_CM_X10 / 10 mm (5.3 mm per planned cm), and
+   VC_PLAN_MAX_CM (127) is the old longest move.  10 here = drive the
+   planned geometry at full size (wider, longer bypass). */
+#define VC_PLAN_MM_PER_CM_X10	53
+#define VC_PLAN_MAX_CM		127
+#define VC_PLAN_MM(cm)		((INT)(cm) * VC_PLAN_MM_PER_CM_X10 / 10)
 
 /* START needs the IMU calibrated and an IMU fault stops the mission
    (design).  0 = bench mode ONLY: drive without a working IMU (no hump
@@ -191,7 +236,7 @@
    sensors: 0 = normal.  N (1..127) = on START, drive straight N cm with
    heading hold, then stop and go back to IDLE.  Line events are ignored
    during the move.  Keep 0 for normal runs. */
-#define VC_BENCH_MOVE_CM	0
+#define VC_BENCH_MOVE_CM	0	/* 12 Nov: real cm (max 102) */
 
 /* 1 Nov: barcode letter -> movement.  The mapping is NOT fixed in the
    code: it arrives by MQTT before the demo (robot/cmd MAP, Buddy 1) and
