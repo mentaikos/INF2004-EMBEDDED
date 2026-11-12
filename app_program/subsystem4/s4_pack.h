@@ -32,12 +32,12 @@
 
 #include "imu_types.h"
 
-/* IMU Monitor states (statechart 6.4): 6 states -> 3 bits */
+/* IMU Monitor states (statechart 6.4): 3 bits */
 #define S4_ST_CALIBRATING	0
 #define S4_ST_LEVEL		1
 #define S4_ST_CLIMBING		2
 #define S4_ST_DESCENDING	3
-#define S4_ST_SHOCK		4
+#define S4_ST_LIFTED		4	/* 12 Nov: lifted or overturned (was SHOCK) */
 #define S4_ST_FAULT		5
 
 /* Unpacked view: the Week 13 "before" representation (8 x 4 = 32 B)

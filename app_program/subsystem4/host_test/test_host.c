@@ -48,7 +48,7 @@ static float noise(float amp)
 	return amp * (((float)((rng >> 8) & 0xFFFF) / 65535.0f) * 2.0f - 1.0f);
 }
 
-typedef struct { int starts, ends, shocks, faults; int heights[8]; int nh; } result_t;
+typedef struct { int starts, ends, faults, lifts, cause; int heights[8]; int nh; } result_t;
 
 static void count(result_t *r, const IMU_EVENT *ev, int n)
 {
@@ -58,8 +58,8 @@ static void count(result_t *r, const IMU_EVENT *ev, int n)
 			r->ends++;
 			if (r->nh < 8) r->heights[r->nh++] = ev[i].height_mm;
 		}
-		if (ev[i].type == IMU_EV_SHOCK) r->shocks++;
 		if (ev[i].type == IMU_EV_SENSOR_FAULT) r->faults++;
+		if (ev[i].type == IMU_EV_LIFTED) { r->lifts++; r->cause = ev[i].height_mm; }
 	}
 }
 
@@ -67,7 +67,7 @@ static H mg(float g) { return (H)lroundf(g * 1000.0f); }
 
 static void run(IMU_MONITOR *m, UW *t, float *x_rear, float *dist, long *dist_sent,
 		const hump_t *hp, int nh, float speed, float length,
-		float noise_g, result_t *r, int shock_at_step)
+		float noise_g, result_t *r)
 {
 	const float L = IMU_WHEELBASE_MM;
 	int steps = (int)(length / (speed * IMU_PERIOD_MS / 1000.0f));
@@ -95,7 +95,6 @@ static void run(IMU_MONITOR *m, UW *t, float *x_rear, float *dist, long *dist_se
 			mg(-0.02f + sinf(pitch) + noise(noise_g)), /* in calibration */
 			mg(0.03f + cosf(pitch) + noise(noise_g)),
 			200, 50, -300 };
-		if (k == shock_at_step) s.az += 3000;
 
 		*t += IMU_PERIOD_MS;
 		IMU_EVENT ev[IMU_MAX_EVENTS];
@@ -162,7 +161,7 @@ static void hump_case(const char *name, float h, float half, float speed,
 
 	calibrate(&m, &t);
 	run(&m, &t, &x, &dist, &sent, &hp, 1, speed, 300.0f + 2 * half + 600.0f,
-	    noise_g, &r, -1);
+	    noise_g, &r);
 	printf("%s: h=%.0f mm, half-length %.0f mm (slope %.1f deg), %.0f mm/s, noise %.2f g\n",
 	       name, h, half, atanf(h / half) * 57.2958f, speed, noise_g);
 	CHECK(r.starts == 1 && r.ends == 1, "one HUMP_START and one HUMP_END (got %d/%d)",
@@ -235,25 +234,62 @@ int main(void)
 	{
 		IMU_MONITOR m; UW t = 0; float x = 0, dist = 0; long sent = 0; result_t r = {0};
 		calibrate(&m, &t);
-		run(&m, &t, &x, &dist, &sent, NULL, 0, 200.0f, 2000.0f, 0.08f, &r, -1);
+		run(&m, &t, &x, &dist, &sent, NULL, 0, 200.0f, 2000.0f, 0.08f, &r);
 		CHECK(r.starts == 0 && r.ends == 0, "no hump events on 2 m of flat track, 0.08 g noise");
 	}
 
-	printf("== Shock ==\n");
+	printf("== Lifted / overturned (12 Nov) ==\n");
 	{
-		IMU_MONITOR m; UW t = 0; float x = 0, dist = 0; long sent = 0; result_t r = {0};
+		IMU_MONITOR m; UW t = 0; result_t r = {0};
+		IMU_EVENT ev[IMU_MAX_EVENTS];
+		unsigned rng_saved = rng;	/* later tests keep their noise */
 		calibrate(&m, &t);
-		run(&m, &t, &x, &dist, &sent, NULL, 0, 200.0f, 400.0f, 0.02f, &r, 50);
-		CHECK(r.shocks == 1, "one SHOCK for a 3 g spike");
-		CHECK(m.state == S4_ST_LEVEL, "back to LEVEL after the 200 ms hold");
-	}
-	{
-		IMU_MONITOR m; UW t = 0; float x = 0, dist = 0; long sent = 0; result_t r = {0};
-		hump_t hp = { 100.0f, 25.0f, 80.0f };
+		/* 2 s of driving with 0.15 g noise, 2-sample jolts of 1 g,
+		   a 3 g spike and a sideways knock: no lift */
+		for (int k = 0; k < 200; k++) {
+			IMU_SAMPLE s = { TRUE, mg(0.01f + noise(0.15f)), mg(-0.02f + noise(0.15f)),
+					 mg(1.03f + noise(0.15f)), 200, 50, -300 };
+			if (k == 20 || k == 21) s.az += 1000;
+			if (k == 60) s.az += 3000;
+			if (k == 100) s.ax += 3000;
+			t += IMU_PERIOD_MS;
+			imu_set_floor(&m, FALSE);
+			count(&r, ev, imu_step(&m, &s, 2, t, ev));
+		}
+		CHECK(r.lifts == 0, "no LIFTED on jolts, a 3 g spike, a knock or 0.15 g noise");
+		/* a junction line under both sensors for 0.2 s right after
+		   the jolts: no lift */
+		for (int k = 0; k < 20; k++) {
+			IMU_SAMPLE s = { TRUE, mg(0.01f), mg(-0.02f), mg(1.03f), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_set_floor(&m, TRUE);
+			count(&r, ev, imu_step(&m, &s, 2, t, ev));
+		}
+		CHECK(r.lifts == 0, "no LIFTED crossing a junction line (0.2 s)");
+		/* picked up gently: tilted 19 deg, then held level, both line
+		   sensors black */
+		for (int k = 0; k < 200; k++) {
+			float p = (k < 30) ? 0.33f : 0.0f;
+			IMU_SAMPLE s = { TRUE, mg(0.01f + noise(0.02f)), mg(-0.02f + p + noise(0.02f)),
+					 mg(0.03f + sqrtf(1.0f - p * p) + noise(0.02f)), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_set_floor(&m, TRUE);
+			count(&r, ev, imu_step(&m, &s, 0, t, ev));
+		}
+		CHECK(r.lifts == 1 && r.cause == IMU_LIFT_CAUSE_HELD && m.state == S4_ST_LIFTED,
+		      "gentle lift, held level in the air -> LIFTED (no floor)");
+		/* upside down for 300 ms */
 		calibrate(&m, &t);
-		run(&m, &t, &x, &dist, &sent, &hp, 1, 200.0f, 800.0f, 0.02f, &r, 70);
-		CHECK(r.shocks == 1 && r.ends >= 1 && r.heights[0] == 0,
-		      "shock while climbing sends HUMP_END(0) so the VC leaves HUMP_TRAVERSE");
+		r.lifts = 0;
+		for (int k = 0; k < 30; k++) {
+			IMU_SAMPLE s = { TRUE, mg(0.01f), mg(-0.02f), mg(0.03f - 1.0f), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_set_floor(&m, FALSE);
+			count(&r, ev, imu_step(&m, &s, 0, t, ev));
+		}
+		CHECK(r.lifts == 1 && r.cause == IMU_LIFT_CAUSE_TILT && m.state == S4_ST_LIFTED,
+		      "upside down -> LIFTED (overturned)");
+		rng = rng_saved;
 	}
 
 	printf("== I2C fault ==\n");

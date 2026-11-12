@@ -36,7 +36,8 @@ Bit layouts match app_program/subsystem1/s1_codec.h (MSB-first, 4-bit header:
                 [20:12] heading deg, [29:21] turn rate deg/s signed,
                 [30] calibrated
         [12:2]  word 1: [4:0] hump mm, [8:5] hump count, [10:9] I2C fails
-        [1] shock (held 1 s)
+        [1] lifted / overturned (12 Nov)
+        [0] spare, 0
   B5  55 bits  Obstacle Scan           (not filled by the robot yet: shown raw)
 Heartbeat, last 5 bits (4 Nov, were padding): last barcode letter decoded,
 0 = none, 1..26 = 'A'..'Z'.  A new read is seen from B3's counter, the
@@ -171,7 +172,7 @@ LINE_STATES = ["ON_LINE", "DRIFTING", "JUNCTION", "LOST"]
 BC_STATES = ["WAITING", "MEASURING", "DECODING", "SENT (cool-down)"]
 MOVE_NAMES = {"forward": "STRAIGHT ON", "uturn": "U-TURN", "left": "LEFT",
               "right": "RIGHT"}
-IMU_STATES = ["CALIBRATING", "LEVEL", "CLIMBING", "DESCENDING", "SHOCK",
+IMU_STATES = ["CALIBRATING", "LEVEL", "CLIMBING", "DESCENDING", "LIFTED",
               "FAULT", "6?", "7?"]
 
 
@@ -206,7 +207,7 @@ def decode_b4(b4):
             "hump_mm": w1 & 0x1F,
             "hump_count": (w1 >> 5) & 0xF,
             "i2c_fails": (w1 >> 9) & 3,
-            "shock": (b4 >> 1) & 1}
+            "lifted": (b4 >> 1) & 1}
 
 
 def dist_diff(old_mm, new_mm):
@@ -760,7 +761,7 @@ dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; 
         <dt>Turn rate</dt><dd id="i-rate">—</dd>
         <dt>Last hump</dt><dd id="i-hump">—</dd>
         <dt>Calibrated</dt><dd id="i-cal">—</dd>
-        <dt>Shock</dt><dd id="i-shock">—</dd>
+        <dt>Lifted / overturned</dt><dd id="i-lifted">—</dd>
         <dt>I2C fails</dt><dd id="i-i2c">—</dd>
       </dl>
     </section>
@@ -853,7 +854,7 @@ function render(s) {
     set("i-hdg", t.b4.heading_deg + "°"); set("i-rate", signed(t.b4.rate_dps) + "°/s");
     set("i-hump", t.b4.hump_mm + " mm (count " + t.b4.hump_count + ")");
     set("i-cal", t.b4.calibrated ? "yes" : "NO", !t.b4.calibrated);
-    set("i-shock", t.b4.shock ? "SHOCK!" : "no", t.b4.shock); set("i-i2c", t.b4.i2c_fails);
+    set("i-lifted", t.b4.lifted ? "LIFTED - motors stopped" : "no", t.b4.lifted); set("i-i2c", t.b4.i2c_fails);
     set("o-raw", t.b5 === 0 ? "0 (not sent yet)" : "0x" + t.b5.toString(16));
     set("o-wifi", t.wifi_loss ? "1 (frame held during Wi-Fi loss)" : "0");
   }

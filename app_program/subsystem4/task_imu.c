@@ -11,8 +11,9 @@
  *	  2. reads Buddy 2's distance (g_motion_status) and takes the
  *	     wrap-safe signed difference (s2_dist_diff);
  *	  3. runs the IMU logic (imu_monitor.c);
- *	  4. reacts: SHOCK -> E-STOP in flg_safety first, then the latch;
- *	     HUMP_START / HUMP_END / SENSOR_FAULT -> mbf_vc_evt (TMO_POL);
+ *	  4. reacts: HUMP_START / HUMP_END / SENSOR_FAULT -> mbf_vc_evt
+ *	     (TMO_POL); 12 Nov: LIFTED / OVERTURNED -> the latch count, then
+ *	     E-STOP in flg_safety (motors stop; the VC ends the run);
  *	  5. publishes the two packed status words under mtx_s4_status.
  *	The task never waits except for its tick and that short mutex.
  */
@@ -22,6 +23,7 @@
 #include "drv_lsm303.h"
 #include "../subsystem2/subsystem2.h"	/* g_motion_status, flg_safety */
 #include "../subsystem1/subsystem1.h"	/* s1_tlm_set_slot, S1_SLOT_B4 */
+#include "../subsystem3/subsystem3.h"	/* 12 Nov: line sensors (lifted?) */
 #include <tk/syslib.h>
 
 EXPORT ID		tid_imu;
@@ -34,31 +36,17 @@ LOCAL IMU_MONITOR	imu;		/* IMU task only */
 LOCAL S4_DIAG		dg;		/* IMU task's working copy */
 LOCAL S4_DIAG		s4_diag;	/* guarded by mtx_s4_status */
 
-/* Shock latch: one writer per byte (s4_shock_ack in subsystem4.h) */
-LOCAL volatile UB	shock_seq;	/* IMU task only: shocks seen, wraps */
-LOCAL volatile UB	shock_acked;	/* Telemetry only: last one published */
-LOCAL UW		shock_tlm_until; /* IMU task only: hold in telemetry */
-
-/* 4 Nov: tk_get_otm (time since boot), not tk_get_tim.  tk_get_tim is
-   a calendar clock that starts near 0xC804FC00, not 0, so at power-on
-   (W)(shock_tlm_until - sys_ms()) with shock_tlm_until = 0 was
-   POSITIVE: the telemetry shock bit read 1 from boot (for ~10 days, or
-   until a real shock), and the dashboard showed SHOCK with none seen. */
-LOCAL UW sys_ms(void)
-{
-	SYSTIM	tim;
-
-	tk_get_otm(&tim);
-	return tim.lo;
-}
+/* 12 Nov: LIFTED latch, one writer per byte (s4_lift_ack) */
+LOCAL volatile UB	lift_seq;	/* IMU task only: lift events, wraps */
+LOCAL volatile UB	lift_acked;	/* Telemetry only: last one published */
+LOCAL volatile UB	lift_cause;	/* IMU task only: IMU_LIFT_CAUSE_xxx */
+#if APP_TEST
+LOCAL volatile UB	inject_lift;	/* set by the test, cleared by the task */
+#endif
 
 /* Bound by s4_bind_vc() before the tasks start; 0 = not yet */
 LOCAL volatile ID	vc_mbf;
 LOCAL volatile ID	fault_flg;
-
-#if APP_TEST
-LOCAL volatile UB	inject_shock;	/* set by the test, cleared by the task */
-#endif
 
 #if S4_LOG_TILT
 /* Tilt trace queue (subsystem4.h S4_LOG_TILT).  One writer per index,
@@ -144,24 +132,27 @@ LOCAL void debug_pin(INT pin, UINT level)
 	if (pin >= 0) gpio_set_val((UINT)pin, level);
 }
 
-/* SHOCK: stop first (Motion wakes on S2_FLG_ESTOP at once), then latch.
-   E-STOP is cleared only by the VC on a new START; FAULT_SHOCK only by
-   Telemetry (s4_shock_ack). */
-LOCAL void on_shock(void)
-{
-#if S4_SHOCK_ESTOP
-	tk_set_flg(flg_safety, S2_FLG_ESTOP);
-#endif
-	shock_seq = (UB)(shock_seq + 1);
-	shock_tlm_until = sys_ms() + S4_TLM_SHOCK_HOLD_MS;
-	set_fault(FAULT_SHOCK);
-	debug_pin(S4_DEBUG_SHOCK_PIN, 1);
-}
-
 LOCAL void on_sensor_fault(void)
 {
 	set_fault(FAULT_IMU);
 	send_vc(EVT_SENSOR_FAULT, FAULT_IMU);
+}
+
+/* 12 Nov: LIFTED / OVERTURNED.  Count it first, then stop: the VC
+   sees the new count with (or before) the E-STOP, so it knows the run
+   is over rather than an ordinary E-STOP.  Motion wakes on
+   S2_FLG_ESTOP at once and brakes.  E-STOP is cleared only by the VC
+   on a new START; FAULT_LIFTED by Telemetry (s4_lift_ack) or the VC's
+   fault reset. */
+LOCAL void on_lifted(UB cause)
+{
+	lift_cause = cause;
+	lift_seq = (UB)(lift_seq + 1);
+#if S4_LIFT_ESTOP
+	tk_set_flg(flg_safety, S2_FLG_ESTOP);
+#endif
+	set_fault(FAULT_LIFTED);
+	debug_pin(S4_DEBUG_LIFT_PIN, 1);
 }
 
 LOCAL void handle_events(const IMU_EVENT *ev, INT n)
@@ -170,9 +161,6 @@ LOCAL void handle_events(const IMU_EVENT *ev, INT n)
 
 	for (i = 0; i < n; i++) {
 		switch (ev[i].type) {
-		case IMU_EV_SHOCK:
-			on_shock();
-			break;
 		case IMU_EV_HUMP_START:
 			send_vc(EVT_HUMP_START, 0);
 			break;
@@ -181,6 +169,9 @@ LOCAL void handle_events(const IMU_EVENT *ev, INT n)
 			break;
 		case IMU_EV_SENSOR_FAULT:
 			on_sensor_fault();
+			break;
+		case IMU_EV_LIFTED:
+			on_lifted(ev[i].height_mm);
 			break;
 		default:
 			break;
@@ -204,10 +195,10 @@ LOCAL void publish(void)
 	s4_diag = dg;
 	tk_unl_mtx(mtx_s4_status);
 
-	/* Buddy 1's telemetry slot (44 bits, s4_tlm_slot): shock bit held
-	   1 s = two 500 ms frames, so it is always sent (Version C row 10) */
-	(void)s1_tlm_set_slot(S1_SLOT_B4, s4_tlm_slot(w0, w1,
-			(W)(shock_tlm_until - sys_ms()) > 0));
+	/* Buddy 1's telemetry slot (44 bits, s4_tlm_slot).  12 Nov: bit 1
+	   = LIFTED; the state lasts >= 1 s, two 500 ms telemetry frames */
+	(void)s1_tlm_set_slot(S1_SLOT_B4,
+			      s4_tlm_slot(w0, w1, f.state == S4_ST_LIFTED));
 }
 
 /* ------------------------------------------------------------------ */
@@ -281,9 +272,9 @@ EXPORT void imu_task(INT stacd, void *exinf)
 
 	(void)stacd; (void)exinf;
 
-	if (S4_DEBUG_SHOCK_PIN >= 0) {
-		gpio_set_pin(S4_DEBUG_SHOCK_PIN, GPIO_MODE_OUT);
-		gpio_set_val(S4_DEBUG_SHOCK_PIN, 0);
+	if (S4_DEBUG_LIFT_PIN >= 0) {
+		gpio_set_pin(S4_DEBUG_LIFT_PIN, GPIO_MODE_OUT);
+		gpio_set_val(S4_DEBUG_LIFT_PIN, 0);
 	}
 	if (S4_DEBUG_TIMING_PIN >= 0) {
 		gpio_set_pin(S4_DEBUG_TIMING_PIN, GPIO_MODE_OUT);
@@ -363,23 +354,41 @@ EXPORT void imu_task(INT stacd, void *exinf)
 		/* 2. distance from Motion Control (one aligned word) */
 		dist = s2_sts_dist(motion_get_status());
 
+		/* 12 Nov: both line sensors black = no floor under them
+		   (lifted).  Line & Barcode's word, one aligned load. */
+		{
+			UW	w3 = s3_get_status();
+
+			imu_set_floor(&imu, ((w3 >> S3_STS_IRL_SHIFT) & 1u) &&
+					    ((w3 >> S3_STS_IRC_SHIFT) & 1u));
+		}
+
 		/* 3.-4. logic and reactions */
 		n = imu_step(&imu, &s, s2_dist_diff(prev_dist, dist), now_ms, ev);
-		if (n > 0 && ev[0].type == IMU_EV_SHOCK) {
-			/* Integration aid: the raw reading that tripped SHOCK.
-			   At rest |a| is ~1000 mg; shock is > 2500 mg. */
-			tm_printf((UB*)"s4: SHOCK raw ax=%d ay=%d az=%d mg (%s)\n",
-				  s.ax, s.ay, s.az, lsm303_chip_name());
-		}
 		prev_dist = dist;
 		handle_events(ev, n);
+		if (n > 0 && ev[n - 1].type == IMU_EV_LIFTED) {
+			/* Integration aid: what tripped it (calibrated mg:
+			   on the floor x 0, y 0, z ~1000), from the IMU task
+			   once per lift */
+			tm_printf((UB*)"s4: LIFTED (%s): ax=%d ay=%d az=%d mg,"
+				  " pitch %d roll %d deg, line sensors %s\n",
+				  ev[n - 1].height_mm == IMU_LIFT_CAUSE_TILT ?
+				  "overturned > 45 deg" :
+				  ev[n - 1].height_mm == IMU_LIFT_CAUSE_JERK ?
+				  "picked up quickly" : "no floor under the line sensors",
+				  s.ax - imu.acc_off[0], s.ay - imu.acc_off[1],
+				  s.az - imu.acc_off[2],
+				  (INT)(imu.pitch_mdeg / 1000), (INT)(imu.roll_mdeg / 1000),
+				  imu.no_floor ? "black (no floor)" : "see the floor");
+		}
 #if APP_TEST
-		if (inject_shock) {
-			inject_shock = 0;
-			on_shock();
+		if (inject_lift) {
+			inject_lift = 0;
+			on_lifted(IMU_LIFT_CAUSE_JERK);
 		}
 #endif
-		if (!s4_shock_pending()) debug_pin(S4_DEBUG_SHOCK_PIN, 0);
+		if (!s4_lift_pending()) debug_pin(S4_DEBUG_LIFT_PIN, 0);
 
 		/* 5. timing and status */
 		dg.cycles++;
@@ -403,7 +412,7 @@ EXPORT void imu_task(INT stacd, void *exinf)
 LOCAL const char *s4_state_name(INT st)
 {
 	static const char * const name[] = {
-		"CALIBRATING", "LEVEL", "CLIMBING", "DESCENDING", "SHOCK", "FAULT"
+		"CALIBRATING", "LEVEL", "CLIMBING", "DESCENDING", "LIFTED", "FAULT"
 	};
 	return (st >= 0 && st <= S4_ST_FAULT) ? name[st] : "?";
 }
@@ -467,8 +476,8 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 	S4_DIAG		d;
 	UW		w0, w1;
 	INT		last_state = -1, last_count = 0, ticks = 0, a;
+	UB		last_lift = 0;
 	INT		ms, last_ms = -1, turn_h0 = 0, turn_wait = 0, dh;
-	UB		last_seq = 0;
 	/* With the tilt trace on, wake every IMU period so the queue
 	   (0.64 s deep) is drained long before it fills */
 	const INT	step = S4_LOG_TILT ? S4_PERIOD_MS : 100;
@@ -497,9 +506,12 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 			tm_printf((UB*)" deg (humps=%d)\n", f.hump_count);
 			last_count = f.hump_count;
 		}
-		if (s4_shock_seq() != last_seq) {
-			tm_printf((UB*)"s4: SHOCK -> E-STOP set\n");
-			last_seq = s4_shock_seq();
+		if (lift_seq != last_lift) {	/* 12 Nov */
+			tm_printf((UB*)"s4: %s -> E-STOP%s, motors stopped\n",
+				  lift_cause == IMU_LIFT_CAUSE_TILT ? "OVERTURNED"
+								 : "LIFTED",
+				  S4_LIFT_ESTOP ? "" : " NOT set (S4_LIFT_ESTOP 0)");
+			last_lift = lift_seq;
 		}
 
 		/* Turn check, for Buddy 2's S2_TRACK_X10_MM: how far each on-the-spot
@@ -567,6 +579,31 @@ EXPORT UW s4_get_status_w0(void)
 	return s4_w0;
 }
 
+EXPORT UB s4_lift_seq(void)
+{
+	return lift_seq;
+}
+
+EXPORT BOOL s4_lift_pending(void)
+{
+	return (lift_seq != lift_acked) ? TRUE : FALSE;
+}
+
+EXPORT void s4_lift_ack(UB seq)
+{
+	clr_fault(FAULT_LIFTED);
+	lift_acked = seq;
+	/* A newer lift came in after seq was read: keep the bit set */
+	if (lift_seq != seq) set_fault(FAULT_LIFTED);
+}
+
+#if APP_TEST
+EXPORT void s4_test_inject_lift(void)
+{
+	inject_lift = 1;
+}
+#endif
+
 EXPORT BOOL s4_is_calibrated(void)
 {
 	return s4_sts_calibrated(s4_w0) ? TRUE : FALSE;
@@ -579,34 +616,9 @@ EXPORT BOOL s4_in_hump(void)
 	return (st == S4_ST_CLIMBING || st == S4_ST_DESCENDING) ? TRUE : FALSE;
 }
 
-EXPORT UB s4_shock_seq(void)
-{
-	return shock_seq;
-}
-
-EXPORT BOOL s4_shock_pending(void)
-{
-	return (shock_seq != shock_acked) ? TRUE : FALSE;
-}
-
-EXPORT void s4_shock_ack(UB seq)
-{
-	clr_fault(FAULT_SHOCK);
-	shock_acked = seq;
-	/* A newer shock came in after seq was read: keep the bit set */
-	if (shock_seq != seq) set_fault(FAULT_SHOCK);
-}
-
 EXPORT void s4_get_diag(S4_DIAG *d)
 {
 	tk_loc_mtx(mtx_s4_status, TMO_FEVR);
 	*d = s4_diag;
 	tk_unl_mtx(mtx_s4_status);
 }
-
-#if APP_TEST
-EXPORT void s4_test_inject_shock(void)
-{
-	inject_shock = 1;
-}
-#endif

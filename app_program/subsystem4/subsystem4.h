@@ -13,7 +13,10 @@
  *	  - calibrates for 2 s at start (robot still and flat);
  *	  - detects humps (> +3 deg for 50 ms) and measures their peak height
  *	    with Buddy 2's distance: HUMP_START / HUMP_END(height) -> VC;
- *	  - detects shocks (|a| > 2.5 g) -> E-STOP in flg_safety at once;
+ *	  - (12 Nov: shock / collision detection removed, professor's update)
+ *	  - 12 Nov: detects the robot LIFTED or OVERTURNED (imu_monitor.h)
+ *	    -> E-STOP in flg_safety at once (motors stop), and the VC ends
+ *	    the run: lifting the robot is the end-of-run signal in the demo;
  *	  - 3 failed I2C reads -> IMU fault, SENSOR_FAULT -> VC, retry every
  *	    1 s, calibrate again once the sensor answers;
  *	  - publishes 42 bits of packed status (s4_pack.h).
@@ -26,9 +29,10 @@
  *
  *	Interfaces used (owned by others):
  *	  g_motion_status (S2)  distance, read every cycle (s2_sts_dist)
- *	  flg_safety (S2)       IMU sets S2_FLG_ESTOP on a shock
  *	  mbf_vc_evt (VC)       HUMP_START, HUMP_END(height), SENSOR_FAULT
- *	  flg_fault  (VC/B1)    FAULT_IMU, FAULT_SHOCK
+ *	  flg_safety (S2)       IMU sets S2_FLG_ESTOP when lifted / overturned
+ *	  g_s3_status (S3)      both line sensors black = no floor (lifted)
+ *	  flg_fault  (VC/B1)    FAULT_IMU, FAULT_LIFTED
  *	The last two are bound at run time with s4_bind_vc(), like
  *	motion_bind_vc() and s3_bind_vc(); until then subsystem 4 skips them.
  */
@@ -60,7 +64,7 @@
 #define S4_PRI_LOG		19
 #define S4_LOG_MS		0
 /* 1 = print events only (state changes with pitch, HUMP_END height and
-   peak pitch, SHOCK, TURN measured by compass), even with S4_LOG_MS 0:
+   peak pitch, LIFTED, TURN measured by compass), even with S4_LOG_MS 0:
    a few lines per hump / turn, no 1 s status line. */
 #define S4_LOG_EVENTS		1
 
@@ -82,17 +86,19 @@
 /* Optional debug outputs for a scope / logic analyser; -1 = unused.
    Pick a FREE pin (GP1, GP3, GP6, GP13-15, GP17, GP19 -- GP19 is the
    example LED) and claim it with the team first.
-     SHOCK pin   high from the shock until the latch is acknowledged:
-                 scope it against Buddy 2's GP8..11 for the shock ->
-                 brake latency (S4-T02, Version C row 11)
      TIMING pin  high while one IMU cycle runs: period, jitter and WCET
                  (S4-T01) */
-/* SHOCK -> E-STOP.  1 = normal (FR27, NFR10).  0 = bench mode ONLY while
-   false shocks are being fixed: SHOCK is still detected, logged and
-   latched, but does not set E-STOP.  Never 0 on the track or in a demo. */
-#define S4_SHOCK_ESTOP		0
+/* 12 Nov: LIFTED / OVERTURNED -> E-STOP.  1 = normal: the motors stop
+   at once (Motion brakes on S2_FLG_ESTOP) and the VC ends the run.
+   0 = bench mode ONLY while tuning (imu_monitor.h IMU_LIFT_xxx):
+   LIFTED is still detected and logged and the VC still ends the run
+   (it stops the motors itself), but E-STOP is not set. */
+#define S4_LIFT_ESTOP		1
 
-#define S4_DEBUG_SHOCK_PIN	(-1)
+/*   LIFT pin    high from LIFTED until the latch is acknowledged:
+                 scope it against Buddy 2's GP8..11 for the lift ->
+                 brake latency (S4-T02) */
+#define S4_DEBUG_LIFT_PIN	(-1)
 #define S4_DEBUG_TIMING_PIN	(-1)
 
 /* =====================================================================
@@ -104,15 +110,17 @@
 #ifndef FAULT_IMU
 #define FAULT_IMU		0x0004u	/* sensor not answering */
 #endif
-#ifndef FAULT_SHOCK
-#define FAULT_SHOCK		0x0080u	/* shock latch, cleared by Telemetry */
+#ifndef FAULT_LIFTED
+#define FAULT_LIFTED		0x0080u	/* 12 Nov: lifted / overturned latch
+					   (was FAULT_SHOCK), cleared by
+					   Telemetry or the VC's reset */
 #endif
 
 /* =====================================================================
  *  4. Events to the Vehicle Controller (app.h, one EVT_PACK word each)
  *	EVT_HUMP_START	payload 0
  *	EVT_HUMP_END	payload [4:0] = peak height, mm (0..31);
- *			0 = hump aborted (shock, fault, false trigger):
+ *			0 = hump aborted (lifted, fault, false trigger):
  *			leave HUMP_TRAVERSE anyway
  *	EVT_SENSOR_FAULT payload = FAULT_IMU
  *  The VC must hold the speed constant from HUMP_START to HUMP_END:
@@ -138,28 +146,29 @@ IMPORT BOOL	s4_in_hump(void);	/* CLIMBING or DESCENDING: S3 may
 					   ignore a short line loss, S5 may
 					   ignore echoes off the hump */
 
-/* SHOCK latch (Version C row 10): a SHOCK lasts 200 ms but telemetry
-   runs every 500 ms, so it is latched until Telemetry has published it.
-   Race-free with one writer per byte: the IMU counts shocks, Telemetry
-   acknowledges the count it published.
-	seq = s4_shock_seq();
-	if (s4_shock_pending()) { publish the alert; s4_shock_ack(seq); } */
-IMPORT UB	s4_shock_seq(void);
-IMPORT BOOL	s4_shock_pending(void);
-IMPORT void	s4_shock_ack(UB seq);
+/* 12 Nov: LIFTED latch (like the old SHOCK latch): one writer per byte:
+   the IMU counts lift events, Telemetry acknowledges the count it
+   published.
+	seq = s4_lift_seq();
+	if (s4_lift_pending()) { publish the alert; s4_lift_ack(seq); }
+   The VC notes s4_lift_seq() at START; a new count while running = the
+   robot was lifted: the run ends (COMPLETE).  The count goes up BEFORE
+   E-STOP is set, so the VC never mistakes a lift for another E-STOP. */
+IMPORT UB	s4_lift_seq(void);
+IMPORT BOOL	s4_lift_pending(void);
+IMPORT void	s4_lift_ack(UB seq);
 
 /* Telemetry slot (Buddy 1: S1_SLOT_B4 = 44 bits, frame bits 38..81),
    set by the IMU task every 10 ms:
 	[43:13]  status word 0 (31 bits: state, pitch, heading, rate, cal)
 	[12:2]   status word 1 (11 bits: hump height, count, I2C fails)
-	[1]      shock, held 1 s (two 500 ms telemetry frames)
+	[1]      12 Nov: lifted / overturned (state LIFTED, >= 1 s)
 	[0]      0, spare
    The dashboard decodes it with the same shifts as s4_pack.h. */
-#define S4_TLM_SHOCK_HOLD_MS	1000
-Inline UD s4_tlm_slot(UW w0, UW w1, BOOL shock)
+Inline UD s4_tlm_slot(UW w0, UW w1, BOOL lifted)
 {
 	return ((UD)(w0 & 0x7FFFFFFFu) << 13) | ((UD)(w1 & 0x7FFu) << 2) |
-	       ((UD)(shock ? 1u : 0u) << 1);
+	       ((UD)(lifted ? 1u : 0u) << 1);
 }
 
 /* Diagnostics (console and tests; not sent) */
@@ -187,9 +196,9 @@ IMPORT void	imu_cyclic_handler(void *exinf);
 IMPORT void	imu_log_task(INT stacd, void *exinf);
 
 #if APP_TEST
-/* Test hook: the IMU task runs its shock reaction once, as if the
-   sensor had seen 2.5 g (INT-05).  No real knock needed. */
-IMPORT void	s4_test_inject_shock(void);
+/* 12 Nov test hook: the IMU task runs its LIFTED reaction once, as if
+   the robot had been picked up (INT-05).  No real lift needed. */
+IMPORT void	s4_test_inject_lift(void);
 #endif
 
 /* =====================================================================

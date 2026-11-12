@@ -282,11 +282,11 @@ Inline INT s2_dist_diff(UW old_mm, UW new_mm)
 
 /* =====================================================================
  *  7. flg_safety (created here, shared)
- *     Set S2_FLG_ESTOP with tk_set_flg (task or ISR): IMU on SHOCK,
- *     Obstacle on TOO_CLOSE, Command Handler on MQTT E-STOP.
+ *     Set S2_FLG_ESTOP with tk_set_flg (task or ISR): IMU when the
+ *     robot is LIFTED or OVERTURNED (12 Nov), Obstacle on TOO_CLOSE, Command Handler on MQTT E-STOP.
  *     ONLY the VC clears it (tk_clr_flg(flg_safety, ~S2_FLG_ESTOP))
  *     on a new START.  Bits 1..14 are free for the other buddies
- *     (e.g. B4's SHOCK / IMU_FAULT); bit 15 is private to Motion.
+ *     (e.g. B4's LIFTED / IMU_FAULT); bit 15 is private to Motion.
  *     Never wait on flg_safety with TWF_CLR or TWF_BITCLR (that would
  *     clear other owners' bits); clear only your own bit with tk_clr_flg.
  * ===================================================================== */

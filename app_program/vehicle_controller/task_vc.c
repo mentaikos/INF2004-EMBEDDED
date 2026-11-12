@@ -90,6 +90,7 @@ LOCAL UB	script_len, script_idx;
 LOCAL UH	t_step;
 
 LOCAL UB		bench_move;	/* VC_BENCH_MOVE_CM run in progress */
+LOCAL UB		lift_seen;	/* 12 Nov: s4_lift_seq() at START */
 LOCAL S5_PROFILE	plan_profile;	/* profile of the approved plan */
 LOCAL B			rescan_turn;	/* rescan turns so far for this obstacle, deg (+ = right) */
 LOCAL H			look_h;		/* REJOIN_LINE: heading, deg from the approach
@@ -545,8 +546,9 @@ LOCAL void enter_obstacle_scan(void)
 	set_state(VC_ST_OBSTACLE_SCAN);
 }
 
-/* START guards (design 7.3): IR and IMU calibrated, hazard cleared (no
-   shock, nothing within 20 cm, no sensor in fault, no stall).  Returns
+/* START guards (design 7.3): IR and IMU calibrated, hazard cleared
+   (not lifted or overturned, nothing within 20 cm, no sensor in fault,
+   no stall).  Returns
    VC_R_NONE or the reason; with verbose, prints every guard that fails,
    so the console says exactly why START was refused.  Reads only status
    words, so Buddy 1's Command Handler may call it too (vc_s1_hooks.c). */
@@ -566,9 +568,10 @@ EXPORT UINT vc_start_check(BOOL verbose)
 		if (verbose) tm_printf((UB*)"vc: START refused: IMU not calibrated"
 				       " (state %d; 5 = FAULT)\n", s4);
 	}
-	if (s4 == S4_ST_SHOCK) {
+	if (s4 == S4_ST_LIFTED) {			/* 12 Nov */
 		why = VC_R_HAZARD;
-		if (verbose) tm_printf((UB*)"vc: START refused: IMU shock active\n");
+		if (verbose) tm_printf((UB*)"vc: START refused: robot lifted or"
+				       " overturned (put it down level, wait 1 s)\n");
 	}
 	if (s5_sts_state(s5) == S5_ST_SENSOR_FAULT) {
 		why = VC_R_HAZARD;
@@ -608,9 +611,6 @@ LOCAL void do_start(void)
 	tm_printf((UB*)"vc: WARNING ultrasonic disabled (VC_USE_ULTRASONIC 0):"
 		  " no obstacle detection\n");
 #endif
-#if !S4_SHOCK_ESTOP
-	tm_printf((UB*)"vc: WARNING shock E-STOP disabled (S4_SHOCK_ESTOP 0)\n");
-#endif
 	cmd_stop();				/* Motion: E_STOP_BRAKE -> STOPPED */
 	tk_clr_flg(flg_safety, ~(UINT)S2_FLG_ESTOP);
 	s5_reset();			/* needs E_STOP clear and Motion stopped */
@@ -620,6 +620,10 @@ LOCAL void do_start(void)
 					   must not turn at this run's first
 					   junction */
 	vc.bc_letter = 0;
+#if !S4_LIFT_ESTOP
+	tm_printf((UB*)"vc: WARNING lift E-STOP disabled (S4_LIFT_ESTOP 0)\n");
+#endif
+	lift_seen = s4_lift_seq();	/* 12 Nov: a lift from now on ends the run */
 	set_state(VC_ST_STARTING);
 }
 
@@ -1143,6 +1147,18 @@ LOCAL void tick(void)
 	UW	s5, ms = motion_get_status();
 	UW	c[VC_SCRIPT_MAX];
 	INT	n, lat;
+
+	/* 12 Nov: robot lifted or overturned (S4): the end-of-run signal
+	   in the demo.  S4 has set E-STOP, so Motion is already braking;
+	   end the run (COMPLETE).  Checked before the E-STOP below: S4
+	   counts the lift before it sets E-STOP. */
+	if (VC_IS_RUNNING(st) && s4_lift_seq() != lift_seen) {
+		lift_seen = s4_lift_seq();
+		tm_printf((UB*)"vc: robot lifted / overturned: motors stopped,"
+			  " run ended\n");
+		enter_complete();
+		return;
+	}
 
 	/* E-STOP seen: Motion has already braked; just follow it */
 	if (VC_IS_RUNNING(st) && estop_set()) {

@@ -96,11 +96,47 @@
    +-63 mm = +-6300, which needs 14 bits signed -> int16 (H) */
 #define IMU_SUM_MAX_CMM		6300
 
-/* Shock: |a| > 2.5 g, compared squared (no square root).  The sensor
-   runs at +-4 g so 2.5 g is inside its range. */
-#define IMU_SHOCK_MG		2500
-#define IMU_SHOCK_MG2		((W)IMU_SHOCK_MG * IMU_SHOCK_MG)
-#define IMU_SHOCK_HOLD_MS	200
+/* 12 Nov: the shock check (|a| > 2.5 g = collision) is removed: the
+   professor's update drops IMU collision detection. */
+
+/* 12 Nov (professor's update): LIFTED / OVERTURNED.  Lifting the robot
+   ends the run in the demo, so the motors must stop.  Any ONE of:
+   1. OVERTURNED: tilted more than 45 deg (Z below the sideways part,
+      az^2 < ax^2 + ay^2, or az <= 0 upside down) for
+      IMU_TILT_CONFIRM_MS.  The track humps tilt it ~12-19 deg at most.
+   2. JERKED UP: the median of the last 5 calibrated Z readings (50 ms)
+      more than IMU_LIFT_UP_MG above 1 g for IMU_LIFT_CONFIRM_MS: a
+      quick pick-up.  A 1-2 sample jolt never gets through the median.
+   3. HELD UP (the usual case: a gentle lift was missed by 2. in the
+      12 Nov 17:58 log, which only showed a 19 deg "hump").  A robot
+      held still in the air reads 1 g like one on the floor, so the IMU
+      alone cannot see it; the line sensors can: in the air both read
+      BLACK (no floor reflects).  On the track both are black only while
+      crossing a junction line (~0.2 s).  So: both line sensors black
+      ("no floor", set by the task from Line & Barcode, imu_set_floor)
+      for IMU_NOFLOOR_MS while LEVEL, or IMU_NOFLOOR_HUMP_MS while the
+      IMU thinks it is on a hump (a lifted robot is usually tilted), AND
+      the IMU saw the robot disturbed -- |pitch| or |roll| >=
+      IMU_DISTURB_MDEG, or Z off 1 g by IMU_DISTURB_MG -- within the last
+      IMU_DISTURB_WINDOW_MS.  The IMU condition keeps a robot standing
+      still on a junction line from counting as lifted.
+   LIFTED holds while any of them lasts, and IMU_LIFT_HOLD_MS after.
+   MEASURE on the robot: lift it 10x (no false miss), and drive the
+   whole track incl. both humps and every junction (no false LIFTED). */
+#define IMU_TILT_CONFIRM_MS	200
+#define IMU_LIFT_UP_MG		250
+#define IMU_LIFT_CONFIRM_MS	40
+#define IMU_NOFLOOR_MS		500
+#define IMU_NOFLOOR_HUMP_MS	2000
+#define IMU_DISTURB_MDEG	5000	/* 5 deg */
+#define IMU_DISTURB_MG		120
+#define IMU_DISTURB_WINDOW_MS	3000
+#define IMU_LIFT_HOLD_MS	1000
+#define IMU_LIFT_MED_N		5	/* = IMU_PEAK_HOLD_N (held_median) */
+/* IMU_EV_LIFTED's height_mm field: what tripped it */
+#define IMU_LIFT_CAUSE_JERK	1
+#define IMU_LIFT_CAUSE_TILT	2
+#define IMU_LIFT_CAUSE_HELD	3
 
 /* Faults: 3 failed reads in a row -> FAULT; the task retries every 1 s */
 #define IMU_I2C_FAIL_MAX	3
@@ -120,11 +156,11 @@ typedef struct {
 #define IMU_EV_HUMP_START	1
 #define IMU_EV_HUMP_END		2	/* height_mm 0 = aborted, not a hump */
 #define IMU_EV_SENSOR_FAULT	3
-#define IMU_EV_SHOCK		4
+#define IMU_EV_LIFTED		4	/* 12 Nov (was SHOCK): height_mm = IMU_LIFT_CAUSE_xxx */
 
 typedef struct {
 	UB	type;		/* IMU_EV_xxx */
-	UB	height_mm;	/* HUMP_END only, 0..31 */
+	UB	height_mm;	/* HUMP_END: 0..31; LIFTED: the cause */
 } IMU_EVENT;
 
 #define IMU_MAX_EVENTS		3
@@ -172,8 +208,19 @@ typedef struct {
 	W	last_peak_mdeg;		/* peak pitch of the last hump (console log) */
 	W	last_peak_roll_mdeg;	/* 5 Nov: peak |roll| of the last hump */
 
-	/* shock and faults */
-	UW	shock_until_ms;
+	/* 12 Nov: lifted / overturned */
+	H	lift_az[IMU_LIFT_MED_N];	/* last calibrated Z, mg */
+	UB	lift_i, lift_n;		/* ring index, samples in it */
+	UB	jerk_n;			/* samples the Z median has been high */
+	UB	tilt_n;			/* samples tilted > 45 deg */
+	UB	no_floor;		/* input: both line sensors black */
+	UH	no_floor_ms;		/* how long, saturates */
+	UW	t_disturb_ms;		/* last time the robot was disturbed */
+	UB	disturbed;		/* t_disturb_ms is valid */
+	UB	lift_cause;		/* IMU_LIFT_CAUSE_xxx of the last LIFTED */
+	UW	lift_until_ms;
+
+	/* faults */
 	UB	fail_count;		/* consecutive, 0..3 */
 	UB	have_prev;
 	UW	prev_ms;
@@ -186,6 +233,10 @@ IMPORT void	imu_restart(IMU_MONITOR *m);
 
 /* Sensor not answering at start-up: go straight to FAULT */
 IMPORT void	imu_set_fault(IMU_MONITOR *m);
+
+/* 12 Nov: before each imu_step: TRUE while both line sensors read
+   black (no floor under them), from Line & Barcode's status */
+IMPORT void	imu_set_floor(IMU_MONITOR *m, BOOL no_floor);
 
 /* One 10 ms cycle.  dd_mm: distance driven since the previous call
    (signed, from Buddy 2's s2_dist_diff()).  now_ms: system time.

@@ -317,7 +317,7 @@ EXPORT BOOL lsm303_probe(UB addr)
 
 /*
  * Find out which chip is fitted, then configure it.  The accelerometer
- * (pitch, humps, shock) is set up the same way on both chips:
+ * (pitch, humps) is set up the same way on both chips:
  *   CTRL_REG1_A = 0x57  100 Hz, X/Y/Z on
  *   CTRL_REG4_A = 0x98  BDU, +-4 g, high resolution (12 bits, ~2 mg/LSB)
  * If no known magnetometer answers but the accelerometer does, run

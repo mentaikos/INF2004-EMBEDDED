@@ -4,12 +4,13 @@
  *	Record unit results in testing/subsystem4/TEST_LOG.md and the INT-
  *	results in testing/integration/TEST_LOG.md.
  *
- *	S4-U03..S4-U12 feed made-up readings to the IMU logic (imu_monitor.c)
+ *	S4-U03..S4-U12, U15..U17 feed made-up readings to the IMU logic (imu_monitor.c)
  *	and the packing (s4_pack.h), with their own IMU_MONITOR, never the
  *	running task's: they need no sensor and no track.
  *	S4-U13..S4-U14 check the running IMU task (S4-U14 needs the sensor
  *	plugged into Grove 6 and the robot still since power-up).
- *	INT-05 checks the shock -> E-STOP -> brake link to Motion Control.
+ *	12 Nov: the shock tests are gone with the shock check; S4-U09,
+ *	S4-U10, S4-U16, S4-U17 and INT-05 now test LIFTED / OVERTURNED.
  *	Keep the wheels off the table: INT-05 sets and clears E-STOP.
  */
 
@@ -25,9 +26,12 @@
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-	INT	starts, ends, shocks, faults;
+	INT	starts, ends, faults, lifts;
 	INT	height;		/* first HUMP_END height */
+	INT	cause;		/* 12 Nov: IMU_LIFT_CAUSE_xxx of the last LIFTED */
 } RESULT;
+
+LOCAL BOOL	no_floor_in;	/* 12 Nov: "both line sensors black" for step() */
 
 LOCAL UW	t_ms;
 LOCAL UW	rnd_state = 12345;
@@ -49,8 +53,8 @@ LOCAL void count(RESULT *r, const IMU_EVENT *ev, INT n)
 		case IMU_EV_HUMP_END:
 			if (r->ends++ == 0) r->height = ev[i].height_mm;
 			break;
-		case IMU_EV_SHOCK:	  r->shocks++; break;
 		case IMU_EV_SENSOR_FAULT: r->faults++; break;
+		case IMU_EV_LIFTED:	  r->lifts++; r->cause = ev[i].height_mm; break;
 		default: break;
 		}
 	}
@@ -65,6 +69,7 @@ LOCAL void step(IMU_MONITOR *m, H ax, H ay, H az, INT dd, RESULT *r)
 	s.ax = ax; s.ay = ay; s.az = az;
 	s.mx = 200; s.my = 50; s.mz = -300;
 	t_ms += IMU_PERIOD_MS;
+	imu_set_floor(m, no_floor_in);
 	count(r, ev, imu_step(m, &s, dd, t_ms, ev));
 }
 
@@ -74,6 +79,7 @@ LOCAL void calibrate(IMU_MONITOR *m)
 	INT	i;
 
 	imu_init(m);
+	no_floor_in = FALSE;
 	for (i = 0; i < IMU_CAL_SAMPLES; i++) step(m, 0, 0, 1000, 0, &r);
 }
 
@@ -90,17 +96,14 @@ LOCAL W hump_um(W x_mm, W x0_mm, W h_mm, W b_mm)
 /* Drive over one hump at 2 mm per 10 ms (200 mm/s).  The body pitch is
    set by the two axles: sin(pitch) = (z_front - z_rear) / wheelbase, so
    ay = 1000 x sin and az = 1000 x cos (about 1000 - ay^2/2000). */
-LOCAL void drive_hump(IMU_MONITOR *m, W h_mm, W b_mm, INT shock_step,
-		      RESULT *r)
+LOCAL void drive_hump(IMU_MONITOR *m, W h_mm, W b_mm, RESULT *r)
 {
 	W	x, ay, az;
-	INT	k = 0;
 
-	for (x = 0; x < 300 + 2 * b_mm + 600; x += 2, k++) {
+	for (x = 0; x < 300 + 2 * b_mm + 600; x += 2) {
 		ay = (hump_um(x + IMU_WHEELBASE_MM, 300, h_mm, b_mm) -
 		      hump_um(x, 300, h_mm, b_mm)) / IMU_WHEELBASE_MM;
 		az = 1000 - ay * ay / 2000;
-		if (k == shock_step) az += 3000;
 		step(m, 0, (H)ay, (H)az, 2, r);
 	}
 }
@@ -172,14 +175,14 @@ LOCAL void test_logic(INT *pass, INT *fail)
 	   one HUMP_START, one HUMP_END each, height within 3 mm / 2 mm */
 	t_ms = 0;
 	calibrate(&m);
-	r.starts = r.ends = r.shocks = r.faults = r.height = 0;
-	drive_hump(&m, 25, 80, -1, &r);
+	r.starts = r.ends = r.faults = r.lifts = r.height = r.cause = 0;
+	drive_hump(&m, 25, 80, &r);
 	ok = r.starts == 1 && r.ends == 1 && r.height >= 22 && r.height <= 28;
 	tm_printf((UB*)"[TEST]   black hump: %d start, %d end, %d mm\n",
 		  r.starts, r.ends, r.height);
 	calibrate(&m);
-	r.starts = r.ends = r.shocks = r.faults = r.height = 0;
-	drive_hump(&m, 10, 90, -1, &r);
+	r.starts = r.ends = r.faults = r.lifts = r.height = r.cause = 0;
+	drive_hump(&m, 10, 90, &r);
 	tm_printf((UB*)"[TEST]   yellow hump: %d start, %d end, %d mm\n",
 		  r.starts, r.ends, r.height);
 	TEST_CHECK("S4-U07", ok && r.starts == 1 && r.ends == 1 &&
@@ -188,37 +191,98 @@ LOCAL void test_logic(INT *pass, INT *fail)
 
 	/* S4-U08: 2 m of flat track with +-40 mg noise: no false hump */
 	calibrate(&m);
-	r.starts = r.ends = r.shocks = r.faults = r.height = 0;
+	r.starts = r.ends = r.faults = r.lifts = r.height = r.cause = 0;
 	for (i = 0; i < 1000; i++) {
 		step(&m, (H)rnd(40), (H)rnd(40), (H)(1000 + rnd(40)), 2, &r);
 	}
 	TEST_CHECK("S4-U08", r.starts == 0 && r.ends == 0 && m.state == S4_ST_LEVEL,
 		   "no false hump on flat track with noise");
 
-	/* S4-U09: a 3 g spike -> one SHOCK, back to LEVEL after 200 ms */
+	/* S4-U09 (12 Nov, was shock): picked up quickly = +0.5 g on Z for
+	   150 ms -> one LIFTED (jerk); 2-sample jolts, a 4 g spike and a
+	   sideways knock -> none; LEVEL again 1 s after it is put down */
 	calibrate(&m);
-	r.starts = r.ends = r.shocks = r.faults = r.height = 0;
-	step(&m, 0, 0, 4000, 2, &r);
-	ok = (r.shocks == 1 && m.state == S4_ST_SHOCK);
-	for (i = 0; i < IMU_SHOCK_HOLD_MS / IMU_PERIOD_MS + 1; i++) {
-		step(&m, 0, 0, 1000, 2, &r);
+	r.starts = r.ends = r.faults = r.lifts = r.height = r.cause = 0;
+	for (i = 0; i < 20; i++) step(&m, 0, 0, 1000, 2, &r);
+	step(&m, 0, 0, 2000, 2, &r);		/* 2-sample jolt */
+	step(&m, 0, 0, 2000, 2, &r);
+	for (i = 0; i < 5; i++) step(&m, 0, 0, 1000, 2, &r);
+	step(&m, 0, 0, 4000, 2, &r);		/* 4 g spike */
+	for (i = 0; i < 5; i++) step(&m, 0, 0, 1000, 2, &r);
+	step(&m, 3000, 0, 1000, 2, &r);		/* sideways knock */
+	for (i = 0; i < 5; i++) step(&m, 0, 0, 1000, 2, &r);
+	ok = (r.lifts == 0 && m.state == S4_ST_LEVEL);
+	for (i = 0; i < 15; i++) step(&m, 0, 0, 1500, 0, &r);
+	ok = ok && r.lifts == 1 && r.cause == IMU_LIFT_CAUSE_JERK &&
+	     m.state == S4_ST_LIFTED;
+	for (i = 0; i < IMU_LIFT_HOLD_MS / IMU_PERIOD_MS + 5; i++) {
+		step(&m, 0, 0, 1000, 0, &r);
 	}
-	TEST_CHECK("S4-U09", ok && r.shocks == 1 && m.state == S4_ST_LEVEL,
-		   "SHOCK on > 2.5 g, LEVEL again after 200 ms");
+	TEST_CHECK("S4-U09", ok && r.lifts == 1 && m.state == S4_ST_LEVEL,
+		   "LIFTED when jerked up, not on jolts; LEVEL 1 s after");
 
-	/* S4-U10: shock while climbing a hump -> HUMP_END(0), so the VC
-	   leaves HUMP_TRAVERSE (Version C row 9) */
+	/* S4-U10: lifted while on a hump -> HUMP_END(0), so the VC leaves
+	   HUMP_TRAVERSE (Version C row 9) */
 	calibrate(&m);
-	r.starts = r.ends = r.shocks = r.faults = r.height = 0;
-	drive_hump(&m, 25, 80, 210, &r);	/* x = 420 mm: on the up slope */
-	TEST_CHECK("S4-U10", r.shocks == 1 && r.starts >= 1 && r.ends >= 1 &&
-		   r.height == 0,
-		   "shock during a hump sends HUMP_END(0)");
+	r.starts = r.ends = r.faults = r.lifts = r.height = r.cause = 0;
+	for (i = 0; i < 20; i++) step(&m, 0, 200, 980, 2, &r);	/* 11.5 deg */
+	ok = (r.starts == 1);
+	for (i = 0; i < 8; i++) step(&m, 0, 200, 1600, 0, &r);	/* jerked up */
+	TEST_CHECK("S4-U10", ok && r.lifts == 1 && r.ends == 1 && r.height == 0,
+		   "lifted on a hump sends HUMP_END(0)");
+
+	/* S4-U16: overturned.  Upside down -> LIFTED (tilt) after 200 ms,
+	   held while over, LEVEL 1 s after it is back on its wheels; on
+	   its side -> LIFTED; a 30 deg slope (steeper than any hump) not */
+	calibrate(&m);
+	r.starts = r.ends = r.faults = r.lifts = r.height = r.cause = 0;
+	for (i = 0; i < 40; i++) step(&m, 0, 500, 866, 0, &r);	/* 30 deg */
+	ok = (r.lifts == 0);
+	for (i = 0; i < 300; i++) step(&m, 0, 0, -1000, 0, &r);	/* upside down */
+	ok = ok && r.lifts == 1 && r.cause == IMU_LIFT_CAUSE_TILT &&
+	     m.state == S4_ST_LIFTED;
+	for (i = 0; i < IMU_LIFT_HOLD_MS / IMU_PERIOD_MS + 25; i++) {
+		step(&m, 0, 0, 1000, 0, &r);
+	}
+	ok = ok && m.state == S4_ST_LEVEL;
+	for (i = 0; i < 30; i++) step(&m, 0, 1000, 0, 0, &r);	/* on its side */
+	TEST_CHECK("S4-U16", ok && r.lifts == 2 && m.state == S4_ST_LIFTED,
+		   "overturned (> 45 deg) -> LIFTED; not on a 30 deg slope");
+
+	/* S4-U17: held up (12 Nov 17:58 log: a gentle lift tilted ~19 deg,
+	   then level in the hand, both line sensors black).  -> LIFTED
+	   (held), held while in the air, LEVEL 1 s after it is put down.
+	   Not lifted: standing still on a junction line (no floor but no
+	   disturbance), or crossing a junction line (0.2 s) after a hump. */
+	calibrate(&m);
+	r.starts = r.ends = r.faults = r.lifts = r.height = r.cause = 0;
+	no_floor_in = TRUE;				/* on a junction line */
+	for (i = 0; i < 400; i++) step(&m, 0, 0, 1000, 0, &r);	/* 4 s still */
+	ok = (r.lifts == 0);
+	no_floor_in = FALSE;
+	for (i = 0; i < 30; i++) step(&m, 0, 200, 980, 2, &r);	/* a hump */
+	for (i = 0; i < 30; i++) step(&m, 0, 0, 1000, 2, &r);
+	no_floor_in = TRUE;				/* junction, 0.2 s */
+	for (i = 0; i < 20; i++) step(&m, 0, 0, 1000, 2, &r);
+	no_floor_in = FALSE;
+	for (i = 0; i < 50; i++) step(&m, 0, 0, 1000, 2, &r);
+	ok = ok && r.lifts == 0;
+	no_floor_in = TRUE;				/* picked up gently */
+	for (i = 0; i < 30; i++) step(&m, 0, 330, 940, 0, &r);	/* 19 deg */
+	for (i = 0; i < 300; i++) step(&m, 0, 0, 1000, 0, &r);	/* held level */
+	ok = ok && r.lifts == 1 && r.cause == IMU_LIFT_CAUSE_HELD &&
+	     m.state == S4_ST_LIFTED;
+	no_floor_in = FALSE;				/* put down */
+	for (i = 0; i < IMU_LIFT_HOLD_MS / IMU_PERIOD_MS + 5; i++) {
+		step(&m, 0, 0, 1000, 0, &r);
+	}
+	TEST_CHECK("S4-U17", ok && r.lifts == 1 && m.state == S4_ST_LEVEL,
+		   "held up (no floor + IMU disturbed) -> LIFTED; not on a junction");
 
 	/* S4-U11: 3 failed reads -> FAULT + one SENSOR_FAULT; re-init
 	   calibrates again */
 	calibrate(&m);
-	r.starts = r.ends = r.shocks = r.faults = r.height = 0;
+	r.starts = r.ends = r.faults = r.lifts = r.height = r.cause = 0;
 	bad.ok = FALSE;
 	for (i = 0; i < 5; i++) {
 		t_ms += IMU_PERIOD_MS;
@@ -251,7 +315,7 @@ LOCAL void test_logic(INT *pass, INT *fail)
 		     ((slot >> 1) & 1u) == 1 && (slot & 1u) == 0 &&
 		     ((s4_tlm_slot(w0, w1, FALSE) >> 1) & 1u) == 0;
 	}
-	TEST_CHECK("S4-U15", ok, "44-bit telemetry slot: words 0/1 + shock bit");
+	TEST_CHECK("S4-U15", ok, "44-bit telemetry slot: words 0/1 + lifted bit");
 
 	*pass += test_pass_;
 	*fail += test_fail_;
@@ -294,23 +358,24 @@ LOCAL void test_live(INT *pass, INT *fail)
 		   s4_sts_fails(w1) == 0,
 		   "sensor found, calibrated, LEVEL (robot still and flat)");
 
-	/* INT-05 (S4 -> S2 flg_safety): a shock sets E-STOP and Motion
-	   Control brakes within 50 ms; the shock stays latched until
-	   acknowledged.  Then clear E-STOP as the VC would on START. */
-	seq = s4_shock_seq();
-	s4_test_inject_shock();
+	/* INT-05 (12 Nov: lifted, was shock; S4 -> S2 flg_safety): LIFTED
+	   sets E-STOP and Motion Control brakes within 50 ms; the lift
+	   stays latched until acknowledged.  Then clear E-STOP as the VC
+	   would on START. */
+	seq = s4_lift_seq();
+	s4_test_inject_lift();
 	for (i = 0; i < 5 &&
 	     s2_sts_state(motion_get_status()) != S2_ST_E_STOP_BRAKE; i++) {
 		tk_dly_tsk(S4_PERIOD_MS);
 	}
 	ok = s2_sts_state(motion_get_status()) == S2_ST_E_STOP_BRAKE &&
-	     s4_shock_pending() && s4_shock_seq() == (UB)(seq + 1);
-	s4_shock_ack(s4_shock_seq());		/* Telemetry's job */
-	ok = ok && !s4_shock_pending();
+	     s4_lift_pending() && s4_lift_seq() == (UB)(seq + 1);
+	s4_lift_ack(s4_lift_seq());		/* Telemetry's job */
+	ok = ok && !s4_lift_pending();
 	tk_clr_flg(flg_safety, ~S2_FLG_ESTOP);	/* VC's job, on START */
 	tk_dly_tsk(3 * S2_PERIOD_MS);
 	TEST_CHECK("INT-05", ok && s2_sts_state(motion_get_status()) == S2_ST_STOPPED,
-		   "shock -> E-STOP -> Motion brakes within 50 ms; latch until acked");
+		   "lifted -> E-STOP -> Motion brakes within 50 ms; latch until acked");
 
 	*pass += test_pass_;
 	*fail += test_fail_;

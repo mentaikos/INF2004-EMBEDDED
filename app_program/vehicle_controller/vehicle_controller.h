@@ -24,6 +24,8 @@
  *	  RUNNING -(SENSOR_FAULT, stall, LINE_SEARCH / REJOIN timeout)-> FAULT
  *	       -(STOP = reset [fault cleared])-> IDLE
  *	  RUNNING -(STOP)-> IDLE;  RUNNING -(MISSION_END)-> COMPLETE -(STOP)-> IDLE
+ *	  12 Nov: RUNNING -(robot lifted / overturned, S4 has set E_STOP)->
+ *	       COMPLETE: lifting the robot ends the run in the demo
  *	  Wi-Fi loss never leaves RUNNING.
  */
 
@@ -227,7 +229,7 @@
 
 /* START needs the IMU calibrated and an IMU fault stops the mission
    (design).  0 = bench mode ONLY: drive without a working IMU (no hump
-   height, no shock E-STOP).  Never 0 on the track or in a demo. */
+   height).  Never 0 on the track or in a demo. */
 /* Bench only: START by itself this long after IDLE (0 = off, the
    normal setting: START comes from the dashboard).  For a test build
    without WiFi.  The car drives off on its own: keep it on the track. */

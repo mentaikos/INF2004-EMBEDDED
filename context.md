@@ -68,7 +68,7 @@ Navigation is fully autonomous (FR4). Losing Wi-Fi does **not** stop the robot.
 | Buddy 1 | 2502039 | Wi-Fi, MQTT, telemetry, command handling | `app_program/subsystem1/` |
 | **Buddy 2** | 2303689 | **Motion control: motors, encoders, PID** | **`app_program/subsystem2/`** |
 | Buddy 3 | 2502193 | Line following (IR) and barcode decoding | `app_program/subsystem3/` |
-| Buddy 4 | 2500701 | IMU: tilt, humps, shock, heading | `app_program/subsystem4/` |
+| Buddy 4 | 2500701 | IMU: tilt, humps, lifted / overturned, heading | `app_program/subsystem4/` |
 | Buddy 5 | 2503076 | Ultrasonic scanning, obstacle profiling, bypass, line-recovery monitoring | `app_program/subsystem5/` |
 | (shared) | — | **Vehicle Controller (VC)**: mission state machine | **no owner or folder yet [DECIDE]** |
 
@@ -290,7 +290,7 @@ memory pools 12, fixed pools 12, cyclic handlers 12, alarm handlers 12.
 | **Motion Control** | **B2** | **20 ms** | **10 (highest)** | Speed/distance, PID, MOVE/TURN/STOP, E-STOP enforcement; **only writer of the motor pins** |
 | Line & Barcode | B3 | **20 ms** (changed from 30 ms) | 11 | Line state, steering, junction / line lost / found, barcode decode |
 | Vehicle Controller | ? | event-driven (`mbf_vc_evt`) | 12 | System statechart; **only task that sends motion commands** |
-| IMU Monitor | B4 | 10 ms | 13 (**proposed 11**) | Pitch, heading, humps, shock, IMU fault |
+| IMU Monitor | B4 | 10 ms | 13 (**proposed 11**) | Pitch, heading, humps, lifted / overturned, IMU fault |
 | Obstacle Scan | B5 | 60 ms + on request | 14 | Forward watch, coarse/fine scan, profile, plan, monitor bypass/recovery |
 | Command Handler | B1 | event-driven | 16 | Accept only START/STOP/E-STOP; E-STOP → `flg_safety` |
 | WiFi/MQTT Network | B1 | 50 ms (in practice the kernel `cyw43_utk_task`, priority 4) | 18 | Only user of cyw43/lwIP |
@@ -305,8 +305,8 @@ memory pools 12, fixed pools 12, cyclic handlers 12, alarm handlers 12.
 | `mbf_motion_cmd` | message buffer | VC → Motion | MOVE(follow, v), MOVE(d), TURN(angle), STOP, SPEED_LIMIT(v) |
 | `mbf_steer` | message buffer | Line&Barcode → Motion | steering correction (Motion keeps only the latest; ignored outside SPEED_FOLLOW) |
 | `mbf_vc_evt` | message buffer | L&B, IMU, Obstacle, Motion, Cmd → VC | events (all senders `TMO_POL`; failures counted in telemetry) |
-| `flg_safety` | event flag | IMU (SHOCK), Obstacle (TOO_CLOSE), Cmd (MQTT E-STOP) set; **VC clears on START** | E_STOP bit; Motion checks it every cycle |
-| `flg_fault` / fault bits | event flag | each owner sets own bits | STALL, ENC_FAULT, IMU_FAULT, NO_ECHO, WIFI_LOST, BARCODE_ERR, LINE_TIMEOUT, SHOCK… **bit positions assigned by Buddy 1 [DECIDE]** |
+| `flg_safety` | event flag | IMU (LIFTED / OVERTURNED), Obstacle (TOO_CLOSE), Cmd (MQTT E-STOP) set; **VC clears on START** | E_STOP bit; Motion checks it every cycle |
+| `flg_fault` / fault bits | event flag | each owner sets own bits | STALL, ENC_FAULT, IMU_FAULT, NO_ECHO, WIFI_LOST, BARCODE_ERR, LINE_TIMEOUT, LIFTED (0x0080)… **bit positions assigned by Buddy 1 [DECIDE]** |
 | `flg_scan` | event flag | VC → Obstacle | SCAN_REQ, BYPASS_APPROVED, REJOIN_LINE, relayed LINE_FOUND/LINE_LOST |
 | `flg_link` | event flag | Heartbeat ↔ Network | LINK_UP, RECONNECT |
 | `g_status` + `mtx_status` | shared data + mutex (TA_INHERIT) | each task writes **only its own words**, under `mtx_status` | latest status for telemetry and other tasks |
@@ -329,18 +329,19 @@ from Obstacle Scan; timeout 3 s).
 From RUNNING: E_STOP set → E_STOPPED (START [hazard cleared] resumes; STOP → IDLE);
 SENSOR_FAULT / encoder stall / LINE_SEARCH or REJOIN timeout → FAULT
 (STOP/reset [fault cleared] → IDLE); STOP (MQTT) → IDLE; MISSION_END → COMPLETE
-(report peak hump; STOP → IDLE). Wi-Fi loss never leaves RUNNING.
+(report peak hump; STOP → IDLE). **12 Nov:** robot LIFTED / OVERTURNED (S4) → E-STOP
+(motors stop at once) and RUNNING → COMPLETE (end of run in the demo; STOP → IDLE, then START). Wi-Fi loss never leaves RUNNING.
 Open: the state to resume in after E_STOPPED **[DECIDE]**; the finish condition (A9).
 
 ### 7.4 Key requirements (numbers that code must respect)
-- NFR10: stop within **100 ms** of an E-STOP command, shock, obstacle too close, or motor stall (MQTT E-STOP is **best effort**).
+- NFR10: stop within **100 ms** of an E-STOP command, the robot lifted or overturned, obstacle too close, or motor stall (MQTT E-STOP is **best effort**).
 - NFR14: Motion Control runs and checks E-STOP every **20 ms**. NFR9: no movement after E-STOP until a new START.
 - NFR12: speed ≤ **10 cm/s** when an obstacle is within **20 cm**. NFR5: bypass < 3 s from detection to line reacquired (known conflict with NFR12).
 - NFR6 telemetry every 500 ms; NFR17 heartbeat 1 s; NFR7 reconnect ≤ 10 s after detection; NFR19 Wi-Fi timeout 5 s, CONNACK 3 s, 1 s between retries.
 - NFR8 line sensors every 20 ms (updated); NFR21 line lost only after > 150 ms of white; NFR22 discard a partial barcode after 200 ms with no edge; NFR23 0.5 s barcode cool-down; NFR24 ≥ 95 % barcode decode in 20 trials; NFR16 barcode sampled every 1 ms.
 - NFR11 IMU read every 10 ms. NFR15 ultrasonic triggered every 60 ms.
 - FR8 encoder turns Left/Right 90°, U-Turn 180°, straight moves. A2: distance and turns accurate to ±5 %.
-- FR27 full stop on sudden impact. FR28 motors never move in a stopped state.
+- ~~FR27 full stop on sudden impact.~~ **12 Nov, professor's update:** IMU collision detection is removed (the shock check is gone from the code); instead the IMU detects the robot **lifted or overturned** and the motors stop at once (E-STOP). Lifting the robot is the end-of-run signal in the demo: the VC ends the run (COMPLETE). FR28 motors never move in a stopped state.
 
 ### 7.5 Week 10 demo metrics and requirement changes (for report vetting)
 The only graded table in the Project Briefing is the **Week 10 Demonstration
@@ -417,7 +418,7 @@ evidence of no lost functionality and no unacceptable timing degradation.
 - **Buddy 1:** binary fixed-length telemetry payload with a header, each buddy's minimal fields, and a **Wi-Fi-loss bit at the end**. Commands are 2 bits (START / STOP / E-STOP; the 4th code is reserved/invalid; a command ID is proposed). Link loss is detected by MQTT PINGREQ / keep-alive instead of dashboard acknowledgements. Byte order, signedness, version/length and fault-bit retention are still to be fixed (Part C row 5).
 - **Buddy 2:** see section 9.
 - **Buddy 3:** line state, barcode state and NAV_CMD 2 bits each; steering 1 byte (signed); telemetry 6 bits; `bc_ring` 64 entries + overflow flag; the ISR stores only edge times. On overflow: discard that barcode, send no NAV_CMD, restart reading (Part C row 4). Bar widths come from **edge times** (narrow/wide grouping), **not encoder counts**. Right-curve mitigation: if both sensors go white straight from ON_LINE, steer right with a limited correction at reduced speed for a short window before LINE_LOST.
-- **Buddy 4:** IMU status 42 bits, written only by the IMU (state 3, pitch 9 signed, heading 9, turn rate 9 signed, hump height **5 bits (0–31 mm, 1 mm)**, hump count 4, calibrated 1, I2C fail 2). HUMP event 12 bits. SHOCK and IMU_FAULT bits in `flg_safety`. Height sum kept in 0.01 mm steps (int16), rounded once at HUMP_END. Start threshold **+3°**, plus wheelbase × sin(peak pitch). Shock threshold 2.5 g, with the accelerometer at **±4 g** and ≥ 100 Hz ODR. SHOCK bit latched until telemetry publishes it. On any abort after HUMP_START, send HUMP_END with height 0 (Part C rows 9, 10, 14).
+- **Buddy 4:** IMU status 42 bits, written only by the IMU (state 3, pitch 9 signed, heading 9, turn rate 9 signed, hump height **5 bits (0–31 mm, 1 mm)**, hump count 4, calibrated 1, I2C fail 2). HUMP event 12 bits. LIFTED and IMU_FAULT bits. Height sum kept in 0.01 mm steps (int16), rounded once at HUMP_END. Start threshold **+3°**, plus wheelbase × sin(peak pitch). Accelerometer at **±4 g** and ≥ 100 Hz ODR (12 Nov: the 2.5 g shock check is removed). **Lifted / overturned (12 Nov):** overturned = tilted > 45° (or upside down) for 200 ms; jerked up = median of 5 calibrated Z > 1 g + 250 mg for 40 ms; held up = both line sensors black (no floor) for 0.5 s while level (2 s while on a hump) AND the IMU saw a disturbance (|pitch| or |roll| ≥ 5°, or Z off 1 g by ≥ 120 mg) in the last 3 s. A robot held still in the air reads 1 g, so the line sensors confirm it. LIFTED latched until telemetry publishes it. On any abort after HUMP_START, send HUMP_END with height 0 (Part C rows 9, 10, 14).
 - **Buddy 5:** state 3 bits, action 3 bits; fine scan in 5° steps from 30° to 150° (25 positions, 5 bits); distinct codes for near / out-of-range / no-echo; preserve SCAN_REQ-while-stopped, VC approval and REJOIN_LINE_CONFIRMED. Wait for Motion Control's `stopped` flag before scanning (Part C row 6).
 - **VC (proposed):** each `mbf_vc_evt` message is one 32-bit word = 4-bit event type + packed payload.
 

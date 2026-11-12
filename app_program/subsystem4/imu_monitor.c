@@ -7,9 +7,12 @@
  *	  CLIMBING --pitch < -3 deg--> DESCENDING
  *	  CLIMBING/DESCENDING --|pitch| < 1.5 deg for 100 ms--> LEVEL
  *	                                              (HUMP_END + height)
- *	  any monitoring state --|a| > 2.5 g--> SHOCK --200 ms--> LEVEL
+ *	  (12 Nov: the SHOCK state, |a| > 2.5 g, is removed)
+ *	  any monitoring state --lifted / overturned--> LIFTED
+ *	                                    (LIFTED: the task sets E-STOP)
+ *	  LIFTED --back on the floor, level, for 1 s--> LEVEL
  *	  any state --3 failed reads--> FAULT        (SENSOR_FAULT)
- *	A hump that is cut short after HUMP_START (shock, false trigger,
+ *	A hump that is cut short after HUMP_START (lifted, false trigger,
  *	fault, never levels) sends HUMP_END with height 0, so the Vehicle
  *	Controller always leaves HUMP_TRAVERSE (Version C row 9).
  */
@@ -122,6 +125,11 @@ EXPORT void imu_restart(IMU_MONITOR *m)
 	for (i = 0; i < 3; i++) m->cal_sum[i] = 0;
 	m->calibrated = 0;
 	m->fail_count = 0;
+	m->lift_n     = 0;		/* 12 Nov: lift checks from scratch */
+	m->jerk_n     = 0;
+	m->tilt_n     = 0;
+	m->no_floor_ms = 0;
+	m->disturbed  = 0;
 	reset_hump(m);
 }
 
@@ -196,6 +204,84 @@ LOCAL W held_median(const H *v)
 	return t[IMU_PEAK_HOLD_N / 2];
 }
 
+/* ------------------------------------------------------------------ */
+/*  12 Nov: lifted / overturned (imu_monitor.h, IMU_LIFT_xxx)          */
+/* ------------------------------------------------------------------ */
+#if IMU_LIFT_MED_N != IMU_PEAK_HOLD_N
+#error "held_median() sorts IMU_PEAK_HOLD_N values"
+#endif
+
+EXPORT void imu_set_floor(IMU_MONITOR *m, BOOL no_floor)
+{
+	m->no_floor = no_floor ? 1 : 0;
+}
+
+LOCAL UB count_up(UB n, BOOL on)
+{
+	return on ? (UB)((n < 255) ? n + 1 : 255) : 0;
+}
+
+/* 0 or IMU_LIFT_CAUSE_xxx.  Calibrated axes: on the floor x 0, y 0,
+   z ~1000 mg.  Runs after update_orientation (pitch / roll fresh). */
+LOCAL UB lift_check(IMU_MONITOR *m, const IMU_SAMPLE *s, W dt_ms, UW now_ms)
+{
+	W	ax = (W)s->ax - m->acc_off[0];
+	W	ay = (W)s->ay - m->acc_off[1];
+	W	az = (W)s->az - m->acc_off[2];
+	W	med = 1000, nf;
+	BOOL	hump, recent;
+
+	/* median Z of the last 50 ms */
+	m->lift_az[m->lift_i] = (H)s4_clamp(az, -8000, 8000);
+	m->lift_i = (UB)((m->lift_i + 1) % IMU_LIFT_MED_N);
+	if (m->lift_n < IMU_LIFT_MED_N) m->lift_n++;
+	if (m->lift_n >= IMU_LIFT_MED_N) med = held_median(m->lift_az);
+
+	/* disturbed: tilted, or pushed up / dropped */
+	if (m->pitch_mdeg >= IMU_DISTURB_MDEG || m->pitch_mdeg <= -IMU_DISTURB_MDEG ||
+	    m->roll_mdeg  >= IMU_DISTURB_MDEG || m->roll_mdeg  <= -IMU_DISTURB_MDEG ||
+	    med - 1000 >= IMU_DISTURB_MG || 1000 - med >= IMU_DISTURB_MG) {
+		m->t_disturb_ms = now_ms;
+		m->disturbed = 1;
+	}
+	recent = (m->disturbed &&
+		  (W)(now_ms - m->t_disturb_ms) < IMU_DISTURB_WINDOW_MS) ? TRUE : FALSE;
+
+	/* how long both line sensors have seen no floor */
+	if (m->no_floor) {
+		nf = (W)m->no_floor_ms + dt_ms;
+		m->no_floor_ms = (UH)((nf > 0xFFFF) ? 0xFFFF : nf);
+	} else {
+		m->no_floor_ms = 0;
+	}
+
+	/* 1. overturned: tilted more than 45 deg, or upside down */
+	m->tilt_n = count_up(m->tilt_n, (az <= 0 || az * az < ax * ax + ay * ay));
+	if (m->tilt_n >= IMU_TILT_CONFIRM_MS / IMU_PERIOD_MS) {
+		return IMU_LIFT_CAUSE_TILT;
+	}
+
+	/* 2. jerked up */
+	m->jerk_n = count_up(m->jerk_n, (m->lift_n >= IMU_LIFT_MED_N &&
+					 med - 1000 > IMU_LIFT_UP_MG));
+	if (m->jerk_n >= IMU_LIFT_CONFIRM_MS / IMU_PERIOD_MS) {
+		return IMU_LIFT_CAUSE_JERK;
+	}
+
+	/* 3. held up: no floor under the line sensors.  Once LIFTED it
+	   holds as long as the floor stays away. */
+	if (m->state == S4_ST_LIFTED) {
+		return m->no_floor ? IMU_LIFT_CAUSE_HELD : 0;
+	}
+	hump = (m->state == S4_ST_CLIMBING || m->state == S4_ST_DESCENDING ||
+		m->armed) ? TRUE : FALSE;
+	if (recent && m->no_floor_ms >= (hump ? IMU_NOFLOOR_HUMP_MS
+					      : IMU_NOFLOOR_MS)) {
+		return IMU_LIFT_CAUSE_HELD;
+	}
+	return 0;
+}
+
 LOCAL void update_orientation(IMU_MONITOR *m, const IMU_SAMPLE *s, W dt_ms)
 {
 	W	ax = (W)s->ax - m->acc_off[0];	/* 5 Nov: for the roll */
@@ -264,8 +350,9 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 		    UW now_ms, IMU_EVENT *out)
 {
 	INT	n = 0, i;
-	W	dt_ms, p, mag2, step;
+	W	dt_ms, p, step;
 	INT	travel;
+	UB	cause;
 	BOOL	in_hump;
 
 	/* A 10 ms step is a few mm; the clamp only keeps the sum maths
@@ -311,20 +398,23 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 
 	update_orientation(m, s, dt_ms);
 
-	/* ---------- shock: unfiltered |a|, any monitoring state ---------- */
-	mag2 = (W)s->ax * s->ax + (W)s->ay * s->ay + (W)s->az * s->az;
-	if (mag2 > IMU_SHOCK_MG2 && m->state != S4_ST_SHOCK) {
-		abort_hump(m, out, &n);
-		m->state = S4_ST_SHOCK;
-		m->shock_until_ms = now_ms + IMU_SHOCK_HOLD_MS;
-		push(out, &n, IMU_EV_SHOCK, 0);	/* task sets E_STOP */
-		return n;
-	}
-	if (m->state == S4_ST_SHOCK) {
-		if ((W)(now_ms - m->shock_until_ms) >= 0) {
-			m->state = S4_ST_LEVEL;
+	/* ---------- 12 Nov: lifted / overturned ---------- */
+	cause = lift_check(m, s, dt_ms, now_ms);
+	if (m->state == S4_ST_LIFTED) {
+		if (cause != 0) {
+			m->lift_until_ms = now_ms + IMU_LIFT_HOLD_MS;
+		} else if ((W)(now_ms - m->lift_until_ms) >= 0) {
+			m->state = S4_ST_LEVEL;	/* on the floor again */
 			reset_hump(m);
 		}
+		return n;
+	}
+	if (cause != 0) {
+		abort_hump(m, out, &n);		/* VC leaves HUMP_TRAVERSE */
+		m->state      = S4_ST_LIFTED;
+		m->lift_cause = cause;
+		m->lift_until_ms = now_ms + IMU_LIFT_HOLD_MS;
+		push(out, &n, IMU_EV_LIFTED, cause);	/* task sets E-STOP */
 		return n;
 	}
 
