@@ -694,8 +694,14 @@ LOCAL void script_done(void)
 		s5_rejoin_line();
 		{
 			INT d = 2 * (INT)vc.lat_cm + VC_REJOIN_EXTRA_CM;
+#if VC_BYPASS_BY_WIDTH
+			/* 16 Nov: the bypass went out lat real cm */
+			if (d > VC_BYPASS_MOVE_MAX_CM) d = VC_BYPASS_MOVE_MAX_CM;
+			c = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_BYPASS_MM(d));
+#else
 			if (d > VC_PLAN_MAX_CM) d = VC_PLAN_MAX_CM;
 			c = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_PLAN_MM(d));
+#endif
 		}
 		set_state(VC_ST_REJOIN_LINE);
 		vc.phase = PH_APPROACH;
@@ -1359,12 +1365,19 @@ LOCAL void tick(void)
 					if (a < -180) a = -180;
 					c[4] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, a, 0);
 				}
+				/* 16 Nov: what was measured, then the path */
+				tm_printf((UB*)"vc: obstacle %d cm wide, %d cm ahead"
+					  " (closest x %d, y %d cm) -> sideways %d cm\n",
+					  (INT)s5_profile_width(plan_profile),
+					  (INT)s5_profile_closest(plan_profile),
+					  s5_profile_x(plan_profile),
+					  (INT)s5_profile_y(plan_profile), lat);
 				tm_printf((UB*)"vc: bypass %s: out %d, %d mm, back %d,"
-					  " past %d mm, to the line %d (sideways %d plan cm)\n",
+					  " past %d mm, to the line %d (TURN cmds)\n",
 					  vc.side_right ? "RIGHT" : "LEFT",
 					  s2_cmd_angle(c[0]), s2_cmd_dist(c[1]),
 					  s2_cmd_angle(c[2]), s2_cmd_dist(c[3]),
-					  s2_cmd_angle(c[4]), lat);
+					  s2_cmd_angle(c[4]));
 				set_state(VC_ST_BYPASS_OBSTACLE);
 				script_run(c, n);
 			} else if (s5_sts_state(s5) == S5_ST_FORWARD_WATCH) {

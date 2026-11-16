@@ -56,6 +56,8 @@ EXPORT INT vc_nav_script(UINT nav, UW *cmds)
  * Profile (Buddy 5, obstacle_scan.h): closest point (x right, y forward),
  * visible width and the outermost bearings that saw the obstacle.  The
  * edge on the chosen side comes from those bearings (vc_edge_cm).
+ * 16 Nov (VC_BYPASS_BY_WIDTH): every distance below follows the measured
+ * width -- edge -> sideways, width -> depth -> past -- at true size.
  *
  *	1. TURN a towards the side (a = 90, or 45..85 with VC_BYPASS_SMOOTH)
  *	2. MOVE lat / sin(a): lat = edge + half robot width + margin
@@ -141,13 +143,32 @@ EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm)
 	INT	edge, lat, fwd, a = 90, diag, out_fwd = 0;
 
 	side = (side < 0) ? -1 : 1;
-	(void)x; (void)w;
+#if VC_BYPASS_BY_WIDTH
+	/* 16 Nov: the profile's x is the obstacle's centre, so its edge on
+	   the bypass side is x + width/2 (right) or -(x - width/2) (left) */
+	edge = x * side + (w + 1) / 2;
+#else
+	(void)x;
 	edge = vc_edge_cm(p, side);
+#endif
 	if (edge < 0) edge = 0;
+#if VC_BYPASS_BY_WIDTH
+	/* 16 Nov: no 20 cm floor -- a narrow obstacle gets a short path, a
+	   wide one a longer one; never less than half the robot + margin */
+	lat = vc_clamp(edge + S5_ROBOT_WIDTH_MM / 20 + S5_CLEARANCE_MARGIN_MM / 10 +
+		       VC_BYPASS_EXTRA_CM,
+		       S5_ROBOT_WIDTH_MM / 20 + S5_CLEARANCE_MARGIN_MM / 10,
+		       VC_BYPASS_MAX_CM);
+	/* depth = measured width (not visible from the front) */
+	fwd = y + vc_clamp(w, VC_DEPTH_MIN_CM, VC_DEPTH_MAX_CM) +
+	      S5_ROBOT_LENGTH_MM / 20 + VC_PASS_MARGIN_CM;
+#else
+	(void)w;
 	lat = vc_clamp(edge + S5_ROBOT_WIDTH_MM / 20 + S5_CLEARANCE_MARGIN_MM / 10 +
 		       VC_BYPASS_EXTRA_CM,
 		       VC_BYPASS_MIN_CM, VC_BYPASS_MAX_CM);
 	fwd = y + VC_OBSTACLE_DEPTH_CM + S5_ROBOT_LENGTH_MM / 20 + VC_PASS_MARGIN_CM;
+#endif
 	diag = lat;
 #if VC_BYPASS_SMOOTH
 	/* Turn out only as far as needed to miss the near corner (the
@@ -161,6 +182,15 @@ EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm)
 		out_fwd = lat * 100 / tan100[(a - 45) / 5];
 	}
 #endif
+#if VC_BYPASS_BY_WIDTH
+	/* 16 Nov: true size: real cm -> mm, real turn angles */
+	diag = vc_clamp(diag, 1, VC_BYPASS_MOVE_MAX_CM);
+	fwd = vc_clamp(fwd - out_fwd, 0, VC_BYPASS_MOVE_MAX_CM);
+	cmds[0] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, VC_BYPASS_TURN_CMD(a * side), 0);
+	cmds[1] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_BYPASS_MM(diag));
+	cmds[2] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, VC_BYPASS_TURN_CMD(-a * side), 0);
+	cmds[3] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_BYPASS_MM(fwd));
+#else
 	diag = vc_clamp(diag, VC_BYPASS_MIN_CM, VC_PLAN_MAX_CM);
 	fwd = vc_clamp(fwd - out_fwd, VC_BYPASS_MIN_CM, VC_PLAN_MAX_CM);
 
@@ -169,6 +199,7 @@ EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm)
 	cmds[1] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_PLAN_MM(diag));
 	cmds[2] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, -a * side, 0);
 	cmds[3] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_PLAN_MM(fwd));
+#endif
 	cmds[4] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, -VC_REJOIN_TURN_DEG * side, 0);
 	if (lat_cm != NULL) *lat_cm = lat;
 	return 5;

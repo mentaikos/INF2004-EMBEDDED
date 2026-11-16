@@ -198,6 +198,8 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 	INT x = 0, y = 0, xmin = 1001, xmax = -1001, px;
 	UINT path = 101;			/* nearest range in the robot's path */
 	BOOL unknown = FALSE, near = FALSE, foreground_known = TRUE;
+	INT ox = 0;
+	BOOL have_ox = FALSE;
 	for (i = 0; i < S5_ANGLES; i++) {
 		r = s5_scan_get(scan, i);
 		if (r == S5_RANGE_NEAR) near = TRUE;
@@ -225,7 +227,33 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 			if (px < xmin) xmin = px;
 			if (px > xmax) xmax = px;
 		}
-		width = (UINT)(xmax - xmin + 5) / 10u;
+		/* 16 Nov: width of the obstacle itself (S5_WIDTH_BAND_CM):
+		 * the unbroken run of bins next to the closest reading */
+		{
+			UINT a = nearest_i, b = nearest_i, k;
+			INT wmin, wmax;
+			while (a > 0 && measured(s5_scan_get(scan, a - 1)) &&
+			       s5_scan_get(scan, a - 1) <= closest + S5_WIDTH_BAND_CM) a--;
+			while (b < S5_ANGLES - 1 && measured(s5_scan_get(scan, b + 1)) &&
+			       s5_scan_get(scan, b + 1) <= closest + S5_WIDTH_BAND_CM) b++;
+			/* beam spread off both ends (S5_WIDTH_BEAM_BINS) */
+			if (b - a >= 2u * S5_WIDTH_BEAM_BINS) {
+				a += S5_WIDTH_BEAM_BINS;
+				b -= S5_WIDTH_BEAM_BINS;
+			} else {
+				a = b = (a + b) / 2u;
+			}
+			wmin = 1001; wmax = -1001;
+			for (k = a; k <= b; k++) {
+				r = s5_scan_get(scan, k);
+				px = project((INT)r * 10, 90 - (INT)s5_angle_deg(k));
+				if (px < wmin) wmin = px;
+				if (px > wmax) wmax = px;
+			}
+			width = (UINT)(wmax - wmin + 5) / 10u;
+			ox = (wmin + wmax) / 2;		/* centre, mm */
+			have_ox = TRUE;
+		}
 		for (i = lo; i <= hi; i++)
 			if (uncertain(s5_scan_get(scan, i))) foreground_known = FALSE;
 		/* An unknown forward/foreground return cannot establish a clear
@@ -246,6 +274,7 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 	}
 	if (closest <= 100) {
 		x = project((INT)closest * 10, 90 - (INT)s5_angle_deg(nearest_i)) / 10;
+		if (have_ox) x = ox / 10;	/* 16 Nov: the obstacle's centre */
 		y = project((INT)closest * 10, (INT)s5_angle_deg(nearest_i)) / 10;
 	} else closest = S5_RANGE_FAR;
 	if (near) closest = S5_RANGE_NEAR;

@@ -50,6 +50,22 @@
 #define S5_LINE_FRESH_MS       120
 #define S5_LINE_CONFIRM_MS     120
 #define S5_PROFILE_BAND_CM     10
+/* 16 Nov (integration fix, for the VC's width-based bypass): the WIDTH
+ * reported in the profile is the obstacle itself only: the unbroken run
+ * of bearings around the closest reading that stay within this many cm
+ * of it.  With the 10 cm band above, a cup at 23 cm with other echoes
+ * at 25-31 cm across the sweep was reported 47 cm wide (16 Nov log)
+ * and the bypass drove far too wide and too long; its own run (105-135
+ * deg, 23-25 cm) gives ~12 cm.  The 10 cm band still decides the
+ * foreground for side clearance and the plan (unchanged). */
+#define S5_WIDTH_BAND_CM       3
+/* 16 Nov, second run: the ultrasonic beam is ~15-20 deg wide, so a
+ * bottle (~8 cm) at 24 cm echoed over 55 deg of the sweep and its run
+ * still came out 17-23 cm wide.  The beam spread is taken off both
+ * ends of the run (this many 5-degree bins each side) before the width
+ * and the centre are measured.  MEASURE: a known 8 cm bottle at 20-30
+ * cm should log width ~8-12 cm. */
+#define S5_WIDTH_BEAM_BINS     2
 #define S5_BEAM_ALLOW_DEG      15
 /* Side gap check (side_clearance): only things within the strip the robot
  * drives through while passing count -- up to the obstacle face band +
@@ -129,6 +145,9 @@
 
 /* 8-byte profile, unused bits zero.
  * w0: closest 7, visible width 8, x 8 signed, y 7 (all cm).
+ * 16 Nov: x is the CENTRE of the obstacle (of its own run of bearings,
+ * beam spread taken off), so its edges are x - width/2 .. x + width/2;
+ * y is still the closest point (the near face). 
  * w1: left clearance 7, right clearance 7, first edge index 5,
  *     last edge index 5, action 3, valid 1.
  * x positive right, y forward; distance uses the codes above.

@@ -52,9 +52,12 @@ LOCAL BOOL s5_check_profile(void)
 	UINT i;
 	s5_test_fill(scan, S5_RANGE_FAR);
 	/* board 18 cm ahead covering 80..100 degrees (bins 10..14 with the
-	   original 60-degree half sweep) */
+	   original 60-degree half sweep).  16 Nov: as the real sensor sees
+	   it -- the beam (S5_WIDTH_BEAM_BINS x 5 deg each side) also echoes
+	   from the bins just beside it, so 70..110 read 18 */
 	for (i = 0; i < S5_ANGLES; i++)
-		if (s5_angle_deg(i) >= 80 && s5_angle_deg(i) <= 100)
+		if (s5_angle_deg(i) >= 80 - 5 * S5_WIDTH_BEAM_BINS &&
+		    s5_angle_deg(i) <= 100 + 5 * S5_WIDTH_BEAM_BINS)
 			s5_scan_set(scan, i, 18);
 	p = s5_make_profile(scan);
 	return s5_profile_closest(p) == 18 && s5_profile_width(p) >= 5 &&

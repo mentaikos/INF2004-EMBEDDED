@@ -227,6 +227,38 @@
 #define VC_PLAN_MAX_CM		127
 #define VC_PLAN_MM(cm)		((INT)(cm) * VC_PLAN_MM_PER_CM_X10 / 10)
 
+/* 16 Nov: bypass sized by the obstacle's WIDTH (Obstacle Scan's
+   requirement).  1 = the bypass path follows what the scan measured,
+   at TRUE size:
+     sideways = obstacle edge on the bypass side (from the sweep
+                bearings that saw it, i.e. its measured width) + half
+                the robot + clearance margin + VC_BYPASS_EXTRA_CM
+     past     = distance to it + its depth + half the robot + margin;
+                depth cannot be seen from the front, so it is taken as
+                the measured width (a bottle or box is about as deep as
+                it is wide), VC_DEPTH_MIN_CM..VC_DEPTH_MAX_CM
+   and driven 10 mm per planned cm, with the turn-out / turn-back
+   angles made real (VC_BYPASS_TURN_CMD).  Before, the sideways move
+   had a 20 cm floor (every small obstacle got the same path), the
+   depth was a fixed 10 cm, and everything was driven at 0.53 size with
+   0.63-size turns, so the path hardly changed with the obstacle.
+   0 = the old tuned path exactly (VC_PLAN_MM, fixed depth, 20 cm
+   floor).  16 Nov run: a cup came out 47 cm wide (other echoes in
+   the scan's 10 cm band) and the bypass went 38 cm out and 48 cm
+   past; Obstacle Scan now reports the cup's own width
+   (S5_WIDTH_BAND_CM) and the depth is capped at 15 cm.  The rejoin turn (VC_REJOIN_TURN_DEG) and the reverse stay
+   as tuned either way. */
+#define VC_BYPASS_BY_WIDTH	1
+#define VC_DEPTH_MIN_CM		5
+#define VC_DEPTH_MAX_CM		15	/* 16 Nov: was 30 (drove too far past a cup) */
+#define VC_BYPASS_MOVE_MAX_CM	100	/* S2 distance field: +-1023 mm */
+#define VC_BYPASS_MM(cm)	((INT)(cm) * 10)
+/* A TURN a turns only ~0.63 a on the mat (S2_TRACK_X10_MM, 12 Nov:
+   TURN 180 ~ 113 deg), so for a real angle command a x 180 / 113.
+   MEASURE: watch the turn out; too little -> raise, too much -> lower. */
+#define VC_BYPASS_TURN_X100	159
+#define VC_BYPASS_TURN_CMD(a)	(((INT)(a) * VC_BYPASS_TURN_X100 + ((a) < 0 ? -50 : 50)) / 100)
+
 /* START needs the IMU calibrated and an IMU fault stops the mission
    (design).  0 = bench mode ONLY: drive without a working IMU (no hump
    height).  Never 0 on the track or in a demo. */
@@ -392,7 +424,8 @@ IMPORT UINT	vc_map_nav(char letter);
 
 /* Bypass round the obstacle on one side, from Obstacle Scan's profile:
    turn out, sideways, turn back, past it, turn towards the line.
-   *lat_cm gets the sideways distance (the approach uses it). */
+   *lat_cm gets the sideways distance (the approach uses it).
+   16 Nov: with VC_BYPASS_BY_WIDTH, sized by the obstacle's width. */
 IMPORT INT	vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm);
 
 /* Relative angle of LINE_SEARCH sweep i (0..), first towards 'side' */

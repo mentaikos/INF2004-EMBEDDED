@@ -28,6 +28,8 @@ LOCAL S5_PROFILE make_profile(UINT closest, UINT width, INT x, UINT y,
 	return p;
 }
 
+LOCAL INT vc_test_min(INT a, INT b) { return (a < b) ? a : b; }
+
 LOCAL BOOL is_cmd(UW w, UINT type, INT angle, INT dist)
 {
 	return s2_cmd_type(w) == type && s2_cmd_angle(w) == angle &&
@@ -73,7 +75,57 @@ EXPORT void vc_test(void)
 	/* VC-U03: bypass geometry, both sides, and clamping */
 	p = make_profile(20, 10, 0, 20, 9, 15);	/* 75..105 deg */
 	n = vc_bypass_script(p, 1, c, &lat);
-#if VC_BYPASS_SMOOTH
+#if VC_BYPASS_BY_WIDTH && VC_BYPASS_SMOOTH
+	/* 16 Nov: sized by the width, at true size.  10 cm wide, centred
+	   (x = centre since 16 Nov): edge 0 + 5 -> lat 5+8+3+4 = 20; corner
+	   21 within 20 -> 50 deg; diagonal 27 cm, 16 forward; past 20 +
+	   depth (= width 10) + 10 + 3 - 16 = 27.  Driven 10 mm per cm,
+	   turns VC_BYPASS_TURN_CMD (real angle). */
+	ok = n == 5 && lat == 20 &&
+	     is_cmd(c[0], S2_CMD_TURN, VC_BYPASS_TURN_CMD(50), 0) &&
+	     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, VC_BYPASS_MM(27)) &&
+	     is_cmd(c[2], S2_CMD_TURN, VC_BYPASS_TURN_CMD(-50), 0) &&
+	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0, VC_BYPASS_MM(27)) &&
+	     is_cmd(c[4], S2_CMD_TURN, -VC_REJOIN_TURN_DEG, 0);
+	n = vc_bypass_script(p, -1, c, &lat);
+	ok = ok && n == 5 && lat == 20 &&
+	     is_cmd(c[0], S2_CMD_TURN, VC_BYPASS_TURN_CMD(-50), 0) &&
+	     is_cmd(c[2], S2_CMD_TURN, VC_BYPASS_TURN_CMD(50), 0) &&
+	     is_cmd(c[4], S2_CMD_TURN, VC_REJOIN_TURN_DEG, 0);
+	/* Wider = further out and further past.  Both 20 cm ahead,
+	   centred: 6 cm wide (80..100 deg) vs 20 cm wide (65..115 deg) */
+	{
+		INT	lat_n, lat_w, past_n, past_w;
+
+		vc_bypass_script(make_profile(20, 6, 0, 20, 10, 14), 1, c, &lat_n);
+		past_n = s2_cmd_dist(c[1]) + s2_cmd_dist(c[3]);
+		vc_bypass_script(make_profile(20, 20, 0, 20, 7, 17), 1, c, &lat_w);
+		past_w = s2_cmd_dist(c[1]) + s2_cmd_dist(c[3]);
+		tm_printf((UB*)"[TEST]   6 cm wide: sideways %d cm, path %d mm;"
+			  " 20 cm wide: sideways %d cm, path %d mm\n",
+			  lat_n, past_n, lat_w, past_w);
+		ok = ok && lat_w > lat_n && past_w > past_n;
+	}
+	/* Wide and far: edge 30 + 60 = 90 -> lat clamps to 60; corner 106
+	   within 100 -> 50 deg; diagonal 79, 50 forward; depth = width 120
+	   -> VC_DEPTH_MAX_CM; past 100 + depth + 10 + 3 - 50 */
+	p = make_profile(20, 120, 30, 100, 0, 24);	/* whole sweep */
+	vc_bypass_script(p, 1, c, &lat);
+	ok = ok && lat == VC_BYPASS_MAX_CM &&
+	     s2_cmd_angle(c[0]) == VC_BYPASS_TURN_CMD(50) &&
+	     s2_cmd_dist(c[1]) == VC_BYPASS_MM(79) &&
+	     s2_cmd_dist(c[3]) == VC_BYPASS_MM(vc_test_min(100 + VC_DEPTH_MAX_CM +
+		S5_ROBOT_LENGTH_MM / 20 + VC_PASS_MARGIN_CM - 50, VC_BYPASS_MOVE_MAX_CM));
+	/* Too close for any diagonal: 90 degrees out; depth = width 30,
+	   capped at VC_DEPTH_MAX_CM */
+	p = make_profile(20, 30, 0, 2, 6, 18);
+	vc_bypass_script(p, 1, c, &lat);
+	ok = ok && is_cmd(c[0], S2_CMD_TURN, VC_BYPASS_TURN_CMD(90), 0) &&
+	     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, VC_BYPASS_MM(lat)) &&
+	     is_cmd(c[3], S2_CMD_MOVE_DIST, 0, VC_BYPASS_MM(2 +
+		    vc_test_min(30, VC_DEPTH_MAX_CM) +
+		    S5_ROBOT_LENGTH_MM / 20 + VC_PASS_MARGIN_CM));
+#elif VC_BYPASS_SMOOTH
 	/* Values for the placeholder robot size (160 x 200 mm, margin 30)
 	   seen 75..105 deg, 20 cm ahead: edge from the next bin out (70 deg)
 	   = 20 x cot 70 = 7 cm (30 Oct: was x + width = 10); corner needs
@@ -120,7 +172,8 @@ EXPORT void vc_test(void)
 	vc_bypass_script(p, 1, c, &lat);
 	ok = ok && lat == VC_BYPASS_MAX_CM && s2_cmd_dist(c[3]) == VC_PLAN_MM(VC_PLAN_MAX_CM);
 #endif
-	TEST_CHECK("VC-U03", ok, "bypass script geometry, sides and clamps");
+	TEST_CHECK("VC-U03", ok, "bypass script geometry, sides and clamps"
+		   " (16 Nov: sized by the obstacle's width)");
 
 	/* VC-U04: line search sweep alternates, first towards the line */
 	ok = vc_search_turn(0, 1) == 30 && vc_search_turn(1, 1) == -60 &&

@@ -368,6 +368,23 @@ Slides 4-7 (Buddies 1-4) have no graded table: their FRs/NFRs are self-set.
   the bypass time. Before: depth 25, min 20, extra 12, rejoin extra 3 cm, all
   legs at 10 cm/s (about 11-12 s + scan time = F band). Record the new values
   and the measured times in the report.
+- **16 Nov: bypass sized by the obstacle's measured width** (`VC_BYPASS_BY_WIDTH 1`,
+  `vehicle_controller.h` / `vc_plan.c`). Sideways = the obstacle's edge on the bypass
+  side (from the scan bearings that saw it) + half robot + margin; past = distance +
+  depth + half robot + margin, depth taken as the measured width (5..30 cm; depth is
+  not visible from the front). Driven at true size (10 mm per cm) with real turn-out /
+  turn-back angles (`VC_BYPASS_TURN_X100 159`, measure). Before: 20 cm sideways floor,
+  fixed 10 cm depth, path at 0.53 size, so the path hardly changed with the obstacle.
+  `0` = the old tuned path.
+  16 Nov run: a cup was reported 47 cm wide (echoes at 25-31 cm inside the 10 cm
+  foreground band) and the bypass drove 420 mm out / 480 mm past. Fixed: the
+  profile width is now the obstacle's own unbroken run of bearings within
+  `S5_WIDTH_BAND_CM` (3 cm) of the closest reading (same scan -> 12 cm); depth cap 15 cm.
+  Second run (bottle): still 17-23 cm because the ~20 deg beam echoes either side of
+  the obstacle, so `S5_WIDTH_BEAM_BINS` (2 x 5 deg) is taken off both ends of that run,
+  and the profile's x is now the obstacle's CENTRE (edges = x -+ width/2); the
+  bypass edge is x + width/2 on its side. Real scans replayed: cup 4 cm, bottle
+  11-15 cm. S5-U08 / S5-H01 scenes now include the beam (all 24 S5 host tests pass).
 - When vetting the report check: NFR12 = 20 cm/s everywhere; the bypass time is
   measured detection -> line reacquired over repeated trials; the smaller
   margins still clear the obstacle given the width error (NFR2 <= 10 %);
