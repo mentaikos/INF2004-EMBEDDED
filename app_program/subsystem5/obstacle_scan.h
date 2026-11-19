@@ -45,6 +45,14 @@
  * driving or the odometer has moved more than this (task_scan.c): one
  * encoder tick from a settling wheel used to abort every scan. */
 #define S5_SCAN_DRIFT_MM       15
+/* 19 Nov: s5_face_width: a bin is looking at the face if its forward
+ * component (r sin a) is within this of the face's */
+#define S5_FACE_TOL_MM         12
+/* 19 Nov: after the sweep, bins within this many of the closest that
+ * missed the obstacle are pinged once more, for s5_face_width only
+ * (wscan; the bypass keeps the first readings).  8 = +-40 deg, at most
+ * ~1 s more per scan (VC_SCAN_TIMEOUT_MS is 5 s). */
+#define S5_WIDTH_REPING_BINS   8
 /* After a stop, an obstacle IN THE ROBOT'S PATH (within half the required
  * width of the centre line) this close is planned around, not driven
  * into: without this, the rescan after a 10 cm reverse saw it beyond
@@ -208,13 +216,15 @@ typedef struct {
 	UB invalid_count : 2;
 	UB retries : 2;
 	UB line_count : 2;
-	UB reserved2 : 2;
+	UB width_pass : 1;      /* 19 Nov: re-pinging for the width (wscan) */
+	UB reserved2 : 1;
 	UB range : 7;
 	UB reserved3 : 1;
 	UB generation, last_line_seq;
 	UH plan_ms, recovery_ms, line_start_ms, retry_ms;
 	UW pending;
 	UB scan[S5_SCAN_BYTES];
+	UB wscan[S5_SCAN_BYTES];  /* 19 Nov: scan + re-pings, for s5_face_width only */
 	S5_PROFILE profile;
 } S5_SCAN;
 
@@ -243,6 +253,9 @@ IMPORT void s5_scan_set(UB *scan, UINT index, UINT range);
 IMPORT UB s5_scan_get(const UB *scan, UINT index);
 IMPORT UW s5_fine_mask(const UB *scan);
 IMPORT S5_PROFILE s5_make_profile(const UB *scan);
+/* 19 Nov: the obstacle's width for the dashboard and the log, cm (not the
+ * profile's width, which the bypass uses) */
+IMPORT UINT s5_face_width(const UB *scan);
 IMPORT UW s5_profile_event(S5_PROFILE profile, UB generation);
 IMPORT void s5_scan_init(S5_SCAN *s);
 IMPORT void s5_scan_tick(S5_SCAN *s, const S5_INPUT *in, S5_OUTPUT *out);

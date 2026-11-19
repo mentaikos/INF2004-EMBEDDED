@@ -4,6 +4,7 @@
 #include "../subsystem2/subsystem2.h"
 #include "../subsystem4/subsystem4.h"
 #include "../subsystem3/subsystem3.h"
+#include "../subsystem1/subsystem1.h"	/* 19 Nov: telemetry slot */
 #include <tk/syslib.h>
 
 EXPORT ID tid_s5_scan;
@@ -148,6 +149,19 @@ LOCAL void inputs(S5_INPUT *in)
 
 LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns);
 
+/* 19 Nov: the obstacle shown on the dashboard (publish): the FIRST
+   finished scan of each obstacle that saw it (face width > 0).  The
+   rescans after a reverse are of the same obstacle and do not change
+   it; a new detection while following / passing / rejoining starts
+   the next obstacle. */
+LOCAL S5_PROFILE tlm_last;
+LOCAL UINT tlm_width;                   /* s5_face_width, cm */
+LOCAL UINT tlm_scans;                   /* obstacles shown (slot keeps 4 bits) */
+LOCAL UB tlm_gen;                       /* generation of the last finished scan */
+LOCAL UB tlm_new;                       /* new obstacle: next good scan is shown */
+LOCAL UB tlm_kept;                      /* this scan was the one shown */
+LOCAL UB tlm_prev_state;                /* S5 state at the last publish */
+
 /* TEMPORARY tuning aid: after every finished scan print what each angle
    saw and the decision, so a REVERSE / NO_CLEAR can be explained from the
    log.  Range codes: 0 = under 5 cm, 1 = over 100 cm (clear), 2 = no
@@ -167,6 +181,13 @@ LOCAL void print_scan(const S5_SCAN *scan, INT event)
 	for (i = 0; i < S5_ANGLES; i++) {
 		tm_printf((UB*)" %d:%d", s5_angle_deg(i), s5_scan_get(scan->scan, i));
 	}
+	/* 19 Nov: bins a width re-ping heard nearer (for the width only) */
+	tm_printf((UB*)"\ns5: width re-pings nearer:");
+	for (i = 0; i < S5_ANGLES; i++) {
+		if (s5_scan_get(scan->wscan, i) != s5_scan_get(scan->scan, i))
+			tm_printf((UB*)" %d:%d", s5_angle_deg(i),
+				  s5_scan_get(scan->wscan, i));
+	}
 	tm_printf((UB*)"\ns5: -> %s %s closest=%dcm width=%dcm x=%d y=%d"
 		  " clearL=%dcm clearR=%dcm (need %dcm) edges %d..%d\n",
 		  act[s5_profile_action(p) & 7u],
@@ -177,6 +198,14 @@ LOCAL void print_scan(const S5_SCAN *scan, INT event)
 		  (S5_ROBOT_WIDTH_MM + 2 * (S5_CLEARANCE_MARGIN_MM +
 					    S5_RANGE_ERROR_MM)) / 10,
 		  s5_angle_deg((p.w1 >> 14) & 31u), s5_angle_deg((p.w1 >> 19) & 31u));
+	/* 19 Nov: what the dashboard shows (s5_face_width); "width" above
+	   is what the bypass plans with */
+	if (tlm_kept)
+		tm_printf((UB*)"s5: obstacle width %dcm (dashboard)\n", tlm_width);
+	else
+		tm_printf((UB*)"s5: obstacle width %dcm this scan (dashboard keeps"
+			  " %dcm from the first scan)\n",
+			  s5_face_width(scan->wscan), tlm_width);
 }
 #endif
 
@@ -189,6 +218,29 @@ LOCAL void deliver(const S5_OUTPUT *out, const S5_SCAN *scan, UH *drops, UH over
 	if (out->estop || fault) CHECK(tk_set_flg(flg_safety, S2_FLG_ESTOP), "S5 safety");
 	if (fault && vc_faults > 0) CHECK(tk_set_flg(vc_faults, fault), "S5 fault");
 	if (out->event < 0) return;
+	/* 19 Nov: dashboard obstacle.  A detection while watching ahead
+	   (following, passing, rejoining) is a new obstacle; one while
+	   stopped / scanning / reversing is the same one. */
+	if (out->event == EVT_OBSTACLE_DETECTED &&
+	    (tlm_prev_state == S5_ST_FORWARD_WATCH || tlm_prev_state == S5_ST_BYPASSING ||
+	     tlm_prev_state == S5_ST_LINE_RECOVERY))
+		tlm_new = 1;
+	/* a scan that finished (finish_scan moves the generation on; an
+	   aborted one does not): the first one that saw the obstacle is
+	   shown, the rescans after a reverse are not */
+	tlm_kept = 0;
+	if ((out->event == EVT_OBSTACLE_PROFILE || out->event == EVT_NO_CLEAR) &&
+	    scan->generation != tlm_gen) {
+		UINT w = s5_face_width(scan->wscan);
+		tlm_gen = scan->generation;
+		if (tlm_new && w > 0) {
+			tlm_new = 0;
+			tlm_kept = 1;
+			tlm_last = scan->profile;
+			tlm_width = w;
+			tlm_scans++;
+		}
+	}
 #if S5_DEBUG_SCAN
 	if (out->event == EVT_OBSTACLE_PROFILE || out->event == EVT_NO_CLEAR)
 		print_scan(scan, out->event);
@@ -217,6 +269,16 @@ LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns)
 	published.overruns = overruns;
 	published_ms = scan->plan_ms;         /* original plan time, not refresh time */
 	tk_unl_mtx(mtx_s5_status);
+	/* 19 Nov: Buddy 1's telemetry slot (subsystem5.h s5_tlm_slot); the
+	   dashboard's "Obstacle width" is the measured face width
+	   (s5_face_width), not the bypass's planning width */
+	{
+		S5_PROFILE t = tlm_last;
+		t.w0 = (t.w0 & ~((UW)255u << 7)) | ((UW)(tlm_width & 255u) << 7);
+		(void)s1_tlm_set_slot(S1_SLOT_B5,
+				      s5_tlm_slot(s5_scan_status(scan), t, tlm_scans));
+	}
+	tlm_prev_state = scan->state;		/* for the next detection (deliver) */
 }
 
 /* Forward watch on curves: the angle index to watch while following.

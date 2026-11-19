@@ -310,6 +310,121 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 	return p;
 }
 
+/* 19 Nov: the obstacle's width as reported to the dashboard (telemetry
+ * slot) and the scan log -- NOT the profile's width, which the bypass
+ * plans from and is left exactly as it is.
+ *
+ * The beam is ~15-20 degrees wide, so a flat face echoes straight back
+ * at bearings well beyond its edges, at about the same range; and one
+ * bin can drop out (FAR / no echo) in the middle of it.  So:
+ *  1. the run of bins round the closest reading within S5_WIDTH_BAND_CM
+ *     of it (floor echoes excluded as in s5_make_profile), bridging
+ *     single dropped bins;
+ *  2. the face's forward distance = the median forward component
+ *     (r sin a) of those bins;
+ *  3. only bins whose forward component is within S5_FACE_TOL_MM of
+ *     it are really looking at the face -- the beam's spill-over beyond
+ *     an edge reads short there (r sin a < face);
+ *  4. the face reaches half a bin beyond the outermost such bins:
+ *     width = face x (cot(right edge) - cot(left edge)).
+ * Returns cm; 0 = no obstacle in range. */
+LOCAL INT cot_mm(INT y_mm, INT deg)	/* sideways at bearing deg, + right */
+{
+	INT s = sin_deg(deg);
+	return s > 0 ? y_mm * sin_deg(90 - deg) / s : 0;
+}
+
+LOCAL INT median_small(INT *v, INT n)
+{
+	INT i, j, t;
+	for (i = 1; i < n; i++)
+		for (j = i; j > 0 && v[j - 1] > v[j]; j--) {
+			t = v[j]; v[j] = v[j - 1]; v[j - 1] = t;
+		}
+	return v[n / 2];
+}
+
+EXPORT UINT s5_face_width(const UB *scan)
+{
+	UINT i, r, closest = 101, nearest = S5_CENTRE, cap, a, b, gap;
+	INT k, fwd[S5_ANGLES], tmp[S5_ANGLES] = {0}, n = 0, face, lo = -1, hi = -1;
+	BOOL in[S5_ANGLES];
+
+	for (i = 0; i < S5_ANGLES; i++) {
+		r = s5_scan_get(scan, i);
+		if (measured(r) && r < closest) { closest = r; nearest = i; }
+	}
+	if (closest > S5_RANGE_MAX_CM) return 0;
+	cap = closest + S5_WIDTH_BAND_CM;
+	if (closest < S5_FLOOR_MIN_CM) {
+		UINT floor_from = closest + 2u > S5_FLOOR_MIN_CM ? closest + 2u
+								  : S5_FLOOR_MIN_CM;
+		if (cap >= floor_from) cap = floor_from - 1u;
+	}
+	for (i = 0; i < S5_ANGLES; i++) {
+		r = s5_scan_get(scan, i);
+		in[i] = measured(r) && r <= cap;
+	}
+	/* 1. the run, bridging one dropped (unmeasured) bin */
+	a = b = nearest;
+	for (k = (INT)nearest - 1, gap = 0; k >= 0; k--) {
+		if (in[k]) { a = (UINT)k; gap = 0; }
+		else if (!measured(s5_scan_get(scan, (UINT)k)) && gap == 0) gap = 1;
+		else break;
+	}
+	for (k = (INT)nearest + 1, gap = 0; k < S5_ANGLES; k++) {
+		if (in[k]) { b = (UINT)k; gap = 0; }
+		else if (!measured(s5_scan_get(scan, (UINT)k)) && gap == 0) gap = 1;
+		else break;
+	}
+	/* 2. forward distance of the face */
+	for (i = a; i <= b; i++) {
+		fwd[i] = in[i] ? project((INT)s5_scan_get(scan, i) * 10,
+					 (INT)s5_angle_deg(i)) : -1;
+		if (in[i]) tmp[n++] = fwd[i];
+	}
+	face = median_small(tmp, n);
+	/* 3. bins that really see the face */
+	for (i = a; i <= b; i++) {
+		if (in[i] && fwd[i] >= face - S5_FACE_TOL_MM) {
+			if (lo < 0) lo = (INT)i;
+			hi = (INT)i;
+		}
+	}
+	/* 4. half a bin (2-3 degrees) beyond them; lower index = right */
+	k = cot_mm(face, (INT)s5_angle_deg((UINT)lo) - 2) -
+	    cot_mm(face, (INT)s5_angle_deg((UINT)hi) + 2);
+	return (UINT)clamp((k + 5) / 10, 0, 200);
+}
+
+/* 19 Nov: bins to ping once more for the width (wscan): within
+ * S5_WIDTH_REPING_BINS of the closest reading, every bin that did not
+ * hear the obstacle (floor, far or no echo).  An angled, smooth face
+ * reflects most of the sound away from those bearings (log 19 Nov: a
+ * 20 cm box was heard only at 90..100 deg, the rest was floor); a second
+ * ping sometimes catches its weaker echo.  Nothing in range: none.
+ * At most 2 x S5_WIDTH_REPING_BINS + 1 pings, ~60 ms each. */
+LOCAL UW s5_width_mask(const UB *scan)
+{
+	UINT i, r, closest = 101, nearest = S5_CENTRE, cap;
+	INT k;
+	UW mask = 0;
+
+	for (i = 0; i < S5_ANGLES; i++) {
+		r = s5_scan_get(scan, i);
+		if (measured(r) && r < closest) { closest = r; nearest = i; }
+	}
+	if (closest > S5_PLAN_CM) return 0;
+	cap = closest + S5_WIDTH_BAND_CM;
+	for (k = (INT)nearest - S5_WIDTH_REPING_BINS;
+	     k <= (INT)nearest + S5_WIDTH_REPING_BINS; k++) {
+		if (k < 0 || k >= S5_ANGLES) continue;
+		r = s5_scan_get(scan, (UINT)k);
+		if (!(measured(r) && r <= cap)) mask |= (UW)1u << k;
+	}
+	return mask;
+}
+
 EXPORT UW s5_profile_event(S5_PROFILE p, UB generation)
 {
 	return (UW)s5_profile_action(p) | ((UW)s5_profile_width(p) << 3) |
@@ -333,6 +448,7 @@ LOCAL void invalidate(S5_SCAN *s)
 	s->plan_valid = 0;
 	s->profile.w1 &= ~((UW)1u << 27);
 	s->pending = 0;
+	s->width_pass = 0;
 	s->index = S5_CENTRE;
 	s->action = S5_ACT_STOP;
 	s->line_count = s->line_fresh = 0;
@@ -506,7 +622,10 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 		}
 		return;
 	}
-	if (range == S5_RANGE_NO_ECHO) {
+	if (range == S5_RANGE_NO_ECHO && s->width_pass) {
+		/* 19 Nov: a width re-ping that hears nothing is expected (the
+		   face reflects the sound away there), not a faulty sensor */
+	} else if (range == S5_RANGE_NO_ECHO) {
 		if (s->invalid_count < 3) s->invalid_count++;
 		if (s->invalid_count >= S5_INVALID_LIMIT) {
 			fault(s, in->now_ms, 1, out);
@@ -520,13 +639,31 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 			out->event = EVT_NO_CLEAR;
 			return;
 		}
-		s5_scan_set(s->scan, s->index, range);
-		s->pending &= ~((UW)1u << s->index);
-		if (s->pending == 0 && s->state == S5_ST_COARSE_SCAN) {
-			s->pending = s5_fine_mask(s->scan);
-			s->state = S5_ST_FINE_SCAN;
+		if (s->width_pass) {
+			/* 19 Nov: width re-ping: keep the nearer echo in wscan
+			   only -- s->scan (what the bypass plans from) is final */
+			UINT old = s5_scan_get(s->wscan, s->index);
+			if (measured(range) && (!measured(old) || range < old))
+				s5_scan_set(s->wscan, s->index, range);
+			s->pending &= ~((UW)1u << s->index);
+		} else {
+			s5_scan_set(s->scan, s->index, range);
+			s->pending &= ~((UW)1u << s->index);
+			if (s->pending == 0 && s->state == S5_ST_COARSE_SCAN) {
+				s->pending = s5_fine_mask(s->scan);
+				s->state = S5_ST_FINE_SCAN;
+			}
+			if (s->pending == 0) {
+				for (i = 0; i < S5_SCAN_BYTES; i++) s->wscan[i] = s->scan[i];
+				s->pending = s5_width_mask(s->scan);
+				s->width_pass = s->pending != 0;
+			}
 		}
-		if (s->pending == 0) { finish_scan(s, in->now_ms, out); return; }
+		if (s->pending == 0) {
+			s->width_pass = 0;
+			finish_scan(s, in->now_ms, out);
+			return;
+		}
 		for (i = 0; i < S5_ANGLES; i++)
 			if (s->pending & ((UW)1u << i)) { s->index = (UB)i; break; }
 	} else if (s->state == S5_ST_FORWARD_WATCH || s->state == S5_ST_BYPASSING ||

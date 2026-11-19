@@ -101,7 +101,7 @@ LOCAL BOOL s5_test_plan(S5_SCAN *s, S5_INPUT *in)
 	in->flags = S5_SCAN_REQ;
 	s5_scan_tick(s, in, &out);
 	in->flags = 0;
-	while ((s->state == S5_ST_COARSE_SCAN || s->state == S5_ST_FINE_SCAN) && guard++ < 30) {
+	while ((s->state == S5_ST_COARSE_SCAN || s->state == S5_ST_FINE_SCAN) && guard++ < 60) {	/* 19 Nov: + width re-pings */
 		in->now_ms = (UH)(in->now_ms + 60);
 		s5_scan_sample(s, in, s->index == S5_CENTRE ? 18 : S5_RANGE_FAR, &out);
 	}
