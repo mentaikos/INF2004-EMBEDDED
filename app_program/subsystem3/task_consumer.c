@@ -262,8 +262,15 @@ LOCAL void print_widths(const S3_BC_RESULT *res)
 	}
 	tm_printf((UB*)"\n");
 	/* 1 Nov: the black switch level it learnt (the white one is ~3/4) */
+#if S3_BC_LOW_CONTRAST
+	/* 12 Nov: a bar starts S3_BC_LC_RISE above the paper next to it */
+	tm_printf((UB*)"s3:   black above %d now (%d over the white beside the"
+		  " bar; floor white %d)\n",
+		  drv_ir_threshold(), S3_BC_LC_RISE, drv_ir_white());
+#else
 	tm_printf((UB*)"s3:   black above %d (floor white %d)\n",
 		  drv_ir_threshold(), drv_ir_white());
+#endif
 }
 #endif
 

@@ -274,10 +274,51 @@ IMPORT void	s3_bind_vc(ID mbf_vc_evt, ID flg_fault);
    with S3_BC_SETTLE below: small 'Z' and big 'X' traces both decode
    200/200 in both directions, also with 2x the noise or the small
    bars 30% fainter; random mat marks still never hold the steering. */
-#define S3_BC_LC_ON		32	/* was 65 */
-#define S3_BC_LC_OFF		20	/* was 40; white noise sd ~6 */
+#define S3_BC_LC_ON		32	/* was 65 (12 Nov: no longer used, see below) */
+#define S3_BC_LC_OFF		20	/* was 40; white noise sd ~6 (12 Nov: no longer used) */
 #define S3_BC_LC_BAND		40
 #define S3_BC_LC_AVG		8	/* power of two */
+/* 12 Nov (log 20:54: the small barcode came out as 3 elements, black
+   440 ms / white 14.5 ms / black 499 ms -- the bars had merged): the
+   two levels above hung on the MAT's white (learnt slowly, ~1 s).
+   Between the bars of the small barcode the reading only comes down
+   to +5..+20, so a sheet that reads ~10 counts darker than the mat, or
+   a white learnt a few counts lower, left it above "white again" all
+   the way across.  Replaying the real recordings: paper 10 counts
+   darker read 0 % (small) / 58 % (big); 20 darker 0 % / 0 %.
+
+   Each bar is now measured against the paper right next to it:
+     valley  the lowest (smoothed) reading since the last bar; it
+             follows down at once and up slowly (~60 counts/s);
+     black   at valley + S3_BC_LC_RISE;
+     white   a faint bar (peak less than S3_BC_LC_STRONG above its
+             valley): once it has fallen S3_BC_LC_FALL_PCT % of its own
+             height from its peak (at least S3_BC_LC_RISE); a strong bar:
+             back within S3_BC_LC_OFF_STRONG of its valley -- its slow
+             tail belongs to the bar, that keeps thick : thin right;
+     step    a rise that then stays flat is the paper's edge or a
+             darker patch, not a bar: it ends as "white" after
+             S3_BC_LC_STEP_MS (only after S3_BC_LC_STEP_GATE_MS without a
+             bar, and below floor white + S3_BC_LC_STEP_MAX), or after
+             S3_BC_LC_STUCK_MS in any case (never stuck "black").  The
+             decoder drops that stray pair (start: the '*' check of
+             5 Nov; end: s3_bc_poll / end_read).
+   Same replay, 60-200 passes each: paper 40 counts brighter .. 40
+   darker than the mat 100 %; x0.25 .. x2.5 the recorded speed 100 %;
+   bars 40 % fainter 98 % (was 43 %); 2x the noise 100 % (was 88 %);
+   mat marks still give no read.  Not helped: the sensor's speed
+   swinging more than ~+-30 % (the steering hold is for that). */
+#define S3_BC_LC_RISE		20
+#define S3_BC_LC_FALL_PCT	60
+#define S3_BC_LC_STRONG		250
+#define S3_BC_LC_OFF_STRONG	30
+#define S3_BC_LC_VALLEY_SHIFT	5	/* smoothing: 1/32 per sample (~8 ms) */
+#define S3_BC_LC_LEAK_MASK	63	/* valley +1 every 64 samples (16 ms) */
+#define S3_BC_LC_STEP_MS	40
+#define S3_BC_LC_STEP_TOL	3	/* "flat": no new peak more than this higher */
+#define S3_BC_LC_STEP_GATE_MS	300
+#define S3_BC_LC_STEP_MAX	60
+#define S3_BC_LC_STUCK_MS	200
 /* 5 Nov (capture 21:58, small barcode 'Z'): the thick bars fade out
    slowly (+60..+40 for ~20 ms) and single noisy samples there crossed
    both levels, making a 0.25 ms bar.  A level change now counts only
@@ -314,6 +355,14 @@ typedef struct {
 	UH	white_n;	/* 5 Nov: samples since the last black, saturates */
 	UB	black;		/* current level, after hysteresis: 0/1 */
 	UB	pend;		/* 5 Nov: samples past the level so far */
+	/* 12 Nov: low-contrast mode, see S3_BC_LC_RISE */
+	UB	leak;		/* sample counter of the valley's slow rise */
+	UB	step_ok;	/* this "bar" came after a long white: may be a step */
+	UW	sm_q4;		/* smoothed reading, x16 (white only) */
+	UH	ext;		/* white: the valley; black: the bar's peak */
+	UH	base;		/* black: the valley this bar rose from */
+	UH	flat_ref;	/* black: level the flat time is counted from */
+	UH	flat_n;		/* black: samples without a clearly higher peak */
 } S3_BC_DET;
 
 IMPORT void	s3_bc_det_init(S3_BC_DET *d, UH white);

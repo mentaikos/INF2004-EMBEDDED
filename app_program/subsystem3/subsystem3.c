@@ -772,8 +772,9 @@ LOCAL void det_thresholds(S3_BC_DET *d)
 
 #if S3_BC_LOW_CONTRAST
 	(void)amp;			/* 5 Nov: fixed, just above white */
-	d->thr_on  = clamp_adc(white + S3_BC_LC_ON);
-	d->thr_off = clamp_adc(white + S3_BC_LC_OFF);
+	(void)white;			/* 12 Nov: above the local valley (s3_bc_detect) */
+	d->thr_on  = clamp_adc((W)d->ext + S3_BC_LC_RISE);
+	d->thr_off = d->thr_on;
 #else
 	/* 1 Nov: part of the way from white to the black actually seen */
 	d->thr_on  = clamp_adc(white + amp * S3_BC_ON_PCT / 100);
@@ -789,9 +790,103 @@ EXPORT void s3_bc_det_init(S3_BC_DET *d, UH white)
 	d->amp      = S3_BC_AMP_INIT;
 	if (d->amp < S3_BC_AMP_MIN) d->amp = S3_BC_AMP_MIN;
 	d->white_n  = 0;
+	d->leak     = 0;		/* 12 Nov */
+	d->step_ok  = 0;
+	d->sm_q4    = (UW)white << 4;
+	d->ext      = white;
+	d->base     = white;
+	d->flat_ref = white;
+	d->flat_n   = 0;
 	det_thresholds(d);
 }
 
+#if S3_BC_LOW_CONTRAST
+/* 12 Nov: low-contrast mode, each bar against the paper next to it
+   (S3_BC_LC_RISE in subsystem3.h).  adc is the ISR's moving average. */
+EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
+{
+	W	white = (W)(d->white_q8 >> 8);
+
+	if (d->black) {
+		W	amp, lvl;
+
+		if (adc > d->ext) {			/* the bar's peak */
+			d->ext = adc;
+			if ((W)adc > (W)d->flat_ref + S3_BC_LC_STEP_TOL) {
+				d->flat_ref = adc;
+				d->flat_n   = 0;
+			}
+		}
+		if (d->flat_n < 0xFFFFu) d->flat_n++;
+		amp = (W)d->ext - (W)d->base;
+		if (amp < S3_BC_LC_STRONG) {
+			/* faint bar: fallen part of its own height */
+			W drop = amp * S3_BC_LC_FALL_PCT / 100;
+
+			if (drop < S3_BC_LC_RISE) drop = S3_BC_LC_RISE;
+			lvl = (W)d->ext - drop;
+		} else {
+			/* strong bar: back near the paper it rose from */
+			lvl = (W)d->base + S3_BC_LC_OFF_STRONG;
+		}
+		if ((W)adc < lvl) {
+			if (++d->pend < S3_BC_SETTLE) return S3_EDGE_NONE;
+		} else {
+			d->pend = 0;
+			/* risen and then flat: the paper's edge or a darker
+			   patch, not a bar */
+			if (!((d->step_ok &&
+			       d->flat_n >= (UH)S3_MS(S3_BC_LC_STEP_MS) &&
+			       (W)d->ext - white < S3_BC_LC_STEP_MAX) ||
+			      (d->flat_n >= (UH)S3_MS(S3_BC_LC_STUCK_MS) &&
+			       amp < S3_BC_LC_STRONG))) {
+				return S3_EDGE_NONE;
+			}
+			d->white_q8 = (UW)adc << 8;	/* this is the surface now */
+		}
+		d->black   = FALSE;
+		d->pend    = 0;
+		d->white_n = 0;
+		d->ext     = adc;			/* the valley starts here */
+		d->sm_q4   = (UW)adc << 4;
+		det_thresholds(d);
+		return S3_EDGE_TO_WHITE;
+	}
+
+	if (d->white_n < 0xFFFFu) d->white_n++;
+	/* valley: a smoothed copy of the reading (one noisy sample does not
+	   pull it down), followed down at once and up slowly */
+	d->sm_q4 += (W)(((W)adc << 4) - (W)d->sm_q4) >> S3_BC_LC_VALLEY_SHIFT;
+	{
+		UH sm = (UH)(d->sm_q4 >> 4);
+
+		if (sm < d->ext) {
+			d->ext = sm;
+		} else if ((++d->leak & S3_BC_LC_LEAK_MASK) == 0 && d->ext < sm) {
+			d->ext++;
+		}
+	}
+	det_thresholds(d);
+	if ((W)adc > (W)d->ext + S3_BC_LC_RISE) {
+		if (++d->pend < S3_BC_SETTLE) return S3_EDGE_NONE;
+		d->pend     = 0;
+		d->black    = TRUE;
+		d->step_ok  = (UB)(d->white_n >= (UH)S3_MS(S3_BC_LC_STEP_GATE_MS));
+		d->base     = d->ext;
+		d->ext      = adc;
+		d->flat_ref = adc;
+		d->flat_n   = 0;
+		return S3_EDGE_TO_BLACK;
+	}
+	d->pend = 0;
+	if ((W)adc < white + S3_BC_LC_BAND) {
+		/* the floor's white, slowly: for the log and the step rule */
+		d->white_q8 += (W)(((W)adc << 8) - (W)d->white_q8)
+			       >> S3_BC_WHITE_SHIFT;
+	}
+	return S3_EDGE_NONE;
+}
+#else
 EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 {
 	if (d->black) {
@@ -837,6 +932,7 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 	}
 	return S3_EDGE_NONE;
 }
+#endif
 
 /* ------------------------------------------------------------------ */
 /*  Decoder state machine (task, one call per edge)                   */
@@ -1036,6 +1132,39 @@ EXPORT INT s3_bc_poll(S3_BC *bc, UH now, S3_BC_RESULT *res)
 		   inter-character gap is narrow, so it never gets here. */
 		if (!bc->black && bc->n >= 29 && (bc->n + 1) % 10 == 0 &&
 		    (W)quiet > 2 * (W)bc->run_max) {
+			return end_read(bc, now, res);
+		}
+		/* 12 Nov: the same, with the paper's edge after the barcode
+		   seen as one more "bar": either still black (one element
+		   too many, its space) or already ended (two too many).
+		   They are dropped here. */
+		if (bc->n >= 30 && (W)quiet > 2 * (W)bc->run_max &&
+		    ((bc->black && bc->n % 10 == 0) ||
+		     (!bc->black && (bc->n - 1) % 10 == 0))) {
+			if (bc->black) {
+				bc->n = (UB)(bc->n - 1);
+			} else {
+				/* 19 Nov (capture of the small 'Y', sheet darker
+				   than the mat): the two extra elements can also be
+				   the paper's edge BEFORE the barcode, when they
+				   happened to pass the '*' check with the first
+				   bar.  Keep the end that gives a whole barcode:
+				   the elements without the last two, else without
+				   the first two. */
+				char	t[8];
+				BOOL	r;
+				INT	i;
+
+				if (s3_code39_decode_rev(bc->elem, bc->n - 2, t,
+							 sizeof(t), &r) <= 0 &&
+				    s3_code39_decode_rev(bc->elem + 2, bc->n - 2, t,
+							 sizeof(t), &r) > 0) {
+					for (i = 0; i + 2 < bc->n; i++) {
+						bc->elem[i] = bc->elem[i + 2];
+					}
+				}
+				bc->n = (UB)(bc->n - 2);
+			}
 			return end_read(bc, now, res);
 		}
 		/* 4 Nov: a few elements, then nothing: a line, not a barcode */

@@ -236,6 +236,23 @@ LOCAL void feed_real_z(FEED *f, BOOL backwards)
 	}
 	feed_level(f, 172, S3_MS(600));
 }
+
+/* 12 Nov: the same barcode on a sheet that reads off counts darker
+   (+) or brighter (-) than its own recording, on a floor that reads
+   floor: floor, 60 ms of paper, the barcode, 60 ms of paper, floor */
+LOCAL void feed_real_z_on(FEED *f, UH floor, INT off, BOOL backwards)
+{
+	INT	i;
+
+	feed_level(f, floor, S3_MS(400));
+	feed_level(f, (UH)(172 + off), S3_MS(60));
+	for (i = 0; i < REAL_Z_N; i++) {
+		feed_level(f, (UH)(real_z[backwards ? REAL_Z_N - 1 - i : i] + off),
+			   S3_MS(2));
+	}
+	feed_level(f, (UH)(172 + off), S3_MS(60));
+	feed_level(f, floor, S3_MS(900));
+}
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -364,6 +381,67 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 		}
 		TEST_CHECK("S3-U29", ok == 2, "real faint small 'Z' trace decodes, both ways");
 	}
+
+	/* S3-U32 (12 Nov, log 20:54: the small barcode came out as 3
+	   merged elements, floor white 164): the same real 'Z' on a sheet
+	   that reads darker than the floor the robot learnt -- 20 counts
+	   (the gaps between bars stay above the old "white again" level)
+	   and 38 counts (the sheet itself looks like a bar: a step) -- still
+	   reads Z, both directions */
+	{
+		static const B	off[2] = { 12, 30 };	/* over a floor of 164: +20, +38 */
+		INT		k;
+
+		ok = 0;
+		for (k = 0; k < 4; k++) {
+			feed_init(&f);
+			s3_bc_det_init(&f.det, 164);
+			feed_real_z_on(&f, 164, off[k / 2], (BOOL)(k & 1));
+			ok += (f.nav == 1 && f.err == 0 && f.last.ch == 'Z');
+		}
+		TEST_CHECK("S3-U32", ok == 4,
+			   "real 'Z' on a sheet 20 / 38 counts darker than the floor reads");
+	}
+
+	/* S3-U33 (12 Nov): on a sheet 30 counts BRIGHTER than the floor
+	   the floor after the barcode looks like one more bar; it is
+	   dropped and Z is read once, both directions */
+	{
+		INT	k;
+
+		ok = 0;
+		for (k = 0; k < 2; k++) {
+			feed_init(&f);
+			s3_bc_det_init(&f.det, 172);
+			feed_real_z_on(&f, 172, -30, (BOOL)k);
+			ok += (f.nav == 1 && f.err == 0 && f.last.ch == 'Z');
+		}
+		TEST_CHECK("S3-U33", ok == 2,
+			   "real 'Z' on a sheet 30 counts brighter than the floor reads");
+	}
+
+	/* S3-U34 (19 Nov, capture of the small 'Y' on a darker sheet): the
+	   paper's edge BEFORE the barcode came out as two elements (40 ms
+	   black, 137.5 ms white) that, with the first bar, passed the '*'
+	   check; 31 elements in all.  The two extra are dropped from the
+	   start, not the end, and Y is read.  Element widths in 0.1 ms
+	   from the real read (bc49, 17:39). */
+	{
+		static const UH	w01[31] = {
+			400, 1375,
+			255, 320, 775, 335, 762, 332, 222, 850, 290, 317,
+			232, 347, 225, 345, 820, 325, 220, 852, 800, 237,
+			200, 325, 805, 310, 785, 332, 217, 832, 245
+		};
+		UH	wt[31];
+
+		for (i = 0; i < 31; i++) wt[i] = (UH)((w01[i] * S3_MS(1) + 5) / 10);
+		feed_init(&f);
+		feed_level(&f, T_WHITE, S3_MS(50));
+		feed_elements(&f, wt, 31, 2000);
+		TEST_CHECK("S3-U34", f.nav == 1 && f.err == 0 && f.last.ch == 'Y',
+			   "paper edge before the barcode: dropped from the start, 'Y' read");
+	}
 #endif
 
 	/* S3-U05: 20 reads of every letter A..Z with +-25 % width noise */
@@ -462,6 +540,61 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 	TEST_CHECK("S3-U16", ok && f.nav == 1 && f.last.ch == 'Z',
 		   "bc_ring overflow discards that barcode only (8.3)");
 
+#if S3_BC_LOW_CONTRAST
+	/* S3-U17 (12 Nov, low-contrast mode): each bar is measured against
+	   the white next to it.
+	   - noise below S3_BC_LC_RISE is no bar; a spike shorter than
+	     S3_BC_SETTLE is no bar;
+	   - a faint bar ends once it has fallen S3_BC_LC_FALL_PCT % of its
+	     own height, not earlier;
+	   - a strong bar ends only back near the white it rose from;
+	   - the white follows a darker surface, so bars are still seen;
+	   - a rise that stays flat (the paper's edge) ends by itself and
+	     a bar on top of it is seen. */
+	s3_bc_det_init(&f.det, T_WHITE);
+	ok = 0;
+	for (i = 0; i < 100; i++) {		/* +-noise under the rise */
+		ok += (s3_bc_detect(&f.det, (UH)(T_WHITE + ((i & 1) ? S3_BC_LC_RISE - 4 : 0)))
+		       != S3_EDGE_NONE);
+	}
+	for (i = 0; i < S3_BC_SETTLE - 1; i++) {	/* a short spike */
+		ok += (s3_bc_detect(&f.det, T_BLACK) != S3_EDGE_NONE);
+	}
+	ok += (det_hold(&f.det, T_WHITE) != S3_EDGE_NONE);
+	/* faint bar, 100 high: white again below ~40 % of it */
+	ok += (det_hold(&f.det, T_WHITE + 100) != S3_EDGE_TO_BLACK);
+	ok += (det_hold(&f.det, T_WHITE + 60) != S3_EDGE_NONE);
+	ok += (det_hold(&f.det, T_WHITE + 25) != S3_EDGE_TO_WHITE);
+	/* strong bar: its tail (well below the peak, still above the
+	   white) is part of it */
+	feed_level(&f, T_WHITE, S3_MS(50));
+	ok += (det_hold(&f.det, T_BLACK) != S3_EDGE_TO_BLACK);
+	ok += (det_hold(&f.det, T_WHITE + S3_BC_LC_OFF_STRONG + 40) != S3_EDGE_NONE);
+	ok += (det_hold(&f.det, T_WHITE + S3_BC_LC_OFF_STRONG - 15) != S3_EDGE_TO_WHITE);
+	/* the surface gets 30 darker over 3 s: no bar, and a faint bar on
+	   it is still seen */
+	for (i = 0; i < S3_MS(3000); i++) {
+		ok += (s3_bc_detect(&f.det, (UH)(T_WHITE + 30 * i / S3_MS(3000)))
+		       != S3_EDGE_NONE);
+	}
+	ok += (det_hold(&f.det, T_WHITE + 30 + S3_BC_LC_RISE - 6) != S3_EDGE_NONE);
+	ok += (det_hold(&f.det, T_WHITE + 30 + 60) != S3_EDGE_TO_BLACK);
+	ok += (det_hold(&f.det, T_WHITE + 30) != S3_EDGE_TO_WHITE);
+	/* a step of 35 after a long white: black, then white again by
+	   itself within S3_BC_LC_STEP_MS (+ settle), then a bar on it */
+	feed_level(&f, T_WHITE + 30, S3_MS(S3_BC_LC_STEP_GATE_MS + 50));
+	ok += (det_hold(&f.det, T_WHITE + 65) != S3_EDGE_TO_BLACK);
+	{
+		INT e = S3_EDGE_NONE, k;
+
+		for (k = 0; k < (INT)S3_MS(S3_BC_LC_STEP_MS + 5) && e == S3_EDGE_NONE; k++) {
+			e = s3_bc_detect(&f.det, T_WHITE + 65);
+		}
+		ok += (e != S3_EDGE_TO_WHITE);
+	}
+	ok += (det_hold(&f.det, T_WHITE + 65 + 60) != S3_EDGE_TO_BLACK);
+	ok += (det_hold(&f.det, T_WHITE + 65) != S3_EDGE_TO_WHITE);
+#else
 	/* S3-U17: edge detector: hysteresis ignores noise around the
 	   threshold, and the white baseline follows a slow lighting change
 	   so bars are still seen */
@@ -497,6 +630,7 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 		ok += (s3_bc_detect(&f.det, T_WHITE) != S3_EDGE_NONE);
 	}
 	ok += (s3_bc_detect(&f.det, T_BLACK) != S3_EDGE_NONE);	/* still black */
+#endif
 #endif
 	TEST_CHECK("S3-U17", ok == 0,
 		   "edge detector: hysteresis, white baseline follows light");
