@@ -187,7 +187,7 @@
    2 x sideways distance + VC_REJOIN_EXTRA_CM (a curve may have moved
    the line further away), and if the line is still not found a normal
    LINE_SEARCH follows instead of waiting for Obstacle Scan's time-out. */
-#define VC_REJOIN_TURN_DEG	60
+/* VC_REJOIN_TURN_DEG: below, after VC_BYPASS_BOX (19 Nov) */
 /* 30 Oct: when the line is found after the obstacle the robot no longer
    turns a fixed VC_REJOIN_TURN_DEG back: it brings the axle onto the
    line and turns towards the bypass side until the line sensors find
@@ -214,8 +214,44 @@
    90 as before.  0 = the team's 90-degree path, exactly as on d4cd515.
    The rejoin (VC_REJOIN_TURN_DEG, approach, LINE_SEARCH) is the same
    either way. */
-#define VC_BYPASS_SMOOTH	1
+#define VC_BYPASS_SMOOTH	0	/* 19 Nov: 0; VC_BYPASS_BOX (below) has its own angle */
 #define VC_BYPASS_CORNER_CM	5	/* extra room at the near corner */
+/* 19 Nov: out - past - back path (the demo asks for it, like the other
+   groups' robots), its angle set by the obstacle (vc_plan.c):
+	1. TURN a to the clear side, a = 45..90 real: steeper for a
+	   wider (or nearer) obstacle -- just enough for the diagonal to
+	   miss its near corner by half the robot + margin +
+	   VC_BYPASS_CORNER_CM
+	2. MOVE the diagonal: lat / sin a sideways-out,
+	   lat = obstacle edge + half the robot + margin + EXTRA
+	3. TURN a back, parallel to the line
+	4. MOVE past the obstacle (depth = measured width)
+	5. TURN a towards the line
+	REJOIN_LINE: drive at a towards the line until the sensors see it,
+	bring the axle onto it (VC_REJOIN_ADV_MM), turn back along it until
+	the sensors are on it again, follow.
+   The robot rejoins on the far side of the obstacle.  0 = the path of
+   16 Nov (last turn VC_REJOIN_TURN_DEG = 60 commanded). */
+#define VC_BYPASS_BOX		1
+#if VC_BYPASS_BOX
+/* REJOIN_LINE works from the angle of this bypass (task_vc.c byp_deg) */
+#define VC_REJOIN_TURN_DEG	VC_BYPASS_TURN_CMD(90)	/* unused */
+#else
+#define VC_REJOIN_TURN_DEG	60
+#endif
+/* At an angle to the line, the IR sensors see it this far (along the
+   heading) before the axle is over it: the same advance as a
+   LEFT/RIGHT at a junction */
+#define VC_REJOIN_ADV_MM	VC_NAV_ADV_MM
+/* Turn back along the line: at most the bypass angle + this (real),
+   stopped as soon as the sensors are on the line */
+#define VC_REJOIN_ALIGN_EXTRA_DEG	30
+/* 19 Nov: the scan's width comes out short for small, near obstacles
+   (its beam trim: a 9 cm bottle at 19 cm reads 3 cm), so the bypass
+   takes at least VC_WIDTH_MIN_CM, + VC_WIDTH_PAD_CM (a few cm more
+   room, never less) */
+#define VC_WIDTH_MIN_CM		10
+#define VC_WIDTH_PAD_CM		4
 /* 12 Nov: the bypass, rejoin-approach and reverse distances are
    planned in cm from the ultrasonic (real cm) with the margins above,
    all tuned while the robot drove only 0.53 of every distance.  To
@@ -249,8 +285,17 @@
    (S5_WIDTH_BAND_CM) and the depth is capped at 15 cm.  The rejoin turn (VC_REJOIN_TURN_DEG) and the reverse stay
    as tuned either way. */
 #define VC_BYPASS_BY_WIDTH	1
+#if VC_BYPASS_BOX
+/* 19 Nov: the robot turns back towards the line just past the back
+   face, so an obstacle deeper than assumed would be hit there.  Depth =
+   measured width (+ VC_WIDTH_PAD_CM), 15..25 cm
+   (15: the 13 x 10 cm demo box seen from its 10 cm face is 13 deep). */
+#define VC_DEPTH_MIN_CM		15
+#define VC_DEPTH_MAX_CM		25
+#else
 #define VC_DEPTH_MIN_CM		5
 #define VC_DEPTH_MAX_CM		15	/* 16 Nov: was 30 (drove too far past a cup) */
+#endif
 #define VC_BYPASS_MOVE_MAX_CM	100	/* S2 distance field: +-1023 mm */
 #define VC_BYPASS_MM(cm)	((INT)(cm) * 10)
 /* A TURN a turns only ~0.63 a on the mat (S2_TRACK_X10_MM, 12 Nov:
@@ -424,9 +469,14 @@ IMPORT UINT	vc_map_nav(char letter);
 
 /* Bypass round the obstacle on one side, from Obstacle Scan's profile:
    turn out, sideways, turn back, past it, turn towards the line.
-   *lat_cm gets the sideways distance (the approach uses it).
+   *lat_cm gets the sideways distance, *deg the turn angle (real degrees;
+   the rejoin uses both).
    16 Nov: with VC_BYPASS_BY_WIDTH, sized by the obstacle's width. */
-IMPORT INT	vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm);
+IMPORT INT	vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm, INT *deg);
+#if VC_BYPASS_BOX
+/* 19 Nov: longest drive towards the line, at deg, after the bypass */
+IMPORT INT	vc_rejoin_approach_cm(INT lat, INT deg);
+#endif
 
 /* Relative angle of LINE_SEARCH sweep i (0..), first towards 'side' */
 IMPORT INT	vc_search_turn(UINT i, INT side);

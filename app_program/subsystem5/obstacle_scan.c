@@ -200,6 +200,7 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 	BOOL unknown = FALSE, near = FALSE, foreground_known = TRUE;
 	INT ox = 0;
 	BOOL have_ox = FALSE;
+	UB floor_free[S5_SCAN_BYTES];		/* 19 Nov: scan without the floor */
 	for (i = 0; i < S5_ANGLES; i++) {
 		r = s5_scan_get(scan, i);
 		if (r == S5_RANGE_NEAR) near = TRUE;
@@ -210,6 +211,24 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 			if (px < 0) px = -px;
 			if ((UINT)px <= required_width_mm() / 2u) path = r;
 		}
+	}
+	/* 19 Nov: obstacle nearer than the floor echoes: those are floor --
+	 * not part of the obstacle (width, edges) and open space beside it
+	 * (side clearance).  Without this the real 20 cm box at 19 cm, with
+	 * the floor at 23 cm on both sides, filled the whole sweep: 0 cm
+	 * free either side, REVERSE, until the rescans ran out (FAULT). */
+	if (closest < S5_FLOOR_MIN_CM) {
+		/* a face 21-22 cm away reads up to 2 cm more off its middle:
+		   that is still the obstacle, not floor */
+		UINT floor_from = closest + 2u > S5_FLOOR_MIN_CM ? closest + 2u
+								  : S5_FLOOR_MIN_CM;
+		for (i = 0; i < S5_SCAN_BYTES; i++) floor_free[i] = scan[i];
+		for (i = 0; i < S5_ANGLES; i++) {
+			r = s5_scan_get(floor_free, i);
+			if (measured(r) && r >= floor_from && r <= S5_FLOOR_MAX_CM)
+				s5_scan_set(floor_free, i, S5_RANGE_FAR);
+		}
+		scan = floor_free;
 	}
 	lo = hi = nearest_i;
 	if (!near && !unknown && closest > S5_DETECT_CM && path > S5_PLAN_CM) {
@@ -263,8 +282,12 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 				      -xmin);
 		right = side_clearance(scan, lo, FALSE, closest + S5_PROFILE_BAND_CM,
 				       xmax);
-		/* All measured bearings must clear the in-place turning envelope. */
-		if (foreground_known && closest * 10u > turn_radius_mm()) {
+		/* All measured bearings must clear the in-place turning envelope.
+		 * 19 Nov: measured from the axle, which is S5_SENSOR_AHEAD_MM
+		 * behind the sensor (was from the sensor: a 16 cm stop said
+		 * REVERSE with the robot's corners ~6 cm clear of the box). */
+		if (foreground_known &&
+		    closest * 10u + S5_SENSOR_AHEAD_MM > turn_radius_mm()) {
 			if (left >= required_width_mm() || right >= required_width_mm()) {
 				action = left >= right ? S5_ACT_LEFT : S5_ACT_RIGHT;
 				valid = 1;

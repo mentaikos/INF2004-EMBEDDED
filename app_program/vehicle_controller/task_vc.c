@@ -95,6 +95,13 @@ LOCAL S5_PROFILE	plan_profile;	/* profile of the approved plan */
 LOCAL B			rescan_turn;	/* rescan turns so far for this obstacle, deg (+ = right) */
 LOCAL H			look_h;		/* REJOIN_LINE: heading, deg from the approach
 					   heading (+ = right), from the TURNs done */
+LOCAL H			byp_deg = 90;	/* 19 Nov: real turn angle of the bypass in
+					   progress (vc_bypass_script) */
+#if VC_BYPASS_BOX
+#define VC_REJOIN_CMD	VC_BYPASS_TURN_CMD(byp_deg)	/* track off the approach */
+#else
+#define VC_REJOIN_CMD	VC_REJOIN_TURN_DEG
+#endif
 LOCAL VC_DIAG		dg;
 
 /* Phases inside OBSTACLE_SCAN */
@@ -432,8 +439,8 @@ LOCAL void rejoin_follow(INT dir)	/* turn: +1 right, -1 left */
 		vc.rejoin_tries = 0;
 		/* heading from the approach heading: parallel to the track
 		   on step 3, half way round the last turn on step 4 */
-		look_h = (H)((script_idx >= 4 ? VC_REJOIN_TURN_DEG / 2 :
-			      VC_REJOIN_TURN_DEG) * (vc.side_right ? 1 : -1));
+		look_h = (H)((script_idx >= 4 ? VC_REJOIN_CMD / 2 :
+			      VC_REJOIN_CMD) * (vc.side_right ? 1 : -1));
 	}
 	/* 30 Oct: line under the sensors, at an unknown angle (a curve may
 	   have brought it here).  Bring the axle onto it, then turn towards
@@ -441,9 +448,19 @@ LOCAL void rejoin_follow(INT dir)	/* turn: +1 right, -1 left */
 	   sensors find it again (tick, PH_REALIGN), and follow from there.
 	   A fixed turn back to the original heading drove off a curved line
 	   (video IMG_0771).  VC_ALIGN_MAX_DEG without the line: search. */
+#if VC_BYPASS_BOX
+	/* 19 Nov: box path: the line is met square, like a junction turn --
+	   axle onto it (VC_REJOIN_ADV_MM), then a real 90 or so back along
+	   it, stopped by the sensors */
+	t[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_REJOIN_ADV_MM);
+	t[1] = S2_CMD_PACK(S2_CMD_TURN, VC_ALIGN_MM_S,
+			   dir > 0 ? VC_BYPASS_TURN_CMD(byp_deg + VC_REJOIN_ALIGN_EXTRA_DEG)
+				   : VC_BYPASS_TURN_CMD(-(byp_deg + VC_REJOIN_ALIGN_EXTRA_DEG)), 0);
+#else
 	t[0] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_JUNCTION_ADV_MM);
 	t[1] = S2_CMD_PACK(S2_CMD_TURN, VC_ALIGN_MM_S,
 			   dir > 0 ? VC_ALIGN_MAX_DEG : -VC_ALIGN_MAX_DEG, 0);
+#endif
 	vc.phase = PH_REALIGN;
 	vc.align_white = 0;
 	script_run(t, 2);			/* pre-empts the TURN / MOVE */
@@ -513,7 +530,7 @@ LOCAL void look_found(void)
 		h += s2_cmd_angle(script[script_idx]) / 2;
 	}
 	look_h = (H)norm180(h);
-	t = norm180(VC_REJOIN_TURN_DEG * (vc.side_right ? 1 : -1) - look_h);
+	t = norm180(VC_REJOIN_CMD * (vc.side_right ? 1 : -1) - look_h);
 	if (t <= VC_REJOIN_ALONG_DEG && t >= -VC_REJOIN_ALONG_DEG) {
 		script_clear();
 		vc.phase = PH_CONFIRM;
@@ -693,7 +710,12 @@ LOCAL void script_done(void)
 		   is longer than lat, and on a curve the line may be further */
 		s5_rejoin_line();
 		{
+#if VC_BYPASS_BOX
+			/* 19 Nov: square to the line, lat cm away */
+			INT d = vc_rejoin_approach_cm(vc.lat_cm, byp_deg);
+#else
 			INT d = 2 * (INT)vc.lat_cm + VC_REJOIN_EXTRA_CM;
+#endif
 #if VC_BYPASS_BY_WIDTH
 			/* 16 Nov: the bypass went out lat real cm */
 			if (d > VC_BYPASS_MOVE_MAX_CM) d = VC_BYPASS_MOVE_MAX_CM;
@@ -1152,7 +1174,7 @@ LOCAL void tick(void)
 	UINT	st = vc.state;
 	UW	s5, ms = motion_get_status();
 	UW	c[VC_SCRIPT_MAX];
-	INT	n, lat;
+	INT	n, lat, deg = 90;
 
 	/* 12 Nov: robot lifted or overturned (S4): the end-of-run signal
 	   in the demo.  S4 has set E-STOP, so Motion is already braking;
@@ -1352,7 +1374,8 @@ LOCAL void tick(void)
 			if (s5_sts_state(s5) == S5_ST_BYPASSING) {
 				vc.rescans = 0;		/* plan taken */
 				n = vc_bypass_script(plan_profile,
-						     vc.side_right ? 1 : -1, c, &lat);
+						     vc.side_right ? 1 : -1, c, &lat, &deg);
+				byp_deg = (H)deg;
 				vc.lat_cm = (B)lat;
 				/* Rescan turns (rescan_turn) left the robot at an
 				   angle to the line: the last bypass turn also
@@ -1367,11 +1390,12 @@ LOCAL void tick(void)
 				}
 				/* 16 Nov: what was measured, then the path */
 				tm_printf((UB*)"vc: obstacle %d cm wide, %d cm ahead"
-					  " (closest x %d, y %d cm) -> sideways %d cm\n",
+					  " (closest x %d, y %d cm) -> sideways %d cm,"
+					  " turns of %d deg\n",
 					  (INT)s5_profile_width(plan_profile),
 					  (INT)s5_profile_closest(plan_profile),
 					  s5_profile_x(plan_profile),
-					  (INT)s5_profile_y(plan_profile), lat);
+					  (INT)s5_profile_y(plan_profile), lat, deg);
 				tm_printf((UB*)"vc: bypass %s: out %d, %d mm, back %d,"
 					  " past %d mm, to the line %d (TURN cmds)\n",
 					  vc.side_right ? "RIGHT" : "LEFT",

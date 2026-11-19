@@ -21,10 +21,30 @@
 #define S5_RANGE_UNSCANNED     3
 #define S5_RANGE_MIN_CM        5
 #define S5_RANGE_MAX_CM        100
-#define S5_DETECT_CM           25       /* 28 Oct: was 20; the robot coasted to
+#define S5_DETECT_CM           21       /* 28 Oct: was 20; the robot coasted to
 					   ~16 cm, inside its own turning circle
 					   (16.8 cm), so every first scan said
-					   REVERSE */
+					   REVERSE.  19 Nov: 21 again -- at 25 it
+					   stopped ~20-23 cm away, in the floor
+					   echoes (S5_FLOOR_MIN_CM), and the floor
+					   was taken as obstacle all round: REVERSE
+					   with both sides open.  The turning check
+					   now counts S5_SENSOR_AHEAD_MM, so the
+					   ~16 cm stop is no longer "too close". */
+/* 19 Nov: the sensor is tilted down and hears the floor 23-32 cm away
+ * at most bearings (real scans: open floor 29-30 cm all round, rings at
+ * 23-29 cm).  With the obstacle nearer than that, readings in this
+ * band are floor: not part of the obstacle, open space beside it. */
+#define S5_FLOOR_MIN_CM        23
+#define S5_FLOOR_MAX_CM        32
+/* 19 Nov: the sensor is this far ahead of the axle the robot turns
+ * about (placeholder robot: ~10 cm; 5 cm assumed), so an obstacle at
+ * range r is at least r + this from the turning centre. */
+#define S5_SENSOR_AHEAD_MM     50
+/* 19 Nov: during a scan, the robot counts as stopped unless Motion is
+ * driving or the odometer has moved more than this (task_scan.c): one
+ * encoder tick from a settling wheel used to abort every scan. */
+#define S5_SCAN_DRIFT_MM       15
 /* After a stop, an obstacle IN THE ROBOT'S PATH (within half the required
  * width of the centre line) this close is planned around, not driven
  * into: without this, the rescan after a 10 cm reverse saw it beyond

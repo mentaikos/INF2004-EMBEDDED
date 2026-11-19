@@ -91,6 +91,7 @@ LOCAL INT vc_cos1000(INT deg)
 	return s * (INT)cos1000[(deg + 2) / 5];
 }
 
+#if !VC_BYPASS_BOX
 /* How far the obstacle reaches sideways on the bypass side, cm from the
    robot's centre line (30 Oct).  Was x + width: the whole visible width
    added to the closest point, which counts the obstacle twice when the
@@ -121,6 +122,7 @@ LOCAL INT vc_edge_cm(S5_PROFILE p, INT side)
 	if (side < 0) e = -e;
 	return (e < old) ? e : old;
 }
+#endif
 
 /* Smallest of 45, 50, ... 90 whose diagonal is 'need' cm sideways by the
    time it is 'ahead' cm forward: tan(a) >= need / ahead */
@@ -135,7 +137,95 @@ LOCAL INT vc_out_deg(INT need, INT ahead)
 	return 90;
 }
 
-EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm)
+#if VC_BYPASS_BOX
+/*
+ * 19 Nov: out - past - back path, its angle set by the obstacle
+ * (vehicle_controller.h, VC_BYPASS_BOX).  Real cm, real degrees, the
+ * robot turning on the spot about its axle, half a robot length (hl)
+ * behind the sensor.  w = measured width, at least VC_WIDTH_MIN_CM,
+ * + VC_WIDTH_PAD_CM; edge = x * side + w / 2 (x = its centre, + right).
+ *
+ *	1. TURN a out, a = the smallest of 45..90 whose diagonal is
+ *	   edge + half + margin + VC_BYPASS_CORNER_CM to the side by the
+ *	   time it reaches the obstacle (y ahead): a wide or near obstacle
+ *	   turns out more steeply, a narrow or far one less
+ *	2. MOVE lat / sin a,  lat = edge + half + margin + EXTRA
+ *	3. TURN a back, parallel to the line
+ *	4. MOVE past the obstacle (depth = w, VC_DEPTH_MIN..MAX_CM) until
+ *	   a diagonal back at the same angle misses its back corner by
+ *	   half + margin + VC_PASS_MARGIN_CM (and a corner's swing,
+ *	   sqrt(half^2 + hl^2), turning there)
+ *	5. TURN a towards the line
+ * REJOIN_LINE: drive at a towards the line (vc_rejoin_approach_cm)
+ * until the sensors see it, axle onto it, turn back along it.  *deg
+ * gets a, for that.
+ */
+LOCAL INT vc_isqrt(INT v)
+{
+	INT	r = 0;
+
+	while ((r + 1) * (r + 1) <= v) r++;
+	return r;
+}
+
+EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm, INT *deg)
+{
+	INT	x = s5_profile_x(p);
+	INT	w = (INT)s5_profile_width(p);
+	INT	y = (INT)s5_profile_y(p);
+	INT	half = (S5_ROBOT_WIDTH_MM + 19) / 20;		/* cm, rounded up */
+	INT	hl = (S5_ROBOT_LENGTH_MM + 19) / 20;
+	INT	margin = S5_CLEARANCE_MARGIN_MM / 10;
+	INT	corner, edge, lat, depth, a, sa, ca, diag, out_fwd, g, q, past;
+
+	side = (side < 0) ? -1 : 1;
+	if (w < VC_WIDTH_MIN_CM) w = VC_WIDTH_MIN_CM;
+	w += VC_WIDTH_PAD_CM;
+	edge = x * side + (w + 1) / 2;
+	if (edge < 0) edge = 0;
+	lat = vc_clamp(edge + half + margin + VC_BYPASS_EXTRA_CM,
+		       half + margin, VC_BYPASS_MAX_CM);
+	depth = vc_clamp(w, VC_DEPTH_MIN_CM, VC_DEPTH_MAX_CM);
+	corner = vc_isqrt(half * half + hl * hl) + 1;
+
+	a = vc_out_deg(edge + half + margin + VC_BYPASS_CORNER_CM, y);
+	sa = vc_sin1000(a);
+	ca = vc_cos1000(a);
+	diag = (lat * 1000 + sa - 1) / sa;
+	out_fwd = lat * ca / sa;
+
+	/* back corner relative to the pivot: g sideways, q behind */
+	g = lat - edge;
+	for (q = 0; q < 100; q++) {
+		if (g * ca + q * sa >= (half + margin + VC_PASS_MARGIN_CM) * 1000 &&
+		    g * g + q * q >= (corner + margin) * (corner + margin)) break;
+	}
+	past = hl + y + depth + q - out_fwd;
+
+	diag = vc_clamp(diag, 1, VC_BYPASS_MOVE_MAX_CM);
+	past = vc_clamp(past, 1, VC_BYPASS_MOVE_MAX_CM);
+	cmds[0] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, VC_BYPASS_TURN_CMD(a * side), 0);
+	cmds[1] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_BYPASS_MM(diag));
+	cmds[2] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, VC_BYPASS_TURN_CMD(-a * side), 0);
+	cmds[3] = S2_CMD_PACK(S2_CMD_MOVE_DIST, VC_SLOW_MM_S, 0, VC_BYPASS_MM(past));
+	cmds[4] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, VC_BYPASS_TURN_CMD(-a * side), 0);
+	if (lat_cm != NULL) *lat_cm = lat;
+	if (deg != NULL) *deg = a;
+	return 5;
+}
+
+/* At a degrees, the line lat cm to the side is lat / sin a ahead; + half
+   lat in case a curve moved it, + VC_REJOIN_EXTRA_CM.  The drive stops
+   when the sensors see the line. */
+EXPORT INT vc_rejoin_approach_cm(INT lat, INT deg)
+{
+	INT	s = vc_sin1000(deg);
+	INT	d = (lat * 1000 + s - 1) / s + lat / 2 + VC_REJOIN_EXTRA_CM;
+
+	return (d > VC_BYPASS_MOVE_MAX_CM) ? VC_BYPASS_MOVE_MAX_CM : d;
+}
+#else
+EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm, INT *deg)
 {
 	INT	x = s5_profile_x(p);
 	INT	w = (INT)s5_profile_width(p);
@@ -202,8 +292,10 @@ EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm)
 #endif
 	cmds[4] = S2_CMD_PACK(S2_CMD_TURN, VC_TURN_MM_S, -VC_REJOIN_TURN_DEG * side, 0);
 	if (lat_cm != NULL) *lat_cm = lat;
+	if (deg != NULL) *deg = a;
 	return 5;
 }
+#endif /* VC_BYPASS_BOX */
 
 /* Heading after sweep i: +30, -30, +60, -60, +90, -90 (first towards
    side), so each relative turn is +-30 * (i + 1), alternating. */

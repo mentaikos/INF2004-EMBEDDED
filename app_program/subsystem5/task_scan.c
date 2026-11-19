@@ -20,10 +20,38 @@ LOCAL UH now_ms(void)
 	return (UH)now.lo;
 }
 
+/* 19 Nov: "stopped" while a scan is in progress.  Motion's stopped bit
+ * drops on a single encoder tick (a wheel settling after the brake, or
+ * the servo's swing rocking the robot): the scan was thrown away after
+ * its coarse pass, every time, and reported NO_CLEAR -- three reverses,
+ * then FAULT, without the sides ever being looked at (19 Nov log).
+ * Once a scan has started (it starts only on the strict bit), it is
+ * aborted only if Motion is driving again or the robot has really moved
+ * (S5_SCAN_DRIFT_MM on the odometer). */
+LOCAL BOOL scan_hold;                   /* a scan is in progress */
+LOCAL UW scan_dist0;                    /* odometer when it started */
+
+LOCAL UINT robot_stopped(void)
+{
+	UW w = motion_get_status();
+	INT d;
+	if (!scan_hold) return s2_sts_stopped(w);
+	d = s2_dist_diff(scan_dist0, s2_sts_dist(w));
+	if (d < 0) d = -d;
+	return (s2_sts_state(w) == S2_ST_STOPPED && d <= S5_SCAN_DRIFT_MM) ? 1u : 0u;
+}
+
+LOCAL void track_scan(const S5_SCAN *s)
+{
+	BOOL on = s->state == S5_ST_COARSE_SCAN || s->state == S5_ST_FINE_SCAN;
+	if (on && !scan_hold) scan_dist0 = s2_sts_dist(motion_get_status());
+	scan_hold = on;
+}
+
 LOCAL void motion_inputs(S5_INPUT *in)
 {
 	T_RFLG safety;
-	in->stopped = s2_sts_stopped(motion_get_status());
+	in->stopped = robot_stopped();
 	in->estop = tk_ref_flg(flg_safety, &safety) != E_OK ||
 		(safety.flgptn & S2_FLG_ESTOP) != 0;
 }
@@ -279,6 +307,7 @@ EXPORT void s5_scan_task(INT stacd, void *exinf)
 		if (tk_can_wup(TSK_SELF) > 0) overruns++; /* no catch-up ping bursts */
 		inputs(&in);
 		s5_scan_tick(&scan, &in, &out);
+		track_scan(&scan);
 		deliver(&out, &scan, &drops, overruns);
 		/* Following the line: look into the bend (curves) */
 		if (scan.state == S5_ST_FORWARD_WATCH)
@@ -310,9 +339,10 @@ EXPORT void s5_scan_task(INT stacd, void *exinf)
 				pinged = TRUE;
 				range = drv_us_ping();
 				in.now_ms = now_ms();
-				in.stopped = s2_sts_stopped(motion_get_status());
+				in.stopped = robot_stopped();
 				s5_scan_sample(&scan, &in, range, &out);
 			}
+			track_scan(&scan);
 			deliver(&out, &scan, &drops, overruns);
 			/* Start the next servo movement while waiting for the next cyclic
 			 * release: a settled 5-degree step then needs only one 60-ms slot. */
