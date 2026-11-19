@@ -38,7 +38,11 @@ Bit layouts match app_program/subsystem1/s1_codec.h (MSB-first, 4-bit header:
         [12:2]  word 1: [4:0] hump mm, [8:5] hump count, [10:9] I2C fails
         [1] lifted / overturned (12 Nov)
         [0] spare, 0
-  B5  55 bits  Obstacle Scan           (not filled by the robot yet: shown raw)
+  B5  55 bits  Obstacle Scan           (subsystem5.h s5_tlm_slot)
+        [2:0] state, [5:3] plan action, [12:6] range now (0 near, 1 far,
+        2 no echo, else cm), [16:13] obstacles scanned (mod 16),
+        last obstacle: [23:17] closest cm, [31:24] width cm,
+        [39:32] centre x cm signed (+ right), [46:40] y cm
 Heartbeat, last 5 bits (4 Nov, were padding): last barcode letter decoded,
 0 = none, 1..26 = 'A'..'Z'.  A new read is seen from B3's counter, the
 letter from the next heartbeat (at most 1 s later).
@@ -210,6 +214,26 @@ def decode_b4(b4):
             "lifted": (b4 >> 1) & 1}
 
 
+S5_STATES = ["FORWARD_WATCH", "OBSTACLE_DETECTED", "COARSE_SCAN", "FINE_SCAN",
+             "PROFILE_PLAN", "BYPASSING", "LINE_RECOVERY", "SENSOR_FAULT"]
+S5_ACTIONS = ["STOP", "CONTINUE", "LEFT", "RIGHT", "REVERSE", "5", "6", "7"]
+
+
+def s5_range(code):
+    return {0: "under 5 cm", 1: "over 100 cm", 2: "no echo", 3: "-"}.get(code, f"{code} cm")
+
+
+def decode_b5(b5):
+    return {"state": S5_STATES[b5 & 7],
+            "action": S5_ACTIONS[(b5 >> 3) & 7],
+            "range": s5_range((b5 >> 6) & 0x7F),
+            "scans": (b5 >> 13) & 0xF,
+            "closest_cm": (b5 >> 17) & 0x7F,
+            "width_cm": (b5 >> 24) & 0xFF,
+            "x_cm": sext(b5 >> 32, 8),
+            "y_cm": (b5 >> 40) & 0x7F}
+
+
 def dist_diff(old_mm, new_mm):
     """Signed difference of two 12-bit wrapping distances, in mm."""
     return ((new_mm - old_mm + 2048) & 0xFFF) - 2048
@@ -376,7 +400,8 @@ class Robot:
             self.odo_mm += dist_diff(self.prev_dist, b2["dist_mm"])
         self.prev_dist = b2["dist_mm"]
         self.tlm = {"b2": b2, "b3": b3, "b4": decode_b4(d["b4"]),
-                    "b5": d["b5"], "wifi_loss": d["wifi_loss"],
+                    "b5": decode_b5(d["b5"]), "b5_raw": d["b5"],
+                    "wifi_loss": d["wifi_loss"],
                     "odo_cm": round(self.odo_mm / 10, 1)}
 
     def _meaning(self, letter):
@@ -768,7 +793,12 @@ dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; 
     <section class="card">
       <h2>Obstacle Scan (B5)</h2>
       <dl>
-        <dt>Raw</dt><dd id="o-raw">—</dd>
+        <dt>State</dt><dd id="o-state">—</dd>
+        <dt>Distance ahead</dt><dd id="o-range">—</dd>
+        <dt>Obstacle width</dt><dd id="o-width">—</dd>
+        <dt>Obstacle position</dt><dd id="o-pos">—</dd>
+        <dt>Way round</dt><dd id="o-act">—</dd>
+        <dt>Obstacles scanned</dt><dd id="o-scans">—</dd>
         <dt>Wi-Fi-loss bit</dt><dd id="o-wifi">—</dd>
       </dl>
     </section>
@@ -855,7 +885,14 @@ function render(s) {
     set("i-hump", t.b4.hump_mm + " mm (count " + t.b4.hump_count + ")");
     set("i-cal", t.b4.calibrated ? "yes" : "NO", !t.b4.calibrated);
     set("i-lifted", t.b4.lifted ? "LIFTED - motors stopped" : "no", t.b4.lifted); set("i-i2c", t.b4.i2c_fails);
-    set("o-raw", t.b5 === 0 ? "0 (not sent yet)" : "0x" + t.b5.toString(16));
+    const o = t.b5, seen = o.scans > 0 || o.width_cm > 0;
+    set("o-state", t.b5_raw === 0 ? "not sent yet" : o.state, o.state === "SENSOR_FAULT");
+    set("o-range", o.range);
+    set("o-width", seen ? o.width_cm + " cm" : "no obstacle yet");
+    set("o-pos", seen ? o.closest_cm + " cm away, centre " + signed(o.x_cm) + " cm (" +
+        (o.x_cm < 0 ? "left" : o.x_cm > 0 ? "right" : "ahead") + ")" : "—");
+    set("o-act", seen ? o.action : "—", o.action === "REVERSE");
+    set("o-scans", o.scans + (o.scans === 15 ? " (wraps at 16)" : ""));
     set("o-wifi", t.wifi_loss ? "1 (frame held during Wi-Fi loss)" : "0");
   }
   if (s.bc.letter) {
