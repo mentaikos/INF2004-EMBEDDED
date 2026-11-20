@@ -196,9 +196,18 @@ EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm, INT *
 
 	/* back corner relative to the pivot: g sideways, q behind */
 	g = lat - edge;
+	/* 20 Nov: q = how far past the back face the axle goes before the
+	   turn in.  On the diagonal back the robot's inner side passes the
+	   back corner at g cos a + q sin a - half: VC_REJOIN_GAP_CM is
+	   enough there (was margin + VC_PASS_MARGIN_CM = 6 cm, which drove
+	   too far past).  Turning on the spot, a corner sweeps 'corner' round
+	   the axle; it can only reach the obstacle's side if g is less than
+	   that + 2 cm, and only then must the back corner be outside it. */
 	for (q = 0; q < 100; q++) {
-		if (g * ca + q * sa >= (half + margin + VC_PASS_MARGIN_CM) * 1000 &&
-		    g * g + q * q >= (corner + margin) * (corner + margin)) break;
+		if (g * ca + q * sa < (half + VC_REJOIN_GAP_CM) * 1000) continue;
+		if (g < corner + 2 &&
+		    g * g + q * q < (corner + 2) * (corner + 2)) continue;
+		break;
 	}
 	past = hl + y + depth + q - out_fwd;
 

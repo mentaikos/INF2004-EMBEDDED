@@ -293,10 +293,19 @@
 #if VC_BYPASS_BOX
 /* 19 Nov: the robot turns back towards the line just past the back
    face, so an obstacle deeper than assumed would be hit there.  Depth =
-   measured width (+ VC_WIDTH_PAD_CM), 15..25 cm
-   (15: the 13 x 10 cm demo box seen from its 10 cm face is 13 deep). */
-#define VC_DEPTH_MIN_CM		15
-#define VC_DEPTH_MAX_CM		25
+   measured width (+ VC_WIDTH_PAD_CM), 13..25 cm
+   (13: the 13 x 10 cm demo box seen from its 10 cm face is 13 deep;
+   20 Nov: was 15, the robot drove too far past it). */
+#define VC_DEPTH_MIN_CM		13
+/* 20 Nov: on the diagonal back to the line, the robot's inner side
+   passes the obstacle's back corner this far away (was margin 3 +
+   VC_PASS_MARGIN_CM 3 = 6 cm: drove too far past before turning in) */
+#define VC_REJOIN_GAP_CM	3
+/* 20 Nov: was 25.  A flat box can read far too wide (15 x 10 cm read
+   24 cm: floor echoes at the same range), and the depth followed it, so
+   the robot drove ~12 cm too far before turning in.  The demo's
+   obstacles are up to ~15 cm deep: 18 leaves 3 cm to spare. */
+#define VC_DEPTH_MAX_CM		18
 #else
 #define VC_DEPTH_MIN_CM		5
 #define VC_DEPTH_MAX_CM		15	/* 16 Nov: was 30 (drove too far past a cup) */

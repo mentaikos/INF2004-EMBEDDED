@@ -82,14 +82,14 @@ EXPORT void vc_test(void)
 		   20 cm ahead: edge 7 -> out 7+8+3+4 = 22; near corner needs
 		   7+8+3+5 = 23 sideways within 20 -> tan 1.15 -> 50 deg;
 		   diagonal 22/sin50 = 29 (18 forward); past: back face at
-		   10+20+15 (depth min) = 45, + 6 for the diagonal back to miss
-		   it, - 18 = 33 cm */
+		   10+20+14 (depth = 10 + 4 pad) = 44, + 2 for the diagonal back to
+		   clear it by VC_REJOIN_GAP_CM (20 Nov), - 18 = 28 cm */
 		n = vc_bypass_script(p, 1, c, &lat, &deg);
 		ok = n == 5 && lat == 22 && deg == 50 &&
 		     is_cmd(c[0], S2_CMD_TURN, VC_BYPASS_TURN_CMD(50), 0) &&
 		     is_cmd(c[1], S2_CMD_MOVE_DIST, 0, VC_BYPASS_MM(29)) &&
 		     is_cmd(c[2], S2_CMD_TURN, VC_BYPASS_TURN_CMD(-50), 0) &&
-		     is_cmd(c[3], S2_CMD_MOVE_DIST, 0, VC_BYPASS_MM(33)) &&
+		     is_cmd(c[3], S2_CMD_MOVE_DIST, 0, VC_BYPASS_MM(28)) &&
 		     is_cmd(c[4], S2_CMD_TURN, VC_BYPASS_TURN_CMD(-50), 0);
 		n = vc_bypass_script(p, -1, c, &lat, &deg);
 		ok = ok && n == 5 && lat == 22 && deg == 50 &&
