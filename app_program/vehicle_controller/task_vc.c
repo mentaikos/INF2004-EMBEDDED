@@ -119,6 +119,14 @@ LOCAL VC_DIAG		dg;
    at once (vc_bypass_script: 0 turn out, 1 sideways, 2 turn back,
    3 past the obstacle, 4 turn towards the line).  Not earlier: on steps
    0..3 the robot is still beside the obstacle. */
+#if VC_BYPASS_BOX
+/* 20 Nov: never during the bypass script.  The obstacle is always on a
+   straight line, so the track is only met on the approach afterwards
+   (REJOIN_LINE); a line seen while going out, past or turning in is a
+   cross line or another part of the track, and following it was how the
+   robot ended up on the wrong line. */
+#define VC_BYPASS_FOLLOW_STEP	5
+#else
 #define VC_BYPASS_FOLLOW_STEP	3	/* 30 Oct: was 4.  On a curved track the
 					   line bends towards the bypass side and
 					   was crossed (and ignored) while driving
@@ -126,6 +134,7 @@ LOCAL VC_DIAG		dg;
 					   IMG_0771.  Once the robot is straight
 					   again beside the obstacle, a line under
 					   the sensors cannot lead into it. */
+#endif
 
 LOCAL const char *const st_name[] = {
 	"INIT", "IDLE", "STARTING", "LINE_FOLLOW", "EXECUTE_NAV_CMD",
@@ -216,6 +225,14 @@ LOCAL void script_clear(void)
 	script_len = script_idx = 0;
 }
 
+/* 20 Nov: odometer (mm) when the current script step started, for the
+   bypass / rejoin step log (EVT_MOTION_DONE) */
+LOCAL UH	step_dist0;
+/* 20 Nov: REJOIN_LINE approach: a line nearer than this (mm) is not the
+   track; logged once per approach */
+LOCAL INT	rejoin_min_mm;
+LOCAL UB	rejoin_early_logged;
+
 LOCAL void script_run(const UW *c, INT n)
 {
 	INT	i;
@@ -224,6 +241,7 @@ LOCAL void script_run(const UW *c, INT n)
 	script_len = (UB)i;
 	script_idx = 0;
 	t_step = now_ms();
+	step_dist0 = (UH)s2_sts_dist(motion_get_status());	/* 20 Nov: step log */
 	if (script_len > 0) cmd(script[0]);
 }
 
@@ -729,6 +747,15 @@ LOCAL void script_done(void)
 		vc.phase = PH_APPROACH;
 		vc.rejoin_tries = 0;
 		look_h = 0;			/* facing the approach heading */
+#if VC_BYPASS_BOX
+		/* 20 Nov: lines nearer than this on the approach are not the
+		   track (tick, REJOIN_LINE) */
+		rejoin_min_mm = VC_BYPASS_MM(vc_rejoin_expect_cm(vc.lat_cm, byp_deg)) *
+				VC_REJOIN_MIN_PCT / 100;
+		rejoin_early_logged = 0;
+		tm_printf((UB*)"vc: to the line: track expected ~%d mm ahead\n",
+			  VC_BYPASS_MM(vc_rejoin_expect_cm(vc.lat_cm, byp_deg)));
+#endif
 		script_run(&c, 1);
 		break;
 
@@ -1083,6 +1110,24 @@ LOCAL void handle_event(UW w)
 				uturn_step = 2;	/* no compass: first TURN was the blind one */
 			}
 		}
+		/* 20 Nov: bypass / rejoin step log, to find where a bypass
+		   goes wrong: what was asked, how far the wheels really went,
+		   and the compass heading (deg, 0..359) at the end */
+		if (vc.state == VC_ST_BYPASS_OBSTACLE || vc.state == VC_ST_REJOIN_LINE) {
+			UW	w = script[script_idx];
+			UW	d = s2_sts_dist(motion_get_status());
+
+			tm_printf((UB*)"vc: step %d %s %d %s done: odometer %d mm,"
+				  " compass %d deg\n",
+				  script_idx,
+				  s2_cmd_type(w) == S2_CMD_TURN ? "TURN" : "MOVE",
+				  s2_cmd_type(w) == S2_CMD_TURN ? s2_cmd_angle(w)
+								 : s2_cmd_dist(w),
+				  s2_cmd_type(w) == S2_CMD_TURN ? "cmd" : "mm",
+				  s2_dist_diff(step_dist0, d),
+				  (INT)s4_sts_heading(s4_get_status_w0()));
+			step_dist0 = (UH)d;
+		}
 		/* REJOIN_LINE: keep the heading the TURNs gave (rejoin_look) */
 		if (vc.state == VC_ST_REJOIN_LINE &&
 		    s2_cmd_type(script[script_idx]) == S2_CMD_TURN) {
@@ -1428,6 +1473,26 @@ LOCAL void tick(void)
 		/* Relay a fresh line sample every <= 60 ms (Buddy 5) */
 		{
 			BOOL found = line_seen();
+#if VC_BYPASS_BOX
+			/* 20 Nov: the obstacle is always on a straight line, so
+			   the track is a known distance away on this approach.
+			   A line much nearer is a cross line or another part of
+			   the track: ignore it (and do not let Obstacle Scan
+			   confirm it) and drive on. */
+			if (vc.phase == PH_APPROACH && found && script_len > 0) {
+				INT	gone = s2_dist_diff(step_dist0,
+							     s2_sts_dist(motion_get_status()));
+				if (gone < rejoin_min_mm) {
+					if (!rejoin_early_logged) {
+						rejoin_early_logged = 1;
+						tm_printf((UB*)"vc: line after %d mm, the track is"
+							  " ~%d mm away: not the track, ignored\n",
+							  gone, rejoin_min_mm * 100 / VC_REJOIN_MIN_PCT);
+					}
+					found = FALSE;
+				}
+			}
+#endif
 			s5_line_observe(found);
 			if (vc.phase == PH_APPROACH && found) {
 				/* axle on it, turn until on it */

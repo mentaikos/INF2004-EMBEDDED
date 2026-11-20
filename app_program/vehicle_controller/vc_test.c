@@ -122,7 +122,8 @@ EXPORT void vc_test(void)
 		     s2_cmd_dist(c[3]) == VC_BYPASS_MM(vc_test_min(1000, VC_BYPASS_MOVE_MAX_CM));
 		/* to the line: lat / sin a + lat / 2 + extra */
 		ok = ok && vc_rejoin_approach_cm(20, 90) == 30 + VC_REJOIN_EXTRA_CM &&
-		     vc_rejoin_approach_cm(22, 50) == 29 + 11 + VC_REJOIN_EXTRA_CM;
+		     vc_rejoin_approach_cm(22, 50) == 29 + 11 + VC_REJOIN_EXTRA_CM &&
+		     vc_rejoin_expect_cm(22, 50) == 29;
 	}
 #elif VC_BYPASS_BY_WIDTH && VC_BYPASS_SMOOTH
 	n = vc_bypass_script(p, 1, c, &lat, NULL);

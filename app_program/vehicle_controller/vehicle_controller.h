@@ -246,6 +246,11 @@
 /* Turn back along the line: at most the bypass angle + this (real),
    stopped as soon as the sensors are on the line */
 #define VC_REJOIN_ALIGN_EXTRA_DEG	30
+/* 20 Nov: the obstacle is always on a straight line, so on the approach
+   the track is vc_rejoin_expect_cm away.  A line before this % of that
+   distance is not the track (cross line, another part of the track):
+   ignored.  50 leaves room for ~10 deg of heading error. */
+#define VC_REJOIN_MIN_PCT	50
 /* 19 Nov: the scan's width comes out short for small, near obstacles
    (its beam trim: a 9 cm bottle at 19 cm reads 3 cm), so the bypass
    takes at least VC_WIDTH_MIN_CM, + VC_WIDTH_PAD_CM (a few cm more
@@ -476,6 +481,8 @@ IMPORT INT	vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm, INT *
 #if VC_BYPASS_BOX
 /* 19 Nov: longest drive towards the line, at deg, after the bypass */
 IMPORT INT	vc_rejoin_approach_cm(INT lat, INT deg);
+/* 20 Nov: distance to the straight track on that approach, cm */
+IMPORT INT	vc_rejoin_expect_cm(INT lat, INT deg);
 #endif
 
 /* Relative angle of LINE_SEARCH sweep i (0..), first towards 'side' */

@@ -214,6 +214,14 @@ EXPORT INT vc_bypass_script(S5_PROFILE p, INT side, UW *cmds, INT *lat_cm, INT *
 	return 5;
 }
 
+/* 20 Nov: where the straight track is on that approach: lat / sin a, cm */
+EXPORT INT vc_rejoin_expect_cm(INT lat, INT deg)
+{
+	INT	s = vc_sin1000(deg);
+
+	return (lat * 1000 + s - 1) / s;
+}
+
 /* At a degrees, the line lat cm to the side is lat / sin a ahead; + half
    lat in case a curve moved it, + VC_REJOIN_EXTRA_CM.  The drive stops
    when the sensors see the line. */
