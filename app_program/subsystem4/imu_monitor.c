@@ -379,9 +379,31 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 
 	/* ---------- calibration: the robot must be still ---------- */
 	if (m->state == S4_ST_CALIBRATING) {
-		m->cal_sum[0] += s->ax;
-		m->cal_sum[1] += s->ay;
-		m->cal_sum[2] += s->az;
+		H	v[3];
+		W	g2;
+
+		v[0] = s->ax; v[1] = s->ay; v[2] = s->az;
+		g2 = (W)v[0] * v[0] + (W)v[1] * v[1] + (W)v[2] * v[2];
+		if (g2 < (W)(1000 - IMU_CAL_G_TOL_MG) * (1000 - IMU_CAL_G_TOL_MG) ||
+		    g2 > (W)(1000 + IMU_CAL_G_TOL_MG) * (1000 + IMU_CAL_G_TOL_MG)) {
+			m->cal_n = 0;		/* not ~1 g: start again */
+			return n;
+		}
+		for (i = 0; i < 3; i++) {
+			if (m->cal_n == 0) {
+				m->cal_sum[i] = 0;
+				m->cal_min[i] = m->cal_max[i] = v[i];
+			}
+			if (v[i] < m->cal_min[i]) m->cal_min[i] = v[i];
+			if (v[i] > m->cal_max[i]) m->cal_max[i] = v[i];
+			m->cal_sum[i] += v[i];
+		}
+		for (i = 0; i < 3; i++) {
+			if ((W)m->cal_max[i] - m->cal_min[i] > IMU_CAL_MAX_SPAN_MG) {
+				m->cal_n = 0;	/* moved: start again */
+				return n;
+			}
+		}
 		if (++m->cal_n >= IMU_CAL_SAMPLES) {
 			for (i = 0; i < 3; i++) {
 				m->acc_off[i] = (H)div_round(m->cal_sum[i], m->cal_n);

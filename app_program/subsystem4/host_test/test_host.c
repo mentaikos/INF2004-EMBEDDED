@@ -304,6 +304,44 @@ int main(void)
 		CHECK(m.state == S4_ST_CALIBRATING, "after re-init the IMU calibrates again");
 	}
 
+	printf("== Calibration needs a still robot at ~1 g (20 Nov) ==\n");
+	{
+		IMU_MONITOR m; UW t = 0;
+		IMU_EVENT ev[IMU_MAX_EVENTS];
+		int i;
+
+		/* accel powered down: all zeros -> never "calibrated" */
+		imu_init(&m);
+		for (i = 0; i < 3 * IMU_CAL_SAMPLES; i++) {
+			IMU_SAMPLE z = { TRUE, 0, 0, 0, 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_step(&m, &z, 0, t, ev);
+		}
+		CHECK(m.state == S4_ST_CALIBRATING && !m.calibrated,
+		      "0 g samples are not taken as level");
+
+		/* being placed: tilted 7 deg and moving for 1 s, then still
+		   and flat -> calibrates on the flat part, floor reads ~0 */
+		imu_init(&m);
+		for (i = 0; i < 100; i++) {
+			float a = 0.12f * sinf(i * 0.3f);
+			IMU_SAMPLE s = { TRUE, mg(0.01f), mg(-0.02f + 0.12f + a),
+					 mg(0.03f + 0.99f), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_step(&m, &s, 0, t, ev);
+		}
+		CHECK(m.state == S4_ST_CALIBRATING, "handled robot does not finish calibrating");
+		calibrate(&m, &t);	/* still, flat */
+		for (i = 0; i < 50; i++) {
+			IMU_SAMPLE s = { TRUE, mg(0.01f + noise(0.01f)), mg(-0.02f + noise(0.01f)),
+					 mg(1.03f + noise(0.01f)), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_step(&m, &s, 0, t, ev);
+		}
+		CHECK(m.state == S4_ST_LEVEL && m.pitch_mdeg > -1000 && m.pitch_mdeg < 1000,
+		      "after a still calibration the flat floor reads ~0 deg");
+	}
+
 	printf("== Heading and turn rate (28 Oct fix) ==\n");
 	{
 		/* Still robot, field (200, 50) +- 20 counts of noise: before the

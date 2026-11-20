@@ -323,6 +323,24 @@ EXPORT BOOL lsm303_probe(UB addr)
  * If no known magnetometer answers but the accelerometer does, run
  * accelerometer-only: everything works except heading / turn rate.
  */
+/* 20 Nov: write a control register and read it back.  After a cold
+   power-up the first write to the accelerometer's CTRL_REG1 was
+   sometimes lost: the chip stayed in power-down, every accel read
+   returned 0, and pitch sat at exactly 0.0 for the whole run (the
+   magnetometer, set up later, worked).  Retry a few times, 10 ms apart. */
+LOCAL BOOL write_reg_checked(UB addr, UB reg, UB val)
+{
+	UB	v;
+	INT	i;
+
+	for (i = 0; i < 3; i++) {
+		if (write_reg(addr, reg, val) &&
+		    read_regs(addr, reg, &v, 1) && v == val) return TRUE;
+		tk_dly_tsk(10);
+	}
+	return FALSE;
+}
+
 /* LSM303D at addr: check WHO_AM_I, then accel 100 Hz +-4 g, mag 50 Hz */
 LOCAL BOOL init_d(UB addr)
 {
@@ -331,7 +349,7 @@ LOCAL BOOL init_d(UB addr)
 	if (!read_regs(addr, D_WHO_AM_I, &v, 1)) return FALSE;
 	if (addr == D_ADDR_HI) last_d_id = v;
 	if (v != D_WHO_AM_I_VALUE) return FALSE;
-	if (!(write_reg(addr, D_CTRL1, 0x6F) &&	/* accel 100 Hz, BDU, XYZ on */
+	if (!(write_reg_checked(addr, D_CTRL1, 0x6F) &&	/* accel 100 Hz, BDU, XYZ on */
 	      write_reg(addr, D_CTRL2, 0x08) &&	/* +-4 g (0.122 mg/LSB) */
 	      write_reg(addr, D_CTRL5, 0x70) &&	/* mag high res, 50 Hz */
 	      write_reg(addr, D_CTRL6, 0x20) &&	/* mag +-4 gauss */
@@ -357,8 +375,8 @@ EXPORT BOOL lsm303_init(void)
 		return init_d(D_ADDR_HI) || init_d(D_ADDR_LO);
 	}
 	last_acc_id = v;
-	if (!write_reg(LSM303_ACC_ADDR, ACC_CTRL_REG1_A, 0x57) ||
-	    !write_reg(LSM303_ACC_ADDR, ACC_CTRL_REG4_A, 0x98)) return FALSE;
+	if (!write_reg_checked(LSM303_ACC_ADDR, ACC_CTRL_REG1_A, 0x57) ||
+	    !write_reg_checked(LSM303_ACC_ADDR, ACC_CTRL_REG4_A, 0x98)) return FALSE;
 
 	/* Which magnetometer?  DLHC: IRA_REG_M = 'H'.  AGR: WHO_AM_I_M = 0x40 */
 	if (read_regs(LSM303_MAG_ADDR, MAG_IRA_REG_M, &v, 1)) {
@@ -462,6 +480,14 @@ EXPORT void lsm303_read(IMU_SAMPLE *s)
 	}
 
 robot_axes:
+	/* 20 Nov: a working accelerometer on the ground always reads ~1 g.
+	   Below 0.3 g it is powered down (all zeros) or not answering
+	   properly: report a failed read, so after 3 of them the IMU goes
+	   to FAULT and the task re-runs lsm303_init() every 1 s. */
+	if ((W)sx * sx + (W)sy * sy + (W)sz * sz < LSM303_ACC_DEAD_MG * LSM303_ACC_DEAD_MG) {
+		s->ok = FALSE;
+		return;
+	}
 	s->ax = LSM303_ROBOT_X(sx, sy, sz);
 	s->ay = LSM303_ROBOT_Y(sx, sy, sz);
 	s->az = LSM303_ROBOT_Z(sx, sy, sz);

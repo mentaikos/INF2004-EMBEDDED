@@ -29,6 +29,7 @@
 
 #define LSM303_ACC_ADDR		0x19
 #define LSM303_MAG_ADDR		0x1E
+#define LSM303_ACC_DEAD_MG	300	/* |a| below this = accel not running */
 
 #define S4_I2C_TIMEOUT_US	2000	/* one whole transfer, worst case */
 

@@ -30,6 +30,14 @@
  * --------------------------------------------------------------------- */
 #define IMU_PERIOD_MS		10	/* NFR11 */
 #define IMU_CAL_SAMPLES		200	/* 2 s still at start: accel offsets */
+/* 20 Nov: calibration only accepts a STILL robot reading about 1 g.  A
+   sample outside 1 g +- IMU_CAL_G_TOL_MG, or any axis swinging more than
+   IMU_CAL_MAX_SPAN_MG over the 2 s, restarts it.  Before, a robot being
+   placed or held while booting (or an accel still reading 0) was taken
+   as "level", and the flat floor then read ~+3 deg: right at the CLIMBING
+   threshold, so the IMU sat in CLIMBING and real humps never finished. */
+#define IMU_CAL_G_TOL_MG	200
+#define IMU_CAL_MAX_SPAN_MG	80	/* sensor noise is ~+-10 mg */
 
 /* Low-pass filters, written as 1/DIV (alpha = 0.25 and 0.2) */
 #define IMU_PITCH_LPF_DIV	4	/* ~35 ms time constant */
@@ -177,6 +185,7 @@ typedef struct {
 	UB	cal_n;			/* 0..IMU_CAL_SAMPLES (200) */
 	W	cal_sum[3];		/* 200 x +-4096 mg -> 21 bits */
 	H	acc_off[3];		/* mg */
+	H	cal_min[3], cal_max[3];	/* 20 Nov: stillness check, mg */
 	H	mag_min[3], mag_max[3];	/* hard-iron tracking, counts */
 	UB	mag_seen;
 	UB	calibrated;
