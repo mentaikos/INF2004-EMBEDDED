@@ -31,14 +31,13 @@ Bit layouts match app_program/subsystem1/s1_codec.h (MSB-first, 4-bit header:
         [7:6] line state, [5:4] barcode state, [3:2] barcodes decoded
         (mod 4; 4 Nov, was the unused last command), [1] barcode error
         (held 1 s), [0] edge overflow (sticky)
-  B4  44 bits  IMU                     (subsystem4.h s4_tlm_slot, s4_pack.h)
-        [43:13] word 0: [2:0] state, [11:3] pitch 0.1 deg signed,
+  B4  43 bits  IMU                     (subsystem4.h s4_tlm_slot, s4_pack.h)
+        [42:12] word 0: [2:0] state, [11:3] pitch 0.1 deg signed,
                 [20:12] heading deg, [29:21] turn rate deg/s signed,
                 [30] calibrated
-        [12:2]  word 1: [4:0] hump mm, [8:5] hump count, [10:9] I2C fails
-        [1] lifted / overturned (12 Nov)
-        [0] spare, 0
-  B5  55 bits  Obstacle Scan           (subsystem5.h s5_tlm_slot)
+        [11:1]  word 1: [4:0] hump mm, [8:5] hump count, [10:9] I2C fails
+        [0] lifted / overturned (12 Nov)
+  B5  47 bits  Obstacle Scan           (subsystem5.h s5_tlm_slot)
         [2:0] state, [5:3] plan action, [12:6] range now (0 near, 1 far,
         2 no echo, else cm), [16:13] obstacles scanned (mod 16),
         last obstacle: [23:17] closest cm, [31:24] width cm,
@@ -61,11 +60,11 @@ import paho.mqtt.client as mqtt
 
 # ================================================================ protocol
 TYPE_BITS, VERSION_BITS = 2, 2
-VERSION = 1
+VERSION = 2   # 22 Nov: 17-byte telemetry (no always-zero bits)
 # Telemetry slot widths (bits) -- must match S1_Bx_BITS in s1_codec.h
-B2_BITS, B3_BITS, B4_BITS, B5_BITS = 26, 8, 44, 55
-TLM_BITS = TYPE_BITS + VERSION_BITS + B2_BITS + B3_BITS + B4_BITS + B5_BITS + 1  # 138
-TLM_LEN = (TLM_BITS + 7) // 8                                                    # 18
+B2_BITS, B3_BITS, B4_BITS, B5_BITS = 26, 8, 43, 47
+TLM_BITS = TYPE_BITS + VERSION_BITS + B2_BITS + B3_BITS + B4_BITS + B5_BITS + 1  # 129
+TLM_LEN = (TLM_BITS + 7) // 8                                                    # 17
 T_TELEMETRY, T_HEARTBEAT, T_COMMAND, T_ACK = 0, 1, 2, 3
 CMD = {"START": 0b00, "STOP": 0b01, "E-STOP": 0b10}
 STATES = ["INIT", "IDLE", "RUNNING", "E_STOPPED", "FAULT", "COMPLETE", "6", "7"]
@@ -201,8 +200,8 @@ def decode_b3(b3):
 
 
 def decode_b4(b4):
-    w0 = (b4 >> 13) & 0x7FFFFFFF
-    w1 = (b4 >> 2) & 0x7FF
+    w0 = (b4 >> 12) & 0x7FFFFFFF
+    w1 = (b4 >> 1) & 0x7FF
     return {"state": IMU_STATES[w0 & 7],
             "pitch_deg": sext(w0 >> 3, 9) / 10.0,
             "heading_deg": (w0 >> 12) & 0x1FF,
@@ -211,7 +210,7 @@ def decode_b4(b4):
             "hump_mm": w1 & 0x1F,
             "hump_count": (w1 >> 5) & 0xF,
             "i2c_fails": (w1 >> 9) & 3,
-            "lifted": (b4 >> 1) & 1}
+            "lifted": b4 & 1}
 
 
 S5_STATES = ["FORWARD_WATCH", "OBSTACLE_DETECTED", "COARSE_SCAN", "FINE_SCAN",

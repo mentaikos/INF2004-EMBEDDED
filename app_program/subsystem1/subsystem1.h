@@ -39,18 +39,18 @@
  *  IF-S1-01  Telemetry input (all buddies -> S1)
  *
  *  Each buddy packs its own fields into one integer ("slot") and hands it
- *  to subsystem 1, which places the slots in the fixed 18-byte telemetry
- *  frame.  Only the lowest <width> bits are used; extra bits are masked
- *  off.  Safe to call from any task (protected by mtx_s1_tlm).
+ *  to subsystem 1, which places the slots in the fixed 17-byte telemetry
+ *  frame (s1_codec.h).  Only the lowest <width> bits are used; extra
+ *  bits are masked off.  Safe to call from any task (protected by mtx_s1_tlm).
  *
  *    slot          owner     bits   frame bits
  *    (header)      Buddy 1     4     0..3   (type 2 + version 2)
  *    S1_SLOT_B2    Buddy 2    26     4..29
  *    S1_SLOT_B3    Buddy 3     8    30..37
- *    S1_SLOT_B4    Buddy 4    44    38..81
- *    S1_SLOT_B5    Buddy 5    55    82..136
- *    (Wi-Fi loss)  Buddy 1     1   137       <- last data bit
- *    (padding)                 6   138..143
+ *    S1_SLOT_B4    Buddy 4    43    38..80
+ *    S1_SLOT_B5    Buddy 5    47    81..127
+ *    (Wi-Fi loss)  Buddy 1     1   128       <- last data bit
+ *    (padding)                 7   129..135
  * --------------------------------------------------------------------- */
 #define S1_SLOT_B2		0
 #define S1_SLOT_B3		1

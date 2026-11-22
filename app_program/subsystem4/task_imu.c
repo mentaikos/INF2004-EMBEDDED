@@ -195,7 +195,7 @@ LOCAL void publish(void)
 	s4_diag = dg;
 	tk_unl_mtx(mtx_s4_status);
 
-	/* Buddy 1's telemetry slot (44 bits, s4_tlm_slot).  12 Nov: bit 1
+	/* Buddy 1's telemetry slot (43 bits, s4_tlm_slot).  12 Nov: bit 0
 	   = LIFTED; the state lasts >= 1 s, two 500 ms telemetry frames */
 	(void)s1_tlm_set_slot(S1_SLOT_B4,
 			      s4_tlm_slot(w0, w1, f.state == S4_ST_LIFTED));
