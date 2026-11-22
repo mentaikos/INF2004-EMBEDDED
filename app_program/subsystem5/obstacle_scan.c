@@ -294,14 +294,21 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 			}
 		}
 		if (!valid) action = S5_ACT_REVERSE_REATTEMPT;
+	} else {
+		/* no other case needs action */
 	}
 	if (closest <= 100) {
 		x = project((INT)closest * 10, 90 - (INT)s5_angle_deg(nearest_i)) / 10;
 		if (have_ox) x = ox / 10;	/* 16 Nov: the obstacle's centre */
 		y = project((INT)closest * 10, (INT)s5_angle_deg(nearest_i)) / 10;
 	} else closest = S5_RANGE_FAR;
-	if (near) closest = S5_RANGE_NEAR;
-	else if (unknown && closest == S5_RANGE_FAR) closest = S5_RANGE_NO_ECHO;
+	if (near) {
+		closest = S5_RANGE_NEAR;
+	} else if (unknown && (closest == S5_RANGE_FAR)) {
+		closest = S5_RANGE_NO_ECHO;
+	} else {
+		/* no other case needs action */
+	}
 	p.w0 = (UW)closest | ((UW)clamp((INT)width, 0, 200) << 7) |
 		((UW)(x & 255) << 15) | ((UW)clamp(y, 0, 100) << 23);
 	p.w1 = (UW)clamp((INT)left / 10, 0, 100) |
@@ -535,6 +542,8 @@ EXPORT void s5_scan_tick(S5_SCAN *s, const S5_INPUT *in, S5_OUTPUT *out)
 			s->profile.w1 &= ~((UW)1u << 27);
 			s->state = s->action == S5_ACT_CONTINUE ? S5_ST_FORWARD_WATCH : S5_ST_BYPASSING;
 			s->index = S5_CENTRE;
+		} else {
+			/* no other case needs action */
 		}
 	}
 	if (s->state == S5_ST_BYPASSING && (in->flags & S5_REJOIN_LINE)) {
@@ -563,6 +572,8 @@ EXPORT void s5_scan_tick(S5_SCAN *s, const S5_INPUT *in, S5_OUTPUT *out)
 				s->state = S5_ST_FORWARD_WATCH;
 				s->action = S5_ACT_CONTINUE;
 			}
+		} else {
+			/* no other case needs action */
 		}
 		s->last_line_seq = in->line_seq;
 	}
@@ -684,6 +695,8 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 				out->payload = (UW)range | ((UW)10u << 7);
 			}
 		}
+	} else {
+		/* no other case needs action */
 	}
 }
 
@@ -700,3 +713,5 @@ EXPORT UW s5_scan_status(const S5_SCAN *s)
 		((UW)s->line_fresh << 19) | ((UW)s->line_count << 20) |
 		((UW)s->generation << 22);
 }
+
+/*** end of file ***/

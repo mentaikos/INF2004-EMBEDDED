@@ -34,6 +34,8 @@ typedef struct {
 
 IMPORT ER	encoder_init(void);		/* pins, pull-ups, interrupts */
 IMPORT void	encoder_snapshot(ENC_SNAPSHOT *s);
-Inline UINT	encoder_delta(UB old_c, UB new_c) { return (UB)(new_c - old_c); }
+static inline UINT	encoder_delta(UB old_c, UB new_c) { return (UB)(new_c - old_c); }
 
 #endif /* ENCODER_H */
+
+/*** end of file ***/

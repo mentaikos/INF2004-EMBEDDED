@@ -36,3 +36,5 @@ IMPORT ER gpio_irq_init(void);		/* idempotent; called by subsystem2_init */
 IMPORT ER gpio_irq_attach(UINT pin, UINT edges, GPIO_IRQ_CB cb);
 
 #endif /* GPIO_IRQ_H */
+
+/*** end of file ***/

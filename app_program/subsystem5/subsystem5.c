@@ -38,7 +38,7 @@ EXPORT ER subsystem5_init(void)
 	mtx_s5_status = tk_cre_mtx(&cmtx);
 	if (mtx_s5_status < E_OK) return mtx_s5_status;
 	ccyc.cycatr = TA_HLNG;
-	ccyc.cychdr = (FP)s5_scan_cyclic;
+	ccyc.cychdr = (FP)s5_scan_cyclic_isr;
 	ccyc.cyctim = S5_PERIOD_MS;
 	ccyc.cycphs = S5_PERIOD_MS;
 	cyc_scan = tk_cre_cyc(&ccyc);
@@ -52,3 +52,5 @@ EXPORT ER subsystem5_start(void)
 	if (tid_s5_scan < E_OK) return tid_s5_scan;
 	return tk_sta_cyc(cyc_scan);
 }
+
+/*** end of file ***/

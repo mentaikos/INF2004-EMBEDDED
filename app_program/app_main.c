@@ -32,7 +32,7 @@
  *	                   (owned by S2: S3 hands slots and blocks back)
  *	  IF-03  S3 -> S4  message buffer mbf_summary + event flag flg_events
  *	                   (owned by S4)
- *	  IF-04  S4 -> S3  reads app_stats under mutex mtx_stats (owned by S3)
+ *	  IF-04  S4 -> S3  reads g_app_stats under mutex mtx_stats (owned by S3)
  *	  IF-05  S4 -> S1  suspends/resumes the LED task tid_led (owned by S1)
  *	The subsystem that RECEIVES or OWNS the data creates the object and
  *	publishes its ID in its header; the other side just uses it.
@@ -154,3 +154,5 @@ EXPORT INT usermain(void)
 	tk_slp_tsk(TMO_FEVR);
 	return 0;
 }
+
+/*** end of file ***/

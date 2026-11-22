@@ -76,13 +76,13 @@ typedef struct {
 #define S4_COUNT_MAX		15
 #define S4_FAIL_MAX		3
 
-Inline W s4_clamp(W v, W lo, W hi)
+static inline W s4_clamp(W v, W lo, W hi)
 {
 	return (v < lo) ? lo : (v > hi) ? hi : v;
 }
 
 /* Sign-extend the low 'bits' bits of v */
-Inline W s4_sext(UW v, INT bits)
+static inline W s4_sext(UW v, INT bits)
 {
 	UW	m = 1u << (bits - 1);
 
@@ -90,7 +90,7 @@ Inline W s4_sext(UW v, INT bits)
 	return (W)(v ^ m) - (W)m;
 }
 
-Inline UW s4_pack_w0(const S4_STS_FIELDS *f)
+static inline UW s4_pack_w0(const S4_STS_FIELDS *f)
 {
 	W	hdg = f->heading_deg % 360;
 
@@ -104,7 +104,7 @@ Inline UW s4_pack_w0(const S4_STS_FIELDS *f)
 	      | ((f->calibrated ? 1u : 0u) << S4_W0_CAL_SHIFT);
 }
 
-Inline UW s4_pack_w1(const S4_STS_FIELDS *f)
+static inline UW s4_pack_w1(const S4_STS_FIELDS *f)
 {
 	return  (((UW)s4_clamp(f->hump_mm, 0, S4_HUMP_MAX_MM))
 						<< S4_W1_HUMP_SHIFT)
@@ -116,16 +116,16 @@ Inline UW s4_pack_w1(const S4_STS_FIELDS *f)
 
 /* Single-field readers.  Word 0 alone is one aligned word, so a reader
    that needs only word-0 fields (state, pitch, ...) needs no lock. */
-Inline INT  s4_sts_state(UW w0)    { return (INT)((w0 >> S4_W0_STATE_SHIFT) & S4_STATE_MASK); }
-Inline INT  s4_sts_pitch_dd(UW w0) { return (INT)s4_sext(w0 >> S4_W0_PITCH_SHIFT, 9); }
-Inline INT  s4_sts_heading(UW w0)  { return (INT)((w0 >> S4_W0_HDG_SHIFT) & S4_9BIT_MASK); }
-Inline INT  s4_sts_rate(UW w0)     { return (INT)s4_sext(w0 >> S4_W0_RATE_SHIFT, 9); }
-Inline INT  s4_sts_calibrated(UW w0) { return (INT)((w0 >> S4_W0_CAL_SHIFT) & 1u); }
-Inline INT  s4_sts_hump_mm(UW w1)  { return (INT)((w1 >> S4_W1_HUMP_SHIFT) & S4_HUMP_MASK); }
-Inline INT  s4_sts_hump_count(UW w1) { return (INT)((w1 >> S4_W1_COUNT_SHIFT) & S4_COUNT_MASK); }
-Inline INT  s4_sts_fails(UW w1)    { return (INT)((w1 >> S4_W1_FAIL_SHIFT) & S4_FAIL_MASK); }
+static inline INT  s4_sts_state(UW w0)    { return (INT)((w0 >> S4_W0_STATE_SHIFT) & S4_STATE_MASK); }
+static inline INT  s4_sts_pitch_dd(UW w0) { return (INT)s4_sext(w0 >> S4_W0_PITCH_SHIFT, 9); }
+static inline INT  s4_sts_heading(UW w0)  { return (INT)((w0 >> S4_W0_HDG_SHIFT) & S4_9BIT_MASK); }
+static inline INT  s4_sts_rate(UW w0)     { return (INT)s4_sext(w0 >> S4_W0_RATE_SHIFT, 9); }
+static inline INT  s4_sts_calibrated(UW w0) { return (INT)((w0 >> S4_W0_CAL_SHIFT) & 1u); }
+static inline INT  s4_sts_hump_mm(UW w1)  { return (INT)((w1 >> S4_W1_HUMP_SHIFT) & S4_HUMP_MASK); }
+static inline INT  s4_sts_hump_count(UW w1) { return (INT)((w1 >> S4_W1_COUNT_SHIFT) & S4_COUNT_MASK); }
+static inline INT  s4_sts_fails(UW w1)    { return (INT)((w1 >> S4_W1_FAIL_SHIFT) & S4_FAIL_MASK); }
 
-Inline void s4_sts_unpack(UW w0, UW w1, S4_STS_FIELDS *f)
+static inline void s4_sts_unpack(UW w0, UW w1, S4_STS_FIELDS *f)
 {
 	f->state       = s4_sts_state(w0);
 	f->pitch_dd    = s4_sts_pitch_dd(w0);
@@ -141,3 +141,5 @@ Inline void s4_sts_unpack(UW w0, UW w1, S4_STS_FIELDS *f)
 #define S4_EVT_HEIGHT(mm)	((UW)s4_clamp((mm), 0, S4_HUMP_MAX_MM))
 
 #endif /* S4_PACK_H */
+
+/*** end of file ***/

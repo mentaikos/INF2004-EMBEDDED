@@ -6,3 +6,5 @@ IMPORT ER drv_us_init(void);
 IMPORT ER drv_us_point(UINT index);
 IMPORT UB drv_us_ping(void);           /* bounded 30 ms semaphore wait */
 #endif
+
+/*** end of file ***/

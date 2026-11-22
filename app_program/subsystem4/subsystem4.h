@@ -165,7 +165,7 @@ IMPORT void	s4_lift_ack(UB seq);
 	[1]      12 Nov: lifted / overturned (state LIFTED, >= 1 s)
 	[0]      0, spare
    The dashboard decodes it with the same shifts as s4_pack.h. */
-Inline UD s4_tlm_slot(UW w0, UW w1, BOOL lifted)
+static inline UD s4_tlm_slot(UW w0, UW w1, BOOL lifted)
 {
 	return ((UD)(w0 & 0x7FFFFFFFu) << 13) | ((UD)(w1 & 0x7FFu) << 2) |
 	       ((UD)(lifted ? 1u : 0u) << 1);
@@ -192,7 +192,7 @@ IMPORT ID	tid_imu;
 IMPORT ID	cyc_imu;
 IMPORT ID	mtx_s4_status;		/* guards the two status words */
 IMPORT void	imu_task(INT stacd, void *exinf);
-IMPORT void	imu_cyclic_handler(void *exinf);
+IMPORT void	imu_cyclic_isr(void *exinf);
 IMPORT void	imu_log_task(INT stacd, void *exinf);
 
 #if APP_TEST
@@ -221,9 +221,11 @@ IMPORT void	s4_test_inject_lift(void);
 IMPORT ID	mbf_summary;
 IMPORT ID	flg_events;
 IMPORT ID	alm_monitor;
-IMPORT UW	s4_lines_received;	/* for the tests */
+IMPORT UW	g_s4_lines_received;	/* for the tests */
 IMPORT ER	s4_example_init(void);
 IMPORT void	monitor_task(INT stacd, void *exinf);
-IMPORT void	monitor_alarm_handler(void *exinf);
+IMPORT void	monitor_alarm_isr(void *exinf);
 
 #endif /* SUBSYSTEM4_H */
+
+/*** end of file ***/

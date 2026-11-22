@@ -398,9 +398,9 @@ EXPORT void subsystem4_test(void)
 		   rmbf.maxmsz == S4_SUMMARY_MAX,
 		   "message buffer max line = S4_SUMMARY_MAX");
 #if S4_EXAMPLE_MONITOR
-	before = s4_lines_received;
+	before = g_s4_lines_received;
 	tk_dly_tsk(3500);
-	TEST_CHECK("INT-02", s4_lines_received >= before + 2,
+	TEST_CHECK("INT-02", g_s4_lines_received >= before + 2,
 		   "summary lines flow from subsystem 3 to subsystem 4");
 #else
 	(void)before;
@@ -413,3 +413,5 @@ EXPORT void subsystem4_test(void)
 }
 
 #endif /* APP_TEST */
+
+/*** end of file ***/

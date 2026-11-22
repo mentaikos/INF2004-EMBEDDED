@@ -100,3 +100,5 @@ IMPORT ID	tid_s1_cmd, tid_s1_hb, tid_s1_tlm;
 IMPORT void	s1_tlm_snapshot(UD out[S1_SLOT_COUNT]);
 
 #endif /* SUBSYSTEM1_H */
+
+/*** end of file ***/

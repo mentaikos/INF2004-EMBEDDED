@@ -63,7 +63,7 @@ IMPORT ER s5_reset(void);               /* stopped, E-STOP clear */
  *   [23:17] closest cm      [31:24] WIDTH cm      [39:32] centre x cm,
  *   signed, + right         [46:40] y cm (forward to its near face)
  *   [54:47] 0 */
-Inline UD s5_tlm_slot(UW status, S5_PROFILE last, UINT scans)
+static inline UD s5_tlm_slot(UW status, S5_PROFILE last, UINT scans)
 {
 	return (UD)(status & 7u) | ((UD)((status >> 3) & 7u) << 3) |
 	       ((UD)((status >> 11) & 127u) << 6) | ((UD)(scans & 15u) << 13) |
@@ -71,3 +71,5 @@ Inline UD s5_tlm_slot(UW status, S5_PROFILE last, UINT scans)
 }
 
 #endif /* SUBSYSTEM5_H */
+
+/*** end of file ***/

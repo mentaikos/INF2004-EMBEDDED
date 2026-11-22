@@ -273,8 +273,13 @@ LOCAL void track_line_side(void)
 	S3_STS_FIELDS	f;
 
 	s3_sts_unpack(s3_get_status(), &f);
-	if (f.steer > 0) line_side = 1;
-	else if (f.steer < 0) line_side = -1;
+	if (f.steer > 0) {
+		line_side = 1;
+	} else if (f.steer < 0) {
+		line_side = -1;
+	} else {
+		/* no other case needs action */
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -330,6 +335,8 @@ LOCAL void check_slow_zone(void)
 			  (INT)r, VC_SLOW_MM_S);
 	} else if (clear && slow_zone) {
 		slow_zone = 0;
+	} else {
+		/* no other case needs action */
 	}
 #endif
 }
@@ -373,7 +380,11 @@ LOCAL void check_curve(void)
 		} else if (since(t_straight) >= VC_CURVE_HOLD_MS) {
 			in_curve = 0;
 			tm_printf((UB*)"vc: curve done, back to cruise speed\n");
+		} else {
+			/* no other case needs action */
 		}
+	} else {
+		/* no other case needs action */
 	}
 #endif
 }
@@ -784,6 +795,8 @@ LOCAL void script_done(void)
 		else if (vc.phase == PH_LOOK) {
 			if (line_seen()) look_found();	/* on it as the turn ended */
 			else rejoin_look(TRUE);		/* reverse a bit, look again */
+		} else {
+			/* no other case needs action */
 		}
 		break;
 
@@ -953,6 +966,8 @@ LOCAL void on_no_clear(void)
 			} else if (cl >= S5_RANGE_MIN_CM && cl <= S5_RANGE_MAX_CM &&
 				   (INT)cl < VC_REVERSE_TO_CM) {
 				d = VC_REVERSE_TO_CM - (INT)cl;
+			} else {
+				/* no other case needs action */
 			}
 		}
 		if (d < VC_REVERSE_CM) d = VC_REVERSE_CM;
@@ -973,6 +988,8 @@ LOCAL void on_no_clear(void)
 					turn = -turn;
 			} else if (rescan_turn <= 0) {
 				turn = -turn;
+			} else {
+				/* no other case needs action */
 			}
 			if (rescan_turn + turn > VC_RESCAN_TURN_MAX_DEG ||
 			    rescan_turn + turn < -VC_RESCAN_TURN_MAX_DEG) {
@@ -1108,6 +1125,8 @@ LOCAL void handle_event(UW w)
 				uturn_h_prev = (H)s4_sts_heading(s4_get_status_w0());
 			} else if (!uturn_imu && uturn_step == 1) {
 				uturn_step = 2;	/* no compass: first TURN was the blind one */
+			} else {
+				/* no other case needs action */
 			}
 		}
 		/* 20 Nov: bypass / rejoin step log, to find where a bypass
@@ -1163,6 +1182,8 @@ LOCAL void handle_event(UW w)
 			}
 		} else if (st == VC_ST_HUMP_TRAVERSE) {
 			vc.lost_in_hump = 1;
+		} else {
+			/* no other case needs action */
 		}
 		break;
 
@@ -1263,6 +1284,8 @@ LOCAL void tick(void)
 				  " searching\n", nav_name(vc.nav), a);
 			enter_search();
 			return;
+		} else {
+			/* no other case needs action */
 		}
 	}
 	if (uturn_step == 2) {
@@ -1292,6 +1315,8 @@ LOCAL void tick(void)
 		}
 	} else if (uturn_step == 1 && st != VC_ST_EXECUTE_NAV_CMD) {
 		uturn_step = 0;
+	} else {
+		/* no other case needs action */
 	}
 
 	/* A script step that never finished */
@@ -1354,6 +1379,8 @@ LOCAL void tick(void)
 				  " watching forward (S5 state %d)\n",
 				  s5_sts_state(s5));
 			enter_idle(VC_R_SCAN_NOT_READY);
+		} else {
+			/* no other case needs action */
 		}
 		break;
 
@@ -1371,6 +1398,8 @@ LOCAL void tick(void)
 			} else if (since(t_lost) >= VC_LOST_GRACE_MS) {
 				enter_search();
 				break;
+			} else {
+				/* no other case needs action */
 			}
 		}
 		update_limit();
@@ -1397,6 +1426,8 @@ LOCAL void tick(void)
 			enter_follow();
 		} else if (since(vc.t_state) >= VC_LINE_SEARCH_MS) {
 			enter_fault(VC_R_LINE_TIMEOUT, FAULT_LINE_TIMEOUT);
+		} else {
+			/* no other case needs action */
 		}
 		break;
 
@@ -1455,7 +1486,11 @@ LOCAL void tick(void)
 				enter_follow();		/* CONTINUE */
 			} else if (since(vc.t_state) > VC_APPROVE_WAIT_MS) {
 				rescan("S5 did not start the bypass");
+			} else {
+				/* no other case needs action */
 			}
+		} else {
+			/* no other case needs action */
 		}
 		break;
 
@@ -1510,12 +1545,16 @@ LOCAL void tick(void)
 					vc.phase = PH_CONFIRM;
 					cmd_follow(VC_SLOW_MM_S);
 					tm_printf((UB*)"vc: on the line, following it\n");
+				} else {
+					/* no other case needs action */
 				}
 			} else if (vc.phase == PH_CONFIRM) {
 				/* Following it: lost it again -> search for it
 				   (relay_recovery keeps S5 fed) */
 				track_line_side();
 				if (line_lost_now()) enter_search();
+			} else {
+				/* no other case needs action */
 			}
 		}
 		break;
@@ -1552,12 +1591,14 @@ EXPORT void vc_task(INT stacd, void *exinf)
 	line_side = 1;
 	publish();
 
-	while (1) {
+	for (;;) {
 		n = tk_rcv_mbf(mbf_vc_evt, &w, VC_TICK_MS);
 		if (n == (INT)sizeof(w)) {
 			handle_event(w);
 		} else if (n >= 0) {
 			dg.evt_ignored++;	/* wrong size: not an event word */
+		} else {
+			/* no other case needs action */
 		}
 		tick();
 		publish();
@@ -1587,3 +1628,5 @@ EXPORT void vc_get_diag(VC_DIAG *d)
 {
 	*d = dg;		/* diagnostic only: halfwords, no lock needed */
 }
+
+/*** end of file ***/

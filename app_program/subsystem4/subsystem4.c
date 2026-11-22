@@ -29,7 +29,7 @@ EXPORT ER subsystem4_init(void)
 	/* 10 ms tick (NFR11), started in subsystem4_start() once the task
 	   exists */
 	ccyc.cycatr = TA_HLNG;
-	ccyc.cychdr = (FP)imu_cyclic_handler;
+	ccyc.cychdr = (FP)imu_cyclic_isr;
 	ccyc.cyctim = S4_PERIOD_MS;
 	ccyc.cycphs = S4_PERIOD_MS;
 	cyc_imu = tk_cre_cyc(&ccyc);
@@ -62,3 +62,5 @@ EXPORT ER subsystem4_start(void)
 	(void)tid;
 	return E_OK;
 }
+
+/*** end of file ***/

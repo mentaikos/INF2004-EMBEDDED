@@ -49,7 +49,7 @@ EXPORT ER subsystem2_init(void)
 
 	/* 20 ms tick (started in subsystem2_start) */
 	ccyc.cycatr = TA_HLNG;
-	ccyc.cychdr = (FP)motion_cyclic_handler;
+	ccyc.cychdr = (FP)motion_cyclic_isr;
 	ccyc.cyctim = S2_PERIOD_MS;
 	ccyc.cycphs = S2_PERIOD_MS;
 	cyc_motion = tk_cre_cyc(&ccyc);
@@ -95,3 +95,5 @@ EXPORT void s1_out_estop(void)
 {
 	tk_set_flg(flg_safety, S2_FLG_ESTOP);
 }
+
+/*** end of file ***/

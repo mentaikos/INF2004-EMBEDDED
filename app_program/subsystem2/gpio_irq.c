@@ -32,7 +32,7 @@ LOCAL UB		irq_core;	/* core that takes the interrupt */
 LOCAL BOOL		irq_ready;
 
 /* The one handler for IO_IRQ_BANK0 */
-LOCAL void gpio_irq_handler(UINT intno)
+LOCAL void gpio_irq_isr(UINT intno)
 {
 	UINT	i, n, pin, reg, sh, ev;
 	UW	ints;
@@ -63,7 +63,7 @@ EXPORT ER gpio_irq_init(void)
 
 	irq_core = (UB)(in_w(SIO_CPUID) & 1u);
 	dint.intatr = TA_HLNG;
-	dint.inthdr = (FP)gpio_irq_handler;
+	dint.inthdr = (FP)gpio_irq_isr;
 	er = tk_def_int(GPIO_IRQ_INTNO, &dint);
 	if (er < E_OK) return er;
 
@@ -104,3 +104,5 @@ EXPORT ER gpio_irq_attach(UINT pin, UINT edges, GPIO_IRQ_CB cb)
 	}
 	return E_OK;
 }
+
+/*** end of file ***/

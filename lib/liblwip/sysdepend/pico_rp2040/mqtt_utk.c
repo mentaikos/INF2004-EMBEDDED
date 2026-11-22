@@ -201,6 +201,8 @@ static void connection_cb(mqtt_client_t *c, void *arg, mqtt_connection_status_t 
 		sys_untimeout(connack_timeout, NULL);
 		go_backoff(status == MQTT_CONNECT_TIMEOUT ? "keep-alive timeout"
 			   : "connection closed");
+	} else {
+		/* no other case needs action */
 	}
 }
 
@@ -244,3 +246,5 @@ void mqtt_utk_start(void)
 	sys_untimeout(connack_timeout, NULL);
 	sys_timeout(MQTT_UTK_CONNACK_MS, connack_timeout, NULL);
 }
+
+/*** end of file ***/

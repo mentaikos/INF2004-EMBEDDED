@@ -93,7 +93,7 @@ LOCAL void tilt_record(void)
  * Cyclic handler, every S4_PERIOD_MS.  Interrupt context: just wake the
  * task.
  */
-EXPORT void imu_cyclic_handler(void *exinf)
+EXPORT void imu_cyclic_isr(void *exinf)
 {
 	(void)exinf;
 	tk_wup_tsk(tid_imu);
@@ -310,8 +310,8 @@ EXPORT void imu_task(INT stacd, void *exinf)
 	prev_dist = s2_sts_dist(motion_get_status());
 	publish();
 
-	while (1) {
-		/* Sleep until imu_cyclic_handler wakes us.  Wake-ups that
+	for (;;) {
+		/* Sleep until imu_cyclic_isr wakes us.  Wake-ups that
 		   queued meanwhile mean a cycle was missed. */
 		tk_slp_tsk(TMO_FEVR);
 		if (tk_can_wup(TSK_SELF) > 0) dg.overruns++;
@@ -345,6 +345,8 @@ EXPORT void imu_task(INT stacd, void *exinf)
 						  id_acc, id_ira, id_agr, id_d,
 						  (INT)lsm303_error_count());
 					imu_diagnose();
+				} else {
+					/* no other case needs action */
 				}
 			}
 		} else {
@@ -484,7 +486,7 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 
 	(void)stacd; (void)exinf;
 
-	while (1) {
+	for (;;) {
 		tk_dly_tsk(step);
 #if S4_LOG_TILT
 		tilt_print();
@@ -536,6 +538,8 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 					  " (heading %d -> %d)\n",
 					  dh, turn_h0, f.heading_deg);
 			}
+		} else {
+			/* no other case needs action */
 		}
 		last_ms = ms;
 
@@ -622,3 +626,5 @@ EXPORT void s4_get_diag(S4_DIAG *d)
 	*d = s4_diag;
 	tk_unl_mtx(mtx_s4_status);
 }
+
+/*** end of file ***/

@@ -19,3 +19,5 @@ IMPORT void	motor_brake_all(void);
 IMPORT BOOL	motor_is_braked(void);	/* TRUE if all four compare values are 0 */
 
 #endif /* MOTOR_DRIVER_H */
+
+/*** end of file ***/

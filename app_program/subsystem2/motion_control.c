@@ -293,6 +293,8 @@ LOCAL void update_speed(UINT w, UINT d, UINT period_us, INT dt_ms)
 		p->since_ms = 0;
 	} else if (p->since_ms <= 0xFFFFu - (UH)dt_ms) {
 		p->since_ms += (UH)dt_ms;
+	} else {
+		/* no other case needs action */
 	}
 }
 
@@ -605,6 +607,8 @@ LOCAL void motion_cycle(void)
 		}
 	} else if (mf.state == S2_ST_E_STOP_BRAKE) {
 		enter_state(S2_ST_STOPPED);	/* VC cleared it on START */
+	} else {
+		/* no other case needs action */
 	}
 
 	/* 3. steering: keep only the newest value */
@@ -648,7 +652,7 @@ LOCAL void motion_cycle(void)
 /* ---------------------------------------------------------------------
  *  Cyclic handler and task
  * --------------------------------------------------------------------- */
-EXPORT void motion_cyclic_handler(void *exinf)
+EXPORT void motion_cyclic_isr(void *exinf)
 {
 	(void)exinf;
 	tk_set_flg(flg_safety, S2_FLG_TICK);	/* interrupt context: no waiting */
@@ -667,7 +671,7 @@ EXPORT void motion_task(INT stacd, void *exinf)
 	cycle_prev_us = in_w(TIMER_TIMERAWL);
 	publish_status();
 
-	while (1) {
+	for (;;) {
 		waiptn = S2_FLG_TICK;
 #if S2_ESTOP_WAKE
 		if (mf.state != S2_ST_E_STOP_BRAKE &&
@@ -728,3 +732,5 @@ EXPORT UH motion_get_evt_drops(void)
 {
 	return evt_drops;
 }
+
+/*** end of file ***/

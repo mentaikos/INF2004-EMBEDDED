@@ -188,7 +188,9 @@ LOCAL BOOL i2c_xfer(UB addr, const UB *wr, INT wn, UB *rd, INT rn)
 		/* Stop whatever the block is doing; the next call starts clean */
 		out_w(IC_ENABLE, ENABLE_ENABLE | ENABLE_ABORT);
 		t0 = now_us();
-		while ((in_w(IC_ENABLE) & ENABLE_ABORT) != 0 && !timed_out(t0)) ;
+		while (((in_w(IC_ENABLE) & ENABLE_ABORT) != 0) && !timed_out(t0)) {
+			/* wait for the I2C abort to clear, or time out */
+		}
 		out_w(IC_ENABLE, 0);
 		i2c_errors++;
 	}
@@ -228,7 +230,9 @@ LOCAL void wait_us(UW us)
 {
 	UW	t0 = now_us();
 
-	while ((now_us() - t0) < us) ;
+	while ((now_us() - t0) < us) {
+		/* busy-wait for the requested delay */
+	}
 }
 
 LOCAL void line_low(UINT pin)     { out_w(GPIO_OE_SET, PIN_BIT(pin)); }
@@ -286,7 +290,9 @@ EXPORT void lsm303_bus_init(void)
 	set_w(RESETS_RESET, RESETS_RESET_I2C1);
 	clr_w(RESETS_RESET, RESETS_RESET_I2C1);
 	t0 = now_us();
-	while ((in_w(RESETS_RESET_DONE) & RESETS_RESET_I2C1) == 0 && !timed_out(t0)) ;
+	while (((in_w(RESETS_RESET_DONE) & RESETS_RESET_I2C1) == 0) && !timed_out(t0)) {
+		/* wait for I2C1 to leave reset, or time out */
+	}
 
 	out_w(IC_ENABLE, 0);
 	out_w(IC_CON, CON_SLAVE_DISABLE | CON_MASTER | CON_RESTART_EN |
@@ -458,6 +464,8 @@ EXPORT void lsm303_read(IMU_SAMPLE *s)
 		s->ok = read_regs(LSM303_MAG_ADDR, MAG_OUT_X_H_M, m, 6);
 	} else if (s->ok && chip == LSM303_CHIP_AGR) {
 		s->ok = read_regs(LSM303_MAG_ADDR, AGR_OUTX_L_REG_M, m, 6);
+	} else {
+		/* no other case needs action */
 	}
 	if (!s->ok) return;
 
@@ -535,3 +543,5 @@ EXPORT BOOL lsm303_read_reg(UB addr, UB reg, UB *val)
 {
 	return read_regs(addr, reg, val, 1);
 }
+
+/*** end of file ***/

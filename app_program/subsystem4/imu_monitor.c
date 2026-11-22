@@ -341,6 +341,8 @@ LOCAL void update_orientation(IMU_MONITOR *m, const IMU_SAMPLE *s, W dt_ms)
 			m->rate_ref_mdeg = hdg;
 			m->rate_win_ms   = 0;
 		}
+	} else {
+		/* no other case needs action */
 	}
 	m->heading_mdeg  = hdg;
 	m->heading_valid = 1;
@@ -428,6 +430,8 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 		} else if ((W)(now_ms - m->lift_until_ms) >= 0) {
 			m->state = S4_ST_LEVEL;	/* on the floor again */
 			reset_hump(m);
+		} else {
+			/* no other case needs action */
 		}
 		return n;
 	}
@@ -450,6 +454,8 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 			m->armed = 1;
 		} else if (m->armed) {
 			reset_hump(m);		/* tilted a little, came back */
+		} else {
+			/* no other case needs action */
 		}
 		if (m->armed && m->hump_travel_mm > IMU_MAX_HUMP_TRAVEL_MM) {
 			reset_hump(m);		/* constant small tilt: not a hump */
@@ -497,9 +503,13 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 				m->condition_active = 0;
 				m->hump_started     = 1;
 				push(out, &n, IMU_EV_HUMP_START, 0);
+			} else {
+				/* no other case needs action */
 			}
 		} else if (m->condition_active) {
 			m->condition_active = 0;	/* spike shorter than 50 ms */
+		} else {
+			/* no other case needs action */
 		}
 		break;
 
@@ -523,6 +533,8 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 					reset_hump(m);
 				}
 				m->state = S4_ST_LEVEL;
+			} else {
+				/* no other case needs action */
 			}
 		} else {
 			m->condition_active = 0;
@@ -552,3 +564,5 @@ EXPORT void imu_get_fields(const IMU_MONITOR *m, S4_STS_FIELDS *f)
 	f->hump_count  = m->hump_count;
 	f->fail_count  = m->fail_count;
 }
+
+/*** end of file ***/

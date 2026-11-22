@@ -47,7 +47,7 @@ EXPORT void producer_task(INT stacd, void *exinf)
 
 	(void)stacd; (void)exinf;
 
-	while (1) {
+	for (;;) {
 		er = tk_wai_sem(sem_slots, 1, TMO_FEVR);
 		CHECK(er, "tk_wai_sem");
 
@@ -74,3 +74,5 @@ EXPORT void producer_task(INT stacd, void *exinf)
 		tk_dly_tsk(S2_PRODUCER_PERIOD_MS);
 	}
 }
+
+/*** end of file ***/

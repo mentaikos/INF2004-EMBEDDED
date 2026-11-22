@@ -28,7 +28,6 @@ typedef INT		BOOL;
 #define LOCAL		static
 #define EXPORT
 #define IMPORT		extern
-#define Inline		static inline
 #define TRUE		1
 #define FALSE		0
 
@@ -39,3 +38,5 @@ typedef INT		BOOL;
 #endif /* S4_HOST_TEST */
 
 #endif /* IMU_TYPES_H */
+
+/*** end of file ***/
