@@ -64,6 +64,10 @@ IMPORT ER	s1_tlm_set_slot(UINT slot, UD bits);
    0 INIT, 1 IDLE, 2 RUNNING, 3 E_STOPPED, 4 FAULT, 5 COMPLETE */
 IMPORT void	s1_set_mission_state(UINT state);
 
+/* Last barcode letter decoded (Line & Barcode -> S1, 4 Nov), 'A'..'Z';
+   sent in every heartbeat so the dashboard can show it.  Never blocks. */
+IMPORT void	s1_set_barcode(char letter);
+
 /* ---------------------------------------------------------------------
  *  IF-S1-02  Commands out (S1 -> Vehicle Controller / Motion Control)
  *

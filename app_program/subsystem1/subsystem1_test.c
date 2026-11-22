@@ -95,12 +95,16 @@ EXPORT void subsystem1_test(void)
 	TEST_CHECK("S1-U05", ok, "slot input masked to its bit width");
 
 	/* S1-U06: heartbeat and ack sizes */
-	ok  = (s1_encode_heartbeat(buf, 1, 2, 17, 99) == S1_HB_LEN);
+	ok  = (s1_encode_heartbeat(buf, 1, 2, 17, 99, 'Z') == S1_HB_LEN);
 	pos = S1_HDR_BITS + 8 + 3 + 16;
 	ok &= (s1_get_bits(buf, &pos, 4) == 15);	/* link losses saturate */
+	ok &= (s1_get_bits(buf, &pos, 5) == 26);	/* 4 Nov: 'Z' = 26, last bits */
+	s1_encode_heartbeat(buf, 1, 2, 17, 0, 0);
+	ok &= ((buf[4] & 0x1F) == 0);			/* no barcode yet = 0 */
 	ok &= (s1_encode_ack(buf, S1_ACK_FAILED, 5) == S1_ACK_LEN &&
 	       buf[0] == 0xD8 && buf[1] == 0xA0);	/* 11 01 1 000101 00000 */
-	TEST_CHECK("S1-U06", ok, "heartbeat 5 bytes, ack 2 bytes");
+	TEST_CHECK("S1-U06", ok, "heartbeat 5 bytes (last barcode in bits 35..39),"
+		   " ack 2 bytes");
 
 	/* S1-U07 (1 Nov): MAP command, 4 bytes, letters for forward,
 	   U-turn, left, right; round trip, and bad maps are INVALID */

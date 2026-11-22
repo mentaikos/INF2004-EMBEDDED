@@ -67,7 +67,7 @@ int s1_encode_telemetry(uint8_t out[S1_TLM_LEN], int wifi_loss,
 
 int s1_encode_heartbeat(uint8_t out[S1_HB_LEN], uint8_t seq,
 			uint8_t mission_state, uint32_t uptime_s,
-			uint32_t link_losses)
+			uint32_t link_losses, char barcode)
 {
 	uint32_t pos = 0;
 	int i;
@@ -83,6 +83,9 @@ int s1_encode_heartbeat(uint8_t out[S1_HB_LEN], uint8_t seq,
 	s1_put_bits(out, &pos, mission_state & 0x7u, 3);
 	s1_put_bits(out, &pos, uptime_s, 16);
 	s1_put_bits(out, &pos, link_losses, 4);
+	/* 4 Nov: last barcode letter in the 5 bits that were padding */
+	s1_put_bits(out, &pos, (barcode >= 'A' && barcode <= 'Z') ?
+		    (uint32_t)(barcode - 'A' + 1) : 0u, 5);
 	return S1_HB_LEN;
 }
 

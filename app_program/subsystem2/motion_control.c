@@ -72,7 +72,7 @@ LOCAL WHEEL		wh[2];
 LOCAL UB		cmd_type;	/* MOVE_DIST / TURN in progress */
 LOCAL UH		goal_counts;	/* average progress that ends it */
 LOCAL H			cruise_mm_s;	/* cruise speed of the active state */
-LOCAL H			limit_mm_s = S2_MAX_SPEED_CM_S * 10;
+LOCAL H			limit_mm_s = S2_MAX_SPEED_MM_S;
 LOCAL B			steer;		/* latest steering, + = right */
 LOCAL UH		steer_age_ms;
 LOCAL UH		dist_mm;	/* 12-bit wrapping distance */
@@ -190,7 +190,7 @@ LOCAL void start_goal(UINT type, UH counts, INT cruise)
 LOCAL void handle_cmd(UW w)
 {
 	UINT	type = s2_cmd_type(w);
-	INT	v = s2_cmd_speed(w) * 10;		/* cm/s -> mm/s */
+	INT	v = s2_cmd_speed(w);			/* 12 Nov: mm/s (was cm/s) */
 	INT	a, d;
 	UW	um;
 
@@ -228,7 +228,7 @@ LOCAL void handle_cmd(UW w)
 		}
 		if (v == 0) v = S2_DEFAULT_MM_S;
 		if (d < 0) v = imin(v, S2_REVERSE_MAX_MM_S);	/* safe reverse */
-		um = (UW)(d < 0 ? -d : d) * 10000u;		/* cm -> um */
+		um = (UW)(d < 0 ? -d : d) * 1000u;		/* 12 Nov: mm -> um */
 		start_goal(S2_CMD_MOVE_DIST, um_to_counts(um), v);
 		want_dirs(d < 0, d < 0);
 		mf.state = S2_ST_MOVE_DISTANCE;
@@ -243,7 +243,7 @@ LOCAL void handle_cmd(UW w)
 		}
 		if (v == 0) v = S2_DEFAULT_MM_S;
 		/* each wheel travels pi * track * |angle| / 360 */
-		um = ((UW)S2_TRACK_MM * 1000u * 355u / 113u) *
+		um = ((UW)S2_TRACK_X10_MM * 100u * 355u / 113u) *
 		     (UW)(a < 0 ? -a : a) / 360u;
 		start_goal(S2_CMD_TURN, um_to_counts(um), v);
 		want_dirs(a < 0, a > 0);	/* + = right: left fwd, right rev */
@@ -364,13 +364,30 @@ LOCAL void finish_goal(void)
 	send_evt(EVT_MOTION_DONE, type);
 }
 
+/* 4 Nov: speed in SPEED_FOLLOW after the start/stop ramp, -1 = not
+   following (re-initialised from the wheels on entry) */
+LOCAL INT	follow_v = -1;
+
 LOCAL void set_targets(void)
 {
 	INT	v, split, corr, avg, rem;
 
+	if (mf.state != S2_ST_SPEED_FOLLOW) follow_v = -1;
+
 	switch (mf.state) {
 	case S2_ST_SPEED_FOLLOW:
 		v = imin(cruise_mm_s, limit_mm_s);
+		/* 4 Nov: the start/stop ramp acts on the speed here; the
+		   wheels then follow the steering at once (drive_wheel) */
+		if (follow_v < 0) follow_v = ((INT)wh[0].ramp + wh[1].ramp) / 2;
+		if (v > follow_v + S2_ACCEL_MM_S_PER_CYC) {
+			follow_v += S2_ACCEL_MM_S_PER_CYC;
+		} else if (v < follow_v - S2_DECEL_MM_S_PER_CYC) {
+			follow_v -= S2_DECEL_MM_S_PER_CYC;
+		} else {
+			follow_v = v;
+		}
+		v = follow_v;
 		split = v * steer / S2_STEER_FULL;	/* + steer: left faster */
 		/* 28 Oct (jiahao16, Fine-Tuning 4bea17a, merged 30 Oct): the
 		   outer wheel keeps the cruise speed and the inner one slows by
@@ -388,7 +405,7 @@ LOCAL void set_targets(void)
 		rem = goal_counts - avg;
 		if (rem * 10 <= goal_counts) v = imin(v, S2_SLOW_MM_S);  /* last 10 % */
 		/* heading hold: keep both wheels' counts equal */
-		corr = ((INT)wh[0].progress - wh[1].progress) * S2_HEADING_K_MM_S;
+		corr = ((INT)wh[0].progress - wh[1].progress) * S2_HEADING_K_X100 / 100;
 		corr = s2_clamp(corr, -v / 2, v / 2);
 		wh[0].target = (H)(v - corr);
 		wh[1].target = (H)(v + corr);
@@ -419,15 +436,24 @@ LOCAL void drive_wheel(UINT w, INT dt_ms)
 		}
 	}
 
-	/* acceleration limit (stopping is immediate) */
-	if (tgt == 0) {
-		p->ramp = 0;
-	} else if (tgt > p->ramp + S2_ACCEL_MM_S_PER_CYC) {
-		p->ramp = (H)(p->ramp + S2_ACCEL_MM_S_PER_CYC);
-	} else if (tgt < p->ramp - S2_DECEL_MM_S_PER_CYC) {
-		p->ramp = (H)(p->ramp - S2_DECEL_MM_S_PER_CYC);
-	} else {
-		p->ramp = (H)tgt;
+	/* acceleration limit (stopping is immediate).  4 Nov: in
+	   SPEED_FOLLOW the speed is already ramped in set_targets(), so a
+	   wheel may follow a steering change faster */
+	{
+		INT	up = S2_ACCEL_MM_S_PER_CYC, dn = S2_DECEL_MM_S_PER_CYC;
+
+		if (mf.state == S2_ST_SPEED_FOLLOW) {
+			up = dn = S2_FOLLOW_STEP_MM_S_PER_CYC;
+		}
+		if (tgt == 0) {
+			p->ramp = 0;
+		} else if (tgt > p->ramp + up) {
+			p->ramp = (H)(p->ramp + up);
+		} else if (tgt < p->ramp - dn) {
+			p->ramp = (H)(p->ramp - dn);
+		} else {
+			p->ramp = (H)tgt;
+		}
 	}
 
 	if (p->ramp == 0) {

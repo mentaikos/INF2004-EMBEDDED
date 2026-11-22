@@ -302,6 +302,11 @@ void cyw43_utk_task(int32_t stacd, void *exinf)
                 tm_printf((UB*)"wifi: link up, ip=%d.%d.%d.%d\n",
                           (int)(ip & 0xff), (int)((ip >> 8) & 0xff),
                           (int)((ip >> 16) & 0xff), (int)((ip >> 24) & 0xff));
+                /* 20 Nov: WiFi power saving off.  The driver's default
+                 * (CYW43_PERFORMANCE_PM) lets the chip sleep between
+                 * messages; with the 2 s MQTT keep-alive and a phone
+                 * hotspot the link stalled ("buffer full", reconnects). */
+                (void)cyw43_wifi_pm(&cyw43_state, CYW43_NONE_PM);
             } else {
                 tm_printf((UB*)"wifi: link status -> %s (%d)\n",
                           link_status_str(radio_status.link_status),

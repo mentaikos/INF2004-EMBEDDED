@@ -46,7 +46,7 @@ LOCAL UH		bc_overflows_seen;
 
 /* State kept between cycles that is not in lt or bc (task only) */
 LOCAL struct {
-	UB	last_nav : 2;	/* NAV_xxx; 1 Nov: always 0, the VC maps letters */
+	UB	last_nav : 2;	/* 4 Nov: barcodes decoded, mod 4 (telemetry) */
 	UB	nav_valid : 1;
 	UB	calibrated : 1;
 	UB	overflow : 1;	/* bc_ring overflowed (sticky) */
@@ -114,20 +114,33 @@ LOCAL void send_steer(void)
 #if S3_BC_HOLD_STRAIGHT
 	static UB	held;
 
-	/* 30 Oct: drive straight while a barcode is being read */
-	if (bc.state == S3_BC_MEASURING) {
+	/* 30 Oct: drive straight while a barcode is being read.
+	   4 Nov: only while its edges keep coming (S3_BC_HOLD_QUIET_MS);
+	   a single black line (junction, curve) no longer holds it 5 s */
+	/* 6 Nov: from the FIRST bar (see S3_BC_HOLD_EARLY_QUIET_MS) */
+	if (bc.state == S3_BC_MEASURING &&
+	    ((bc.n >= S3_BC_HOLD_MIN_ELEMS &&			/* '*' passed: a barcode */
+	      (H)(drv_ir_ticks() - bc.last_t) < (H)S3_MS(S3_BC_HOLD_QUIET_MS)) ||
+	     (!bc.nostart &&					/* '*' not failed yet */
+	      (H)(drv_ir_ticks() - bc.last_t) < (H)S3_MS(S3_BC_HOLD_EARLY_QUIET_MS)))) {
 #if S3_BC_STEER_LIMIT > 0
 		if (steer >  S3_BC_STEER_LIMIT) steer =  S3_BC_STEER_LIMIT;
 		if (steer < -S3_BC_STEER_LIMIT) steer = -S3_BC_STEER_LIMIT;
 #else
 		steer = lt.trim;
 #endif
-		if (!held) tm_printf((UB*)"s3: barcode: steering limited to +-%d\n",
-				      S3_BC_STEER_LIMIT);
-		held = 1;
+		/* 6 Nov: printed once the '*' passed (mat marks would flood
+		   the log) */
+		if (held < 2 && bc.n >= S3_BC_HOLD_MIN_ELEMS) {
+			tm_printf((UB*)"s3: barcode: start '*' seen, steering limited"
+				  " to +-%d\n", S3_BC_STEER_LIMIT);
+			held = 2;
+		} else if (held == 0) {
+			held = 1;
+		}
 	} else if (held) {
+		if (held == 2) tm_printf((UB*)"s3: barcode: steering released\n");
 		held = 0;
-		tm_printf((UB*)"s3: barcode: steering released\n");
 	}
 #endif
 	if (motion_send_steer(steer) == E_OK) {
@@ -249,8 +262,15 @@ LOCAL void print_widths(const S3_BC_RESULT *res)
 	}
 	tm_printf((UB*)"\n");
 	/* 1 Nov: the black switch level it learnt (the white one is ~3/4) */
+#if S3_BC_LOW_CONTRAST
+	/* 12 Nov: a bar starts S3_BC_LC_RISE above the paper next to it */
+	tm_printf((UB*)"s3:   black above %d now (%d over the white beside the"
+		  " bar; floor white %d)\n",
+		  drv_ir_threshold(), S3_BC_LC_RISE, drv_ir_white());
+#else
 	tm_printf((UB*)"s3:   black above %d (floor white %d)\n",
 		  drv_ir_threshold(), drv_ir_white());
+#endif
 }
 #endif
 
@@ -262,6 +282,8 @@ LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 		   it and maps it to a movement (mapping sent by MQTT). */
 		dg.barcodes_ok++;
 		s3.nav_valid = 1;
+		s3.last_nav = (UB)(s3.last_nav + 1);	/* 4 Nov: count, wraps at 4 */
+		if (s1_set_barcode != NULL) s1_set_barcode(res->ch);	/* dashboard */
 		send_vc(EVT_BARCODE, (UW)(UB)res->ch | ((UW)res->rev << 8));
 		tm_printf((UB*)"s3: BARCODE READ: '%c' (scanned %s)\n", res->ch,
 			  res->rev ? "right->left" : "left->right");
@@ -330,6 +352,35 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 						  t, &res), &res);
 		}
 		report_barcode(s3_bc_poll(&bc, now, &res), &res);
+
+#if S3_DEBUG_BARCODE
+		/* 5 Nov: the sensor went darker than white + S3_BC_GREY_DELTA
+		   but no edge came at all (so nothing else is printed): say so
+		   once, 1 s after the grey ended, with the levels */
+		{
+			static UH	grey_max, grey_t;
+			static UB	grey_edges;
+			INT		white = drv_ir_white();
+
+			if (grey_max == 0 && n == 0) grey_edges = 0;	/* new episode */
+			if (n > 0) grey_edges = 1;
+			if ((INT)raw > white + S3_BC_GREY_DELTA) {
+				if (raw > grey_max) grey_max = raw;
+				grey_t = now;
+			} else if (grey_max != 0 &&
+				   (H)(now - grey_t) > (H)S3_MS(1000)) {
+				if (!grey_edges) {
+					tm_printf((UB*)"s3: barcode sensor saw grey up to %d"
+						  " but never black (black needs > %d,"
+						  " white %d): sensor too high, or not"
+						  " over the bars?\n", grey_max,
+						  drv_ir_threshold(), white);
+				}
+				grey_max = 0;
+				grey_edges = 0;
+			}
+		}
+#endif
 	}
 
 	if (s3.err_hold > 0) s3.err_hold--;

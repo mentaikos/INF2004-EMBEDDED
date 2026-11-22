@@ -21,10 +21,38 @@
 #define S5_RANGE_UNSCANNED     3
 #define S5_RANGE_MIN_CM        5
 #define S5_RANGE_MAX_CM        100
-#define S5_DETECT_CM           25       /* 28 Oct: was 20; the robot coasted to
+#define S5_DETECT_CM           21       /* 28 Oct: was 20; the robot coasted to
 					   ~16 cm, inside its own turning circle
 					   (16.8 cm), so every first scan said
-					   REVERSE */
+					   REVERSE.  19 Nov: 21 again -- at 25 it
+					   stopped ~20-23 cm away, in the floor
+					   echoes (S5_FLOOR_MIN_CM), and the floor
+					   was taken as obstacle all round: REVERSE
+					   with both sides open.  The turning check
+					   now counts S5_SENSOR_AHEAD_MM, so the
+					   ~16 cm stop is no longer "too close". */
+/* 19 Nov: the sensor is tilted down and hears the floor 23-32 cm away
+ * at most bearings (real scans: open floor 29-30 cm all round, rings at
+ * 23-29 cm).  With the obstacle nearer than that, readings in this
+ * band are floor: not part of the obstacle, open space beside it. */
+#define S5_FLOOR_MIN_CM        23
+#define S5_FLOOR_MAX_CM        32
+/* 19 Nov: the sensor is this far ahead of the axle the robot turns
+ * about (placeholder robot: ~10 cm; 5 cm assumed), so an obstacle at
+ * range r is at least r + this from the turning centre. */
+#define S5_SENSOR_AHEAD_MM     50
+/* 19 Nov: during a scan, the robot counts as stopped unless Motion is
+ * driving or the odometer has moved more than this (task_scan.c): one
+ * encoder tick from a settling wheel used to abort every scan. */
+#define S5_SCAN_DRIFT_MM       15
+/* 19 Nov: s5_face_width: a bin is looking at the face if its forward
+ * component (r sin a) is within this of the face's */
+#define S5_FACE_TOL_MM         12
+/* 19 Nov: after the sweep, bins within this many of the closest that
+ * missed the obstacle are pinged once more, for s5_face_width only
+ * (wscan; the bypass keeps the first readings).  8 = +-40 deg, at most
+ * ~1 s more per scan (VC_SCAN_TIMEOUT_MS is 5 s). */
+#define S5_WIDTH_REPING_BINS   8
 /* After a stop, an obstacle IN THE ROBOT'S PATH (within half the required
  * width of the centre line) this close is planned around, not driven
  * into: without this, the rescan after a 10 cm reverse saw it beyond
@@ -50,6 +78,22 @@
 #define S5_LINE_FRESH_MS       120
 #define S5_LINE_CONFIRM_MS     120
 #define S5_PROFILE_BAND_CM     10
+/* 16 Nov (integration fix, for the VC's width-based bypass): the WIDTH
+ * reported in the profile is the obstacle itself only: the unbroken run
+ * of bearings around the closest reading that stay within this many cm
+ * of it.  With the 10 cm band above, a cup at 23 cm with other echoes
+ * at 25-31 cm across the sweep was reported 47 cm wide (16 Nov log)
+ * and the bypass drove far too wide and too long; its own run (105-135
+ * deg, 23-25 cm) gives ~12 cm.  The 10 cm band still decides the
+ * foreground for side clearance and the plan (unchanged). */
+#define S5_WIDTH_BAND_CM       3
+/* 16 Nov, second run: the ultrasonic beam is ~15-20 deg wide, so a
+ * bottle (~8 cm) at 24 cm echoed over 55 deg of the sweep and its run
+ * still came out 17-23 cm wide.  The beam spread is taken off both
+ * ends of the run (this many 5-degree bins each side) before the width
+ * and the centre are measured.  MEASURE: a known 8 cm bottle at 20-30
+ * cm should log width ~8-12 cm. */
+#define S5_WIDTH_BEAM_BINS     2
 #define S5_BEAM_ALLOW_DEG      15
 /* Side gap check (side_clearance): only things within the strip the robot
  * drives through while passing count -- up to the obstacle face band +
@@ -129,6 +173,9 @@
 
 /* 8-byte profile, unused bits zero.
  * w0: closest 7, visible width 8, x 8 signed, y 7 (all cm).
+ * 16 Nov: x is the CENTRE of the obstacle (of its own run of bearings,
+ * beam spread taken off), so its edges are x - width/2 .. x + width/2;
+ * y is still the closest point (the near face). 
  * w1: left clearance 7, right clearance 7, first edge index 5,
  *     last edge index 5, action 3, valid 1.
  * x positive right, y forward; distance uses the codes above.
@@ -169,13 +216,15 @@ typedef struct {
 	UB invalid_count : 2;
 	UB retries : 2;
 	UB line_count : 2;
-	UB reserved2 : 2;
+	UB width_pass : 1;      /* 19 Nov: re-pinging for the width (wscan) */
+	UB reserved2 : 1;
 	UB range : 7;
 	UB reserved3 : 1;
 	UB generation, last_line_seq;
 	UH plan_ms, recovery_ms, line_start_ms, retry_ms;
 	UW pending;
 	UB scan[S5_SCAN_BYTES];
+	UB wscan[S5_SCAN_BYTES];  /* 19 Nov: scan + re-pings, for s5_face_width only */
 	S5_PROFILE profile;
 } S5_SCAN;
 
@@ -204,6 +253,9 @@ IMPORT void s5_scan_set(UB *scan, UINT index, UINT range);
 IMPORT UB s5_scan_get(const UB *scan, UINT index);
 IMPORT UW s5_fine_mask(const UB *scan);
 IMPORT S5_PROFILE s5_make_profile(const UB *scan);
+/* 19 Nov: the obstacle's width for the dashboard and the log, cm (not the
+ * profile's width, which the bypass uses) */
+IMPORT UINT s5_face_width(const UB *scan);
 IMPORT UW s5_profile_event(S5_PROFILE profile, UB generation);
 IMPORT void s5_scan_init(S5_SCAN *s);
 IMPORT void s5_scan_tick(S5_SCAN *s, const S5_INPUT *in, S5_OUTPUT *out);

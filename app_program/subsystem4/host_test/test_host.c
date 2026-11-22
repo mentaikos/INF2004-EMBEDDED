@@ -48,7 +48,7 @@ static float noise(float amp)
 	return amp * (((float)((rng >> 8) & 0xFFFF) / 65535.0f) * 2.0f - 1.0f);
 }
 
-typedef struct { int starts, ends, shocks, faults; int heights[8]; int nh; } result_t;
+typedef struct { int starts, ends, faults, lifts, cause; int heights[8]; int nh; } result_t;
 
 static void count(result_t *r, const IMU_EVENT *ev, int n)
 {
@@ -58,8 +58,8 @@ static void count(result_t *r, const IMU_EVENT *ev, int n)
 			r->ends++;
 			if (r->nh < 8) r->heights[r->nh++] = ev[i].height_mm;
 		}
-		if (ev[i].type == IMU_EV_SHOCK) r->shocks++;
 		if (ev[i].type == IMU_EV_SENSOR_FAULT) r->faults++;
+		if (ev[i].type == IMU_EV_LIFTED) { r->lifts++; r->cause = ev[i].height_mm; }
 	}
 }
 
@@ -67,7 +67,7 @@ static H mg(float g) { return (H)lroundf(g * 1000.0f); }
 
 static void run(IMU_MONITOR *m, UW *t, float *x_rear, float *dist, long *dist_sent,
 		const hump_t *hp, int nh, float speed, float length,
-		float noise_g, result_t *r, int shock_at_step)
+		float noise_g, result_t *r)
 {
 	const float L = IMU_WHEELBASE_MM;
 	int steps = (int)(length / (speed * IMU_PERIOD_MS / 1000.0f));
@@ -95,8 +95,45 @@ static void run(IMU_MONITOR *m, UW *t, float *x_rear, float *dist, long *dist_se
 			mg(-0.02f + sinf(pitch) + noise(noise_g)), /* in calibration */
 			mg(0.03f + cosf(pitch) + noise(noise_g)),
 			200, 50, -300 };
-		if (k == shock_at_step) s.az += 3000;
 
+		*t += IMU_PERIOD_MS;
+		IMU_EVENT ev[IMU_MAX_EVENTS];
+		count(r, ev, imu_step(m, &s, dd, *t, ev));
+	}
+}
+
+/* 5 Nov: hump under the RIGHT wheel only.  Left wheel and caster stay
+   on the floor; the caster is lc mm behind the axle.  The body rolls
+   asin(z / track) and pitches asin((z / 2) / lc).  jolt_g: one-sample
+   forward jolt as the wheel hits the ramp (0 = none). */
+static void run_one_wheel(IMU_MONITOR *m, UW *t, const hump_t *hp, float speed,
+			  float length, float noise_g, float lc, float jolt_g,
+			  result_t *r)
+{
+	const float T = IMU_TRACK_MM;
+	int steps = (int)(length / (speed * IMU_PERIOD_MS / 1000.0f));
+	float x = 0, dist = 0; long sent = 0; int jolted = 0;
+
+	for (int k = 0; k < steps; k++) {
+		float dx = speed * IMU_PERIOD_MS / 1000.0f;
+		x += dx;
+		float z = profile(hp, 1, x);
+		float roll = asinf(fminf(1.0f, z / T));
+		float pitch = asinf(fminf(1.0f, (z / 2) / lc));
+		dist += dx;
+		long now_mm = lroundf(dist);
+		INT dd = (INT)(now_mm - sent);
+		sent = now_mm;
+
+		IMU_SAMPLE s = { TRUE,
+			mg(0.01f + sinf(roll) * cosf(pitch) + noise(noise_g)),
+			mg(-0.02f + sinf(pitch) + noise(noise_g)),
+			mg(0.03f + cosf(roll) * cosf(pitch) + noise(noise_g)),
+			200, 50, -300 };
+		if (jolt_g > 0 && !jolted && z > 0.5f) {	/* wheel meets the ramp */
+			s.ay += mg(jolt_g);
+			jolted = 1;
+		}
 		*t += IMU_PERIOD_MS;
 		IMU_EVENT ev[IMU_MAX_EVENTS];
 		count(r, ev, imu_step(m, &s, dd, *t, ev));
@@ -124,7 +161,7 @@ static void hump_case(const char *name, float h, float half, float speed,
 
 	calibrate(&m, &t);
 	run(&m, &t, &x, &dist, &sent, &hp, 1, speed, 300.0f + 2 * half + 600.0f,
-	    noise_g, &r, -1);
+	    noise_g, &r);
 	printf("%s: h=%.0f mm, half-length %.0f mm (slope %.1f deg), %.0f mm/s, noise %.2f g\n",
 	       name, h, half, atanf(h / half) * 57.2958f, speed, noise_g);
 	CHECK(r.starts == 1 && r.ends == 1, "one HUMP_START and one HUMP_END (got %d/%d)",
@@ -132,6 +169,26 @@ static void hump_case(const char *name, float h, float half, float speed,
 	if (r.nh) CHECK(abs(r.heights[0] - (int)h) <= tol, "height %d mm vs true %.0f mm (tol %d)",
 			r.heights[0], h, tol);
 }
+
+static void one_wheel_case(const char *name, float h, float half, float speed,
+			   float noise_g, float lc, float jolt_g, int tol)
+{
+	IMU_MONITOR m; UW t = 0;
+	result_t r = {0};
+	hump_t hp = { 300.0f, h, half };
+
+	calibrate(&m, &t);
+	run_one_wheel(&m, &t, &hp, speed, 300.0f + 2 * half + 600.0f, noise_g,
+		      lc, jolt_g, &r);
+	printf("%s: h=%.0f mm under the right wheel, caster %.0f mm behind,"
+	       " %.0f mm/s, noise %.2f g, jolt %.1f g\n", name, h, lc, speed,
+	       noise_g, jolt_g);
+	CHECK(r.starts == 1 && r.ends == 1, "one HUMP_START and one HUMP_END (got %d/%d)",
+	      r.starts, r.ends);
+	if (r.nh) CHECK(abs(r.heights[0] - (int)h) <= tol, "height %d mm vs true %.0f mm (tol %d)",
+			r.heights[0], h, tol);
+}
+
 
 int main(void)
 {
@@ -177,25 +234,62 @@ int main(void)
 	{
 		IMU_MONITOR m; UW t = 0; float x = 0, dist = 0; long sent = 0; result_t r = {0};
 		calibrate(&m, &t);
-		run(&m, &t, &x, &dist, &sent, NULL, 0, 200.0f, 2000.0f, 0.08f, &r, -1);
+		run(&m, &t, &x, &dist, &sent, NULL, 0, 200.0f, 2000.0f, 0.08f, &r);
 		CHECK(r.starts == 0 && r.ends == 0, "no hump events on 2 m of flat track, 0.08 g noise");
 	}
 
-	printf("== Shock ==\n");
+	printf("== Lifted / overturned (12 Nov) ==\n");
 	{
-		IMU_MONITOR m; UW t = 0; float x = 0, dist = 0; long sent = 0; result_t r = {0};
+		IMU_MONITOR m; UW t = 0; result_t r = {0};
+		IMU_EVENT ev[IMU_MAX_EVENTS];
+		unsigned rng_saved = rng;	/* later tests keep their noise */
 		calibrate(&m, &t);
-		run(&m, &t, &x, &dist, &sent, NULL, 0, 200.0f, 400.0f, 0.02f, &r, 50);
-		CHECK(r.shocks == 1, "one SHOCK for a 3 g spike");
-		CHECK(m.state == S4_ST_LEVEL, "back to LEVEL after the 200 ms hold");
-	}
-	{
-		IMU_MONITOR m; UW t = 0; float x = 0, dist = 0; long sent = 0; result_t r = {0};
-		hump_t hp = { 100.0f, 25.0f, 80.0f };
+		/* 2 s of driving with 0.15 g noise, 2-sample jolts of 1 g,
+		   a 3 g spike and a sideways knock: no lift */
+		for (int k = 0; k < 200; k++) {
+			IMU_SAMPLE s = { TRUE, mg(0.01f + noise(0.15f)), mg(-0.02f + noise(0.15f)),
+					 mg(1.03f + noise(0.15f)), 200, 50, -300 };
+			if (k == 20 || k == 21) s.az += 1000;
+			if (k == 60) s.az += 3000;
+			if (k == 100) s.ax += 3000;
+			t += IMU_PERIOD_MS;
+			imu_set_floor(&m, FALSE);
+			count(&r, ev, imu_step(&m, &s, 2, t, ev));
+		}
+		CHECK(r.lifts == 0, "no LIFTED on jolts, a 3 g spike, a knock or 0.15 g noise");
+		/* a junction line under both sensors for 0.2 s right after
+		   the jolts: no lift */
+		for (int k = 0; k < 20; k++) {
+			IMU_SAMPLE s = { TRUE, mg(0.01f), mg(-0.02f), mg(1.03f), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_set_floor(&m, TRUE);
+			count(&r, ev, imu_step(&m, &s, 2, t, ev));
+		}
+		CHECK(r.lifts == 0, "no LIFTED crossing a junction line (0.2 s)");
+		/* picked up gently: tilted 19 deg, then held level, both line
+		   sensors black */
+		for (int k = 0; k < 200; k++) {
+			float p = (k < 30) ? 0.33f : 0.0f;
+			IMU_SAMPLE s = { TRUE, mg(0.01f + noise(0.02f)), mg(-0.02f + p + noise(0.02f)),
+					 mg(0.03f + sqrtf(1.0f - p * p) + noise(0.02f)), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_set_floor(&m, TRUE);
+			count(&r, ev, imu_step(&m, &s, 0, t, ev));
+		}
+		CHECK(r.lifts == 1 && r.cause == IMU_LIFT_CAUSE_HELD && m.state == S4_ST_LIFTED,
+		      "gentle lift, held level in the air -> LIFTED (no floor)");
+		/* upside down for 300 ms */
 		calibrate(&m, &t);
-		run(&m, &t, &x, &dist, &sent, &hp, 1, 200.0f, 800.0f, 0.02f, &r, 70);
-		CHECK(r.shocks == 1 && r.ends >= 1 && r.heights[0] == 0,
-		      "shock while climbing sends HUMP_END(0) so the VC leaves HUMP_TRAVERSE");
+		r.lifts = 0;
+		for (int k = 0; k < 30; k++) {
+			IMU_SAMPLE s = { TRUE, mg(0.01f), mg(-0.02f), mg(0.03f - 1.0f), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_set_floor(&m, FALSE);
+			count(&r, ev, imu_step(&m, &s, 0, t, ev));
+		}
+		CHECK(r.lifts == 1 && r.cause == IMU_LIFT_CAUSE_TILT && m.state == S4_ST_LIFTED,
+		      "upside down -> LIFTED (overturned)");
+		rng = rng_saved;
 	}
 
 	printf("== I2C fault ==\n");
@@ -208,6 +302,44 @@ int main(void)
 		CHECK(r.faults == 1 && m.state == S4_ST_FAULT, "3 failed reads -> FAULT + one SENSOR_FAULT");
 		imu_restart(&m);
 		CHECK(m.state == S4_ST_CALIBRATING, "after re-init the IMU calibrates again");
+	}
+
+	printf("== Calibration needs a still robot at ~1 g (20 Nov) ==\n");
+	{
+		IMU_MONITOR m; UW t = 0;
+		IMU_EVENT ev[IMU_MAX_EVENTS];
+		int i;
+
+		/* accel powered down: all zeros -> never "calibrated" */
+		imu_init(&m);
+		for (i = 0; i < 3 * IMU_CAL_SAMPLES; i++) {
+			IMU_SAMPLE z = { TRUE, 0, 0, 0, 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_step(&m, &z, 0, t, ev);
+		}
+		CHECK(m.state == S4_ST_CALIBRATING && !m.calibrated,
+		      "0 g samples are not taken as level");
+
+		/* being placed: tilted 7 deg and moving for 1 s, then still
+		   and flat -> calibrates on the flat part, floor reads ~0 */
+		imu_init(&m);
+		for (i = 0; i < 100; i++) {
+			float a = 0.12f * sinf(i * 0.3f);
+			IMU_SAMPLE s = { TRUE, mg(0.01f), mg(-0.02f + 0.12f + a),
+					 mg(0.03f + 0.99f), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_step(&m, &s, 0, t, ev);
+		}
+		CHECK(m.state == S4_ST_CALIBRATING, "handled robot does not finish calibrating");
+		calibrate(&m, &t);	/* still, flat */
+		for (i = 0; i < 50; i++) {
+			IMU_SAMPLE s = { TRUE, mg(0.01f + noise(0.01f)), mg(-0.02f + noise(0.01f)),
+					 mg(1.03f + noise(0.01f)), 200, 50, -300 };
+			t += IMU_PERIOD_MS;
+			imu_step(&m, &s, 0, t, ev);
+		}
+		CHECK(m.state == S4_ST_LEVEL && m.pitch_mdeg > -1000 && m.pitch_mdeg < 1000,
+		      "after a still calibration the flat floor reads ~0 deg");
 	}
 
 	printf("== Heading and turn rate (28 Oct fix) ==\n");
@@ -261,6 +393,14 @@ int main(void)
 			      n ? rate_sum / n : 0);
 		}
 	}
+
+	printf("== 5 Nov: hump under ONE wheel (the track ramp) ==\n");
+	one_wheel_case("Ramp, right wheel, caster 60 mm", 10.0f, 60.0f, 200.0f, 0.02f, 60.0f, 0, 1);
+	one_wheel_case("Ramp, right wheel, caster close", 10.0f, 60.0f, 200.0f, 0.02f, 40.0f, 0, 1);
+	one_wheel_case("Ramp, right wheel, jolt at the edge", 10.0f, 60.0f, 200.0f, 0.02f, 40.0f, 0.5f, 1);
+	one_wheel_case("Ramp, right wheel, noisy", 10.0f, 60.0f, 200.0f, 0.08f, 40.0f, 0, 2);
+	one_wheel_case("Ramp, right wheel, slow", 10.0f, 60.0f, 100.0f, 0.02f, 40.0f, 0, 1);
+	one_wheel_case("Black hump, right wheel", 25.0f, 80.0f, 200.0f, 0.02f, 40.0f, 0, 2);
 
 	printf("== Packing ==\n");
 	{
