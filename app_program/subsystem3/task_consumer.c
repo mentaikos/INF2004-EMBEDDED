@@ -46,7 +46,7 @@ LOCAL UH		bc_overflows_seen;
 
 /* State kept between cycles that is not in lt or bc (task only) */
 LOCAL struct {
-	UB	last_nav : 2;	/* 4 Nov: barcodes decoded, mod 4 (telemetry) */
+	UB	last_nav : 2;	/* barcodes decoded, mod 4 (telemetry) */
 	UB	nav_valid : 1;
 	UB	calibrated : 1;
 	UB	overflow : 1;	/* bc_ring overflowed (sticky) */
@@ -114,10 +114,10 @@ LOCAL void send_steer(void)
 #if S3_BC_HOLD_STRAIGHT
 	static UB	held;
 
-	/* 30 Oct: drive straight while a barcode is being read.
-	   4 Nov: only while its edges keep coming (S3_BC_HOLD_QUIET_MS);
-	   a single black line (junction, curve) no longer holds it 5 s */
-	/* 6 Nov: from the FIRST bar (see S3_BC_HOLD_EARLY_QUIET_MS) */
+	/* Drive straight while a barcode is being read: from the first bar
+	   (S3_BC_HOLD_EARLY_QUIET_MS), then only while its edges keep
+	   coming (S3_BC_HOLD_QUIET_MS), so a single black line (junction,
+	   curve) does not hold it */
 	if (bc.state == S3_BC_MEASURING &&
 	    ((bc.n >= S3_BC_HOLD_MIN_ELEMS &&			/* '*' passed: a barcode */
 	      (H)(drv_ir_ticks() - bc.last_t) < (H)S3_MS(S3_BC_HOLD_QUIET_MS)) ||
@@ -129,7 +129,7 @@ LOCAL void send_steer(void)
 #else
 		steer = lt.trim;
 #endif
-		/* 6 Nov: printed once the '*' passed (mat marks would flood
+		/* Printed only once the '*' passed (mat marks would flood
 		   the log) */
 		if (held < 2 && bc.n >= S3_BC_HOLD_MIN_ELEMS) {
 			tm_printf((UB*)"s3: barcode: start '*' seen, steering limited"
@@ -169,7 +169,7 @@ LOCAL void line_cycle(UW dt_ms, S3_STS_FIELDS *f)
 	   it is cleared there and every new line-follow starts from 0. */
 	if (s2_sts_state(motion_get_status()) != S2_ST_SPEED_FOLLOW) {
 		lt.trim = 0;
-		lt.bend = 0;	/* integration fix 28 Oct */
+		lt.bend = 0;
 	}
 
 	switch (s3_line_step(&lt, left, center, dt_ms)) {
@@ -265,9 +265,9 @@ LOCAL void print_widths(const S3_BC_RESULT *res)
 		tm_printf((UB*)" %d", bc.elem[i] * 10 / S3_TICKS_PER_MS);
 	}
 	tm_printf((UB*)"\n");
-	/* 1 Nov: the black switch level it learnt (the white one is ~3/4) */
+	/* the black switch level it learnt (the white one is ~3/4) */
 #if S3_BC_LOW_CONTRAST
-	/* 12 Nov: a bar starts S3_BC_LC_RISE above the paper next to it */
+	/* a bar starts S3_BC_LC_RISE above the paper next to it */
 	tm_printf((UB*)"s3:   black above %d now (%d over the white beside the"
 		  " bar; floor white %d)\n",
 		  drv_ir_threshold(), S3_BC_LC_RISE, drv_ir_white());
@@ -282,11 +282,11 @@ LOCAL void report_barcode(INT ev, const S3_BC_RESULT *res)
 {
 	switch (ev) {
 	case S3_BEV_NAV_CMD:
-		/* 1 Nov: a letter A..Z, read either way round.  The VC stores
+		/* A letter A..Z, read either way round.  The VC stores
 		   it and maps it to a movement (mapping sent by MQTT). */
 		dg.barcodes_ok++;
 		s3.nav_valid = 1;
-		s3.last_nav = (UB)(s3.last_nav + 1);	/* 4 Nov: count, wraps at 4 */
+		s3.last_nav = (UB)(s3.last_nav + 1);	/* count, wraps at 4 */
 		if (s1_set_barcode != NULL) s1_set_barcode(res->ch);	/* dashboard */
 		send_vc(EVT_BARCODE, (UW)(UB)res->ch | ((UW)res->rev << 8));
 		tm_printf((UB*)"s3: BARCODE READ: '%c' (scanned %s)\n", res->ch,
@@ -358,7 +358,7 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 		report_barcode(s3_bc_poll(&bc, now, &res), &res);
 
 #if S3_DEBUG_BARCODE
-		/* 5 Nov: the sensor went darker than white + S3_BC_GREY_DELTA
+		/* The sensor went darker than white + S3_BC_GREY_DELTA
 		   but no edge came at all (so nothing else is printed): say so
 		   once, 1 s after the grey ended, with the levels */
 		{
