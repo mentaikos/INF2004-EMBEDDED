@@ -39,3 +39,11 @@ Newest at the bottom. Never delete a row.
 | Date | Subsystem | Test ID / demo | Commit | Student ID | Link | Notes |
 |---|---|---|---|---|---|---|
 | YYYY-MM-DD | S1 | S1-U03 | `abc1234` | | <https://youtu.be/...> | LED blinks at 2 Hz |
+
+| 2026-11-23 | S3 | S3-U01 | `56c9e25` | | <https://youtu.be/agE2hv6Gka4> | Detect a barcode, Decode the barcode and obtain the code, Follow the instruction from the barcode
+
+| 2026-11-23 | S4 | S4-U01 | `56c9e25` | | <https://youtu.be/v4tPge_iHPI> | Stop motors when the car is picked up
+
+| 2026-11-23 | S4 | S4-U02 | `56c9e25` | | <https://youtu.be/QX4s-SHfH3Y> | Measure hump height
+
+| 2026-11-23 | S5 | S5-U01 | `56c9e25` | | <https://youtu.be/eVq0_ZQNGTY> | Obstacle Detection, Navigate around the obstacle and rejoin the line, Measure obstacle width
