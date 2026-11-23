@@ -117,7 +117,7 @@ EXPORT ER s5_line_observe(BOOL found)
 	return er;
 }
 
-EXPORT void s5_scan_cyclic(void *exinf)
+EXPORT void s5_scan_cyclic_isr(void *exinf)
 {
 	(void)exinf;
 	if (tid_s5_scan > 0) tk_wup_tsk(tid_s5_scan);
@@ -418,3 +418,5 @@ EXPORT void s5_scan_task(INT stacd, void *exinf)
 		publish(&scan, drops, overruns);
 	}
 }
+
+/*** end of file ***/

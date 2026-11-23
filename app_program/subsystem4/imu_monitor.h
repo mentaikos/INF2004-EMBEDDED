@@ -263,3 +263,5 @@ IMPORT W	imu_sin_q14(W mdeg);		/* 16384 = 1.0; |angle| <= 90 deg */
 #define IMU_Q14_ONE	16384
 
 #endif /* IMU_MONITOR_H */
+
+/*** end of file ***/

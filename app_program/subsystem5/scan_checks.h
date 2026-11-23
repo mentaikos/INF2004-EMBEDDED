@@ -355,3 +355,5 @@ LOCAL BOOL s5_check_unknown_foreground(void)
 	S5_CHECK("S5-U25", s5_check_unknown_foreground(), "unknown forward/foreground blocks turn approval"); \
 } while (0)
 #endif
+
+/*** end of file ***/

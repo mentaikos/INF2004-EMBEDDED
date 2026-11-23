@@ -158,17 +158,17 @@ IMPORT UB	s4_lift_seq(void);
 IMPORT BOOL	s4_lift_pending(void);
 IMPORT void	s4_lift_ack(UB seq);
 
-/* Telemetry slot (Buddy 1: S1_SLOT_B4 = 44 bits, frame bits 38..81),
+/* Telemetry slot (Buddy 1: S1_SLOT_B4 = 43 bits, frame bits 38..80),
    set by the IMU task every 10 ms:
-	[43:13]  status word 0 (31 bits: state, pitch, heading, rate, cal)
-	[12:2]   status word 1 (11 bits: hump height, count, I2C fails)
-	[1]      12 Nov: lifted / overturned (state LIFTED, >= 1 s)
-	[0]      0, spare
+	[42:12]  status word 0 (31 bits: state, pitch, heading, rate, cal)
+	[11:1]   status word 1 (11 bits: hump height, count, I2C fails)
+	[0]      12 Nov: lifted / overturned (state LIFTED, >= 1 s)
+   22 Nov: the spare bit is gone (minimum-bit rule; was 44 bits).
    The dashboard decodes it with the same shifts as s4_pack.h. */
-Inline UD s4_tlm_slot(UW w0, UW w1, BOOL lifted)
+static inline UD s4_tlm_slot(UW w0, UW w1, BOOL lifted)
 {
-	return ((UD)(w0 & 0x7FFFFFFFu) << 13) | ((UD)(w1 & 0x7FFu) << 2) |
-	       ((UD)(lifted ? 1u : 0u) << 1);
+	return ((UD)(w0 & 0x7FFFFFFFu) << 12) | ((UD)(w1 & 0x7FFu) << 1) |
+	       (UD)(lifted ? 1u : 0u);
 }
 
 /* Diagnostics (console and tests; not sent) */
@@ -192,7 +192,7 @@ IMPORT ID	tid_imu;
 IMPORT ID	cyc_imu;
 IMPORT ID	mtx_s4_status;		/* guards the two status words */
 IMPORT void	imu_task(INT stacd, void *exinf);
-IMPORT void	imu_cyclic_handler(void *exinf);
+IMPORT void	imu_cyclic_isr(void *exinf);
 IMPORT void	imu_log_task(INT stacd, void *exinf);
 
 #if APP_TEST
@@ -221,9 +221,11 @@ IMPORT void	s4_test_inject_lift(void);
 IMPORT ID	mbf_summary;
 IMPORT ID	flg_events;
 IMPORT ID	alm_monitor;
-IMPORT UW	s4_lines_received;	/* for the tests */
+IMPORT UW	g_s4_lines_received;	/* for the tests */
 IMPORT ER	s4_example_init(void);
 IMPORT void	monitor_task(INT stacd, void *exinf);
-IMPORT void	monitor_alarm_handler(void *exinf);
+IMPORT void	monitor_alarm_isr(void *exinf);
 
 #endif /* SUBSYSTEM4_H */
+
+/*** end of file ***/

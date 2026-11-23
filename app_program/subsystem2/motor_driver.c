@@ -95,3 +95,5 @@ EXPORT BOOL motor_is_braked(void)
 	return in_w(PWM_CC_ADDR(S2_PIN_ML_A)) == 0 &&
 	       in_w(PWM_CC_ADDR(S2_PIN_MR_A)) == 0;
 }
+
+/*** end of file ***/

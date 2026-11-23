@@ -432,3 +432,5 @@ int main(void)
 	printf("\n%s (%d failures)\n", fails ? "SOME TESTS FAILED" : "ALL TESTS PASSED", fails);
 	return fails ? 1 : 0;
 }
+
+/*** end of file ***/

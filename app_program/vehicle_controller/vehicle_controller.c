@@ -54,3 +54,5 @@ EXPORT ER vc_start(void)
 	ID	tid = app_start_task(vc_task, VC_PRI, VC_PRC, "vehicle_ctrl");
 	return (tid < E_OK) ? tid : E_OK;
 }
+
+/*** end of file ***/

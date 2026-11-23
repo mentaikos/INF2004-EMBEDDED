@@ -1,0 +1,19 @@
+# BARR-C:2018 layout (rules 1.2a, 1.3b, 3.4a, 3.5a, 8.3a) -- deviation D-03.
+# NOT active: kept under docs/ so editors with format-on-save do not
+# reformat files before all branches are merged.  To apply, once:
+#   cp docs/barr-c.clang-format .clang-format
+#   clang-format -i app_program/*.[ch] app_program/*/*.[ch]
+#   clang-tidy -checks=readability-braces-around-statements -fix ...
+# then rebuild and confirm the firmware binary is unchanged.
+BasedOnStyle: LLVM
+IndentWidth: 4
+UseTab: Never
+ColumnLimit: 80
+BreakBeforeBraces: Allman
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+IndentCaseLabels: true
+SpaceBeforeParens: ControlStatements
+AlignConsecutiveDeclarations: true
+AlignConsecutiveAssignments: true
+SortIncludes: false

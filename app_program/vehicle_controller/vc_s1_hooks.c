@@ -39,3 +39,5 @@ EXPORT BOOL s1_out_map(const char letters[4])
 	vc_set_map(letters);
 	return TRUE;
 }
+
+/*** end of file ***/

@@ -64,6 +64,8 @@ LOCAL void echo_callback(UINT pin, UINT events)
 		echo_width_us = (UH)(now - echo_rise_us);
 		echo_phase = 0;
 		complete = TRUE;
+	} else {
+		/* no other case needs action */
 	}
 	ISpinUnlock(&echo_lock, mask);
 	if (complete) tk_sig_sem(sem_echo, 1);
@@ -175,3 +177,5 @@ EXPORT UB drv_us_ping(void)
 		return S5_RANGE_NO_ECHO;
 	return s5_range_from_echo(width);
 }
+
+/*** end of file ***/

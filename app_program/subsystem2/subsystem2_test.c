@@ -109,3 +109,5 @@ EXPORT void subsystem2_test(void)
 }
 
 #endif /* APP_TEST */
+
+/*** end of file ***/

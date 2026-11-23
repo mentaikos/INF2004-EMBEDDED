@@ -13,12 +13,12 @@
 
 #include "subsystem4.h"
 #include "../subsystem2/subsystem2.h"	/* sem_slots, mpf_samples (read only) */
-#include "../subsystem3/subsystem3.h"	/* IF-04: app_stats, mtx_stats */
+#include "../subsystem3/subsystem3.h"	/* IF-04: g_app_stats, mtx_stats */
 
 EXPORT ID	mbf_summary;	/* IF-03 */
 EXPORT ID	flg_events;	/* IF-03 */
 EXPORT ID	alm_monitor;
-EXPORT UW	s4_lines_received;
+EXPORT UW	g_s4_lines_received;
 
 EXPORT ER s4_example_init(void)
 {
@@ -38,13 +38,13 @@ EXPORT ER s4_example_init(void)
 	if (mbf_summary < E_OK) return mbf_summary;
 
 	calm.almatr = TA_HLNG;
-	calm.almhdr = (FP)monitor_alarm_handler;
+	calm.almhdr = (FP)monitor_alarm_isr;
 	alm_monitor = tk_cre_alm(&calm);
 	return (alm_monitor < E_OK) ? alm_monitor : E_OK;
 }
 
 /* Alarm handler: one-shot, interrupt context (never wait) */
-EXPORT void monitor_alarm_handler(void *exinf)
+EXPORT void monitor_alarm_isr(void *exinf)
 {
 	(void)exinf;
 	tk_set_flg(flg_events, FLG_ALARM);
@@ -63,7 +63,7 @@ EXPORT void monitor_task(INT stacd, void *exinf)
 
 	(void)stacd; (void)exinf;
 
-	while (1) {
+	for (;;) {
 		tk_sta_alm(alm_monitor, S4_ALARM_MS);
 		er = tk_wai_flg(flg_events, FLG_ALARM | FLG_BATCH,
 				TWF_ORW | TWF_CLR, &flgptn, S4_ALARM_MS * 2);
@@ -80,12 +80,12 @@ EXPORT void monitor_task(INT stacd, void *exinf)
 
 		while ((len = tk_rcv_mbf(mbf_summary, text, TMO_POL)) > 0) {
 			text[len] = '\0';
-			s4_lines_received++;
+			g_s4_lines_received++;
 			tm_printf((UB*)"monitor: batch  %s\n", text);
 		}
 
 		tk_loc_mtx(mtx_stats, TMO_FEVR);
-		snap = app_stats;
+		snap = g_app_stats;
 		tk_unl_mtx(mtx_stats);
 
 		tk_get_tim(&now);
@@ -99,4 +99,6 @@ EXPORT void monitor_task(INT stacd, void *exinf)
 		/* The LED pause/resume (IF-05) went with the template's LED
 		   task, which Buddy 1's code replaced. */
 	}
-}
+}
+
+/*** end of file ***/

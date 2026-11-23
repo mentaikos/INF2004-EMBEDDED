@@ -331,3 +331,5 @@ EXPORT BOOL vc_range_hazard(UW s5_status)
 	if (range == S5_RANGE_NEAR) return TRUE;
 	return (range >= S5_RANGE_MIN_CM && range <= S5_DETECT_CM) ? TRUE : FALSE;
 }
+
+/*** end of file ***/

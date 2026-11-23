@@ -172,3 +172,5 @@ int s1_encode_map(uint8_t out[S1_MAP_LEN], uint8_t id,
 	}
 	return S1_MAP_LEN;
 }
+
+/*** end of file ***/

@@ -628,7 +628,7 @@ typedef struct {
 	UB	both_black : 2;	/* cycles with L = C = black, saturates at 3 */
 	UB	gap : 1;	/* both white > S3_LINE_GAP_MS, not lost yet */
 	UB	side_left : 1;	/* line last touched by IR_LEFT (else IR_CENTER) */
-	B	pos : 3;	/* coarse line position, -2..+2 */
+	B	pos;		/* coarse line position, -2..+2 (plain byte: BARR-C 5.3a) */
 	UH	white_ms;	/* both white this long, saturates */
 	B	steer;		/* steering byte for this cycle */
 	B	trim;		/* learnt drift correction, +-S3_TRIM_MAX */
@@ -774,10 +774,10 @@ IMPORT INT	s3_code39_decode_rev(const UH *w, INT n, char *text, INT max,
 /* Objects and the task (subsystem3.c, task_consumer.c) */
 IMPORT ID	tid_line_barcode;
 IMPORT ID	cyc_line_barcode;
-IMPORT ID	mtx_s3_status;		/* guards s3_diag */
-IMPORT S3_DIAG	s3_diag;
+IMPORT ID	mtx_s3_status;		/* guards g_s3_diag */
+IMPORT S3_DIAG	g_s3_diag;
 IMPORT void	line_barcode_task(INT stacd, void *exinf);
-IMPORT void	line_barcode_cyclic_handler(void *exinf);
+IMPORT void	line_barcode_cyclic_isr(void *exinf);
 
 /* ---------------------------------------------------------------------
  *  TEMPORARY: the template's example consumer (IF-01, IF-04).  The
@@ -798,8 +798,10 @@ typedef struct {
 } APP_STATS;
 
 IMPORT ID		mtx_stats;
-IMPORT APP_STATS	app_stats;
+IMPORT APP_STATS	g_app_stats;
 
 IMPORT void	consumer_task(INT stacd, void *exinf);
 
 #endif /* SUBSYSTEM3_H */
+
+/*** end of file ***/

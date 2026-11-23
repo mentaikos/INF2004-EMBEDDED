@@ -59,3 +59,5 @@ EXPORT void encoder_snapshot(ENC_SNAPSHOT *s)
 	s->period_us[0] = enc_period[0];
 	s->period_us[1] = enc_period[1];
 }
+
+/*** end of file ***/

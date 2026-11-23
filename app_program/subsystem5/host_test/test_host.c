@@ -68,3 +68,5 @@ int main(void)
 		passes, failures, (unsigned)S5_SCAN_BYTES, (unsigned)sizeof(S5_PROFILE), (unsigned)sizeof(S5_SCAN));
 	return failures ? 1 : 0;
 }
+
+/*** end of file ***/

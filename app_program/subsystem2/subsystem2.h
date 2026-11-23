@@ -184,20 +184,20 @@
 #define S2_DIST_MIN_MM		(-1024)
 #define S2_DIST_MAX_MM		1023
 
-Inline INT s2_clamp(INT v, INT lo, INT hi)
+static inline INT s2_clamp(INT v, INT lo, INT hi)
 {
 	return (v < lo) ? lo : (v > hi) ? hi : v;
 }
 
 /* Sign-extend the low 'bits' bits of v */
-Inline INT s2_sext(UW v, INT bits)
+static inline INT s2_sext(UW v, INT bits)
 {
 	UW	m = 1u << (bits - 1);
 	v &= (m << 1) - 1u;
 	return (INT)(v ^ m) - (INT)m;
 }
 
-Inline UW s2_cmd_pack(UINT type, INT speed_mm_s, INT angle_deg, INT dist_mm)
+static inline UW s2_cmd_pack(UINT type, INT speed_mm_s, INT angle_deg, INT dist_mm)
 {
 	UW	w;
 	w  = ((UW)type & S2_CMD_TYPE_MASK) << S2_CMD_TYPE_SHIFT;
@@ -211,10 +211,10 @@ Inline UW s2_cmd_pack(UINT type, INT speed_mm_s, INT angle_deg, INT dist_mm)
 }
 #define S2_CMD_PACK(type, v, ang, d)	s2_cmd_pack((type), (v), (ang), (d))
 
-Inline UINT s2_cmd_type(UW w)  { return (w >> S2_CMD_TYPE_SHIFT) & S2_CMD_TYPE_MASK; }
-Inline INT  s2_cmd_speed(UW w) { return (INT)((w >> S2_CMD_SPEED_SHIFT) & S2_CMD_SPEED_MASK); }
-Inline INT  s2_cmd_angle(UW w) { return s2_sext(w >> S2_CMD_ANGLE_SHIFT, 9); }
-Inline INT  s2_cmd_dist(UW w)  { return s2_sext(w >> S2_CMD_DIST_SHIFT, 11); }	/* mm */
+static inline UINT s2_cmd_type(UW w)  { return (w >> S2_CMD_TYPE_SHIFT) & S2_CMD_TYPE_MASK; }
+static inline INT  s2_cmd_speed(UW w) { return (INT)((w >> S2_CMD_SPEED_SHIFT) & S2_CMD_SPEED_MASK); }
+static inline INT  s2_cmd_angle(UW w) { return s2_sext(w >> S2_CMD_ANGLE_SHIFT, 9); }
+static inline INT  s2_cmd_dist(UW w)  { return s2_sext(w >> S2_CMD_DIST_SHIFT, 11); }	/* mm */
 
 /* =====================================================================
  *  6. g_motion_status -- one 32-bit packed word, written ONLY by Motion
@@ -247,7 +247,7 @@ Inline INT  s2_cmd_dist(UW w)  { return s2_sext(w >> S2_CMD_DIST_SHIFT, 11); }	/
 #define S2_STS_DIST_MASK	0xFFFu
 #define S2_STS_STATE_MASK	0x7u
 
-Inline UW s2_sts_pack(INT spd_l, INT spd_r, UW dist_mm, UINT state,
+static inline UW s2_sts_pack(INT spd_l, INT spd_r, UW dist_mm, UINT state,
 		      UINT dir_l, UINT dir_r, UINT stopped)
 {
 	UW	w;
@@ -265,17 +265,17 @@ Inline UW s2_sts_pack(INT spd_l, INT spd_r, UW dist_mm, UINT state,
 #define S2_TLM_MASK		0x03FFFFFFu
 #define S2_TLM_EVERY		5	/* cycles between slot updates (100 ms) */
 
-Inline INT  s2_sts_speed_l(UW w) { return s2_sext(w >> S2_STS_SPDL_SHIFT, 7); }
-Inline INT  s2_sts_speed_r(UW w) { return s2_sext(w >> S2_STS_SPDR_SHIFT, 7); }
-Inline UW   s2_sts_dist(UW w)    { return (w >> S2_STS_DIST_SHIFT) & S2_STS_DIST_MASK; }
-Inline UINT s2_sts_state(UW w)   { return (w >> S2_STS_STATE_SHIFT) & S2_STS_STATE_MASK; }
-Inline UINT s2_sts_dir_l(UW w)   { return (w >> S2_STS_DIRL_SHIFT) & 1u; }
-Inline UINT s2_sts_dir_r(UW w)   { return (w >> S2_STS_DIRR_SHIFT) & 1u; }
-Inline UINT s2_sts_stopped(UW w) { return (w >> S2_STS_STOP_SHIFT) & 1u; }
+static inline INT  s2_sts_speed_l(UW w) { return s2_sext(w >> S2_STS_SPDL_SHIFT, 7); }
+static inline INT  s2_sts_speed_r(UW w) { return s2_sext(w >> S2_STS_SPDR_SHIFT, 7); }
+static inline UW   s2_sts_dist(UW w)    { return (w >> S2_STS_DIST_SHIFT) & S2_STS_DIST_MASK; }
+static inline UINT s2_sts_state(UW w)   { return (w >> S2_STS_STATE_SHIFT) & S2_STS_STATE_MASK; }
+static inline UINT s2_sts_dir_l(UW w)   { return (w >> S2_STS_DIRL_SHIFT) & 1u; }
+static inline UINT s2_sts_dir_r(UW w)   { return (w >> S2_STS_DIRR_SHIFT) & 1u; }
+static inline UINT s2_sts_stopped(UW w) { return (w >> S2_STS_STOP_SHIFT) & 1u; }
 
 /* Wrap-safe signed difference of two 12-bit distance readings, in mm.
    4093 -> 3 gives +6, 3 -> 4093 gives -6.  Sample at least every ~2 s. */
-Inline INT s2_dist_diff(UW old_mm, UW new_mm)
+static inline INT s2_dist_diff(UW old_mm, UW new_mm)
 {
 	return (INT)((new_mm - old_mm + 2048u) & 0xFFFu) - 2048;
 }
@@ -338,7 +338,7 @@ IMPORT UH	motion_get_evt_drops(void);	/* events mbf_vc_evt refused */
 
 /* Private to subsystem 2 */
 IMPORT void	motion_task(INT stacd, void *exinf);
-IMPORT void	motion_cyclic_handler(void *exinf);
+IMPORT void	motion_cyclic_isr(void *exinf);
 
 /* =====================================================================
  *  10. Template example compatibility (s2_example_compat.c).
@@ -366,3 +366,5 @@ IMPORT INT	s2_make_value(UW seq);
 IMPORT ER	s2_example_init(void);
 
 #endif /* SUBSYSTEM2_H */
+
+/*** end of file ***/

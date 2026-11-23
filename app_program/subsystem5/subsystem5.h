@@ -55,15 +55,15 @@ IMPORT ER s5_reset(void);               /* stopped, E-STOP clear */
  * REJOIN_LINE_CONFIRMED: generation of the completed bypass.
  * VC alone commands speed limits, turns, reverse and line search. */
 
-/* Telemetry slot S1_SLOT_B5 (55 bits, Buddy 1's 500 ms frame):
+/* Telemetry slot S1_SLOT_B5 (47 bits, Buddy 1's 500 ms frame):
  *   [2:0]   state           [5:3]   action of the current plan
  *   [12:6]  range now (distance code: 0 near, 1 far, 2 no echo, else cm)
  *   [16:13] obstacles scanned (wraps at 16)
  *   last obstacle scanned:
  *   [23:17] closest cm      [31:24] WIDTH cm      [39:32] centre x cm,
  *   signed, + right         [46:40] y cm (forward to its near face)
- *   [54:47] 0 */
-Inline UD s5_tlm_slot(UW status, S5_PROFILE last, UINT scans)
+ *   22 Nov: was 55 bits with [54:47] always 0 (minimum-bit rule). */
+static inline UD s5_tlm_slot(UW status, S5_PROFILE last, UINT scans)
 {
 	return (UD)(status & 7u) | ((UD)((status >> 3) & 7u) << 3) |
 	       ((UD)((status >> 11) & 127u) << 6) | ((UD)(scans & 15u) << 13) |
@@ -71,3 +71,5 @@ Inline UD s5_tlm_slot(UW status, S5_PROFILE last, UINT scans)
 }
 
 #endif /* SUBSYSTEM5_H */
+
+/*** end of file ***/

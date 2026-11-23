@@ -81,3 +81,5 @@ IMPORT UH	lsm303_error_count(void);
 IMPORT UH	lsm303_bus_recoveries(void);
 
 #endif /* DRV_LSM303_H */
+
+/*** end of file ***/

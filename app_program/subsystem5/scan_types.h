@@ -13,10 +13,11 @@ typedef UINT BOOL;
 #define LOCAL static
 #define EXPORT
 #define IMPORT extern
-#define Inline static inline
 #define TRUE 1
 #define FALSE 0
 #else
 #include <tk/tkernel.h>
 #endif
 #endif
+
+/*** end of file ***/

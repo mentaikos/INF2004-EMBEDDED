@@ -41,3 +41,5 @@
 		  (name), test_pass_, test_fail_)
 
 #endif /* TEST_REPORT_H */
+
+/*** end of file ***/

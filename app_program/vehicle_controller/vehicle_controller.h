@@ -410,7 +410,7 @@
 #define VC_STS_JCT_SHIFT	19
 #define VC_STS_RESCAN_SHIFT	23
 
-Inline UW vc_sts_pack(UINT state, UINT nav, UINT nav_valid, UINT hump_mm,
+static inline UW vc_sts_pack(UINT state, UINT nav, UINT nav_valid, UINT hump_mm,
 		      UINT step, UINT reason, UINT junctions, UINT rescans)
 {
 	if (hump_mm > 31u) hump_mm = 31u;
@@ -426,14 +426,14 @@ Inline UW vc_sts_pack(UINT state, UINT nav, UINT nav_valid, UINT hump_mm,
 	       ((UW)rescans << VC_STS_RESCAN_SHIFT);
 }
 
-Inline UINT vc_sts_state(UW w)     { return (w >> VC_STS_STATE_SHIFT) & 0xFu; }
-Inline UINT vc_sts_nav(UW w)       { return (w >> VC_STS_NAV_SHIFT) & 0x3u; }
-Inline UINT vc_sts_nav_valid(UW w) { return (w >> VC_STS_NAVOK_SHIFT) & 1u; }
-Inline UINT vc_sts_hump(UW w)      { return (w >> VC_STS_HUMP_SHIFT) & 0x1Fu; }
-Inline UINT vc_sts_step(UW w)      { return (w >> VC_STS_STEP_SHIFT) & 0x7u; }
-Inline UINT vc_sts_reason(UW w)    { return (w >> VC_STS_REASON_SHIFT) & 0xFu; }
-Inline UINT vc_sts_junctions(UW w) { return (w >> VC_STS_JCT_SHIFT) & 0xFu; }
-Inline UINT vc_sts_rescans(UW w)   { return (w >> VC_STS_RESCAN_SHIFT) & 0x3u; }
+static inline UINT vc_sts_state(UW w)     { return (w >> VC_STS_STATE_SHIFT) & 0xFu; }
+static inline UINT vc_sts_nav(UW w)       { return (w >> VC_STS_NAV_SHIFT) & 0x3u; }
+static inline UINT vc_sts_nav_valid(UW w) { return (w >> VC_STS_NAVOK_SHIFT) & 1u; }
+static inline UINT vc_sts_hump(UW w)      { return (w >> VC_STS_HUMP_SHIFT) & 0x1Fu; }
+static inline UINT vc_sts_step(UW w)      { return (w >> VC_STS_STEP_SHIFT) & 0x7u; }
+static inline UINT vc_sts_reason(UW w)    { return (w >> VC_STS_REASON_SHIFT) & 0xFu; }
+static inline UINT vc_sts_junctions(UW w) { return (w >> VC_STS_JCT_SHIFT) & 0xFu; }
+static inline UINT vc_sts_rescans(UW w)   { return (w >> VC_STS_RESCAN_SHIFT) & 0x3u; }
 
 /* =====================================================================
  *  5. Public objects and functions
@@ -504,3 +504,5 @@ IMPORT BOOL	vc_range_hazard(UW s5_status);
 IMPORT void	vc_task(INT stacd, void *exinf);
 
 #endif /* VEHICLE_CONTROLLER_H */
+
+/*** end of file ***/

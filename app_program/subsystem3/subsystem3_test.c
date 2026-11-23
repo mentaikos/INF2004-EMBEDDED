@@ -458,7 +458,9 @@ LOCAL void test_barcode(INT *pass, INT *fail)
 
 	/* S3-U06: a damaged barcode (one wide bar printed narrow) fails */
 	n = make_widths("*B*", T_NARROW, T_WIDE, 0, w);
-	for (i = 10; i < 19 && w[i] != T_WIDE; i++) ;
+	for (i = 10; (i < 19) && (w[i] != T_WIDE); i++) {
+		/* find the first wide element after index 10 */
+	}
 	w[i] = T_NARROW;
 	TEST_CHECK("S3-U06", decode_text(w, n, text) < 0,
 		   "damaged barcode is rejected");
@@ -878,7 +880,7 @@ LOCAL APP_STATS read_stats(void)
 	APP_STATS	s;
 
 	tk_loc_mtx(mtx_stats, TMO_FEVR);
-	s = app_stats;
+	s = g_app_stats;
 	tk_unl_mtx(mtx_stats);
 	return s;
 }
@@ -910,3 +912,5 @@ EXPORT void subsystem3_test(void)
 }
 
 #endif /* APP_TEST */
+
+/*** end of file ***/

@@ -4,5 +4,7 @@
 #include "subsystem5.h"
 IMPORT ID tid_s5_scan;
 IMPORT void s5_scan_task(INT stacd, void *exinf);
-IMPORT void s5_scan_cyclic(void *exinf);
+IMPORT void s5_scan_cyclic_isr(void *exinf);
 #endif
+
+/*** end of file ***/

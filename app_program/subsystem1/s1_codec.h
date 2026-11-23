@@ -8,16 +8,19 @@
  *	  bits 0..1  message type (0 telemetry, 1 heartbeat, 2 command, 3 ack)
  *	  bits 2..3  layout version
  *
- *	TELEMETRY (type 0), 18 bytes, robot -> dashboard, every 500 ms
+ *	TELEMETRY (type 0), 17 bytes, robot -> dashboard, every 500 ms
  *	(fixed length; slot widths agreed at the Week 8 tribunal)
  *	  bits   0..3   header (type, version)
  *	  bits   4..29  Buddy 2 slot (26)
  *	  bits  30..37  Buddy 3 slot (8)
- *	  bits  38..81  Buddy 4 slot (44)
- *	  bits  82..136 Buddy 5 slot (55)
- *	  bit  137      Wi-Fi loss since the last telemetry (1 = yes),
+ *	  bits  38..80  Buddy 4 slot (43)
+ *	  bits  81..127 Buddy 5 slot (47)
+ *	  bit  128      Wi-Fi loss since the last telemetry (1 = yes),
  *	                the LAST data bit of the payload (tribunal decision)
- *	  bits 138..143 padding (0)
+ *	  bits 129..135 padding (0)
+ *	Version 2 (22 Nov): no slot carries always-zero bits any more
+ *	(minimum-bit rule): B4 lost its spare bit, B5 its 8 unused top bits,
+ *	so the frame is 129 bits = 17 bytes (was 138 bits = 18 bytes).
  *	If a buddy's width changes, edit S1_Bx_BITS below and bump S1_VERSION;
  *	the frame length is recomputed automatically.
  *
@@ -52,7 +55,7 @@
 #define S1_TYPE_BITS		2
 #define S1_VERSION_BITS		2
 #define S1_HDR_BITS		(S1_TYPE_BITS + S1_VERSION_BITS)	/* 4 */
-#define S1_VERSION		1	/* 0..3 */
+#define S1_VERSION		2	/* 0..3; 2 = 17-byte telemetry (22 Nov) */
 
 #define S1_TYPE_TELEMETRY	0
 #define S1_TYPE_HEARTBEAT	1
@@ -66,13 +69,13 @@
 
 #define S1_B2_BITS		26
 #define S1_B3_BITS		8
-#define S1_B4_BITS		44
-#define S1_B5_BITS		55
+#define S1_B4_BITS		43
+#define S1_B5_BITS		47
 
 /* header + four slots + Wi-Fi-loss bit, rounded up to whole bytes */
 #define S1_TLM_BITS	(S1_HDR_BITS + S1_B2_BITS + S1_B3_BITS + \
-			 S1_B4_BITS + S1_B5_BITS + 1)		/* = 138 */
-#define S1_TLM_LEN	((S1_TLM_BITS + 7) / 8)			/* = 18  */
+			 S1_B4_BITS + S1_B5_BITS + 1)		/* = 129 */
+#define S1_TLM_LEN	((S1_TLM_BITS + 7) / 8)			/* = 17  */
 
 /* 2-bit command codes (tribunal decision) */
 #define S1_CMD_START		0	/* 00 */
@@ -123,3 +126,5 @@ int s1_encode_map(uint8_t out[S1_MAP_LEN], uint8_t id,
 		  const char letters[S1_MAP_COUNT]);
 
 #endif /* S1_CODEC_H */
+
+/*** end of file ***/

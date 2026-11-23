@@ -19,6 +19,18 @@
 #include "subsystem3.h"
 
 /* ------------------------------------------------------------------ */
+/*  Global objects (BARR-C 7.2c: exported definitions at the top)     */
+/* ------------------------------------------------------------------ */
+
+EXPORT ID	tid_line_barcode;
+EXPORT ID	cyc_line_barcode;
+EXPORT ID	mtx_s3_status;
+
+EXPORT ID		mbx_samples;	/* TEMPORARY example, IF-01 */
+EXPORT ID		mtx_stats;	/* TEMPORARY example, IF-04 */
+EXPORT APP_STATS	g_app_stats;
+
+/* ------------------------------------------------------------------ */
 /*  1. IR sensor driver                                               */
 /* ------------------------------------------------------------------ */
 /*
@@ -80,7 +92,7 @@ LOCAL UW	bc_next_us;	/* ISR only: when the next alarm is due */
  * no tm_printf.  About 3 us including the conversion.  Only edges go
  * into bc_ring, so a barcode needs ~30 entries, not one per sample.
  */
-LOCAL void bc_alarm_handler(UINT intno)
+LOCAL void bc_alarm_isr(UINT intno)
 {
 	UW	now;
 	UH	tick;
@@ -104,7 +116,9 @@ LOCAL void bc_alarm_handler(UINT intno)
 	/* One conversion of ADC input 2 (GP28) */
 	out_w(ADC_CS, (S3_ADC_CH_IR_RIGHT << ADC_CS_AINSEL_POS) |
 		      ADC_CS_EN | ADC_CS_START_ONCE);
-	while ((in_w(ADC_CS) & ADC_CS_READY) == 0) ;
+	while ((in_w(ADC_CS) & ADC_CS_READY) == 0) {
+		/* wait for the ADC conversion to finish */
+	}
 	value = (UH)(in_w(ADC_RESULT) & 0x0FFF);
 	bc_raw = value;
 #if S3_DEBUG_BARCODE >= 3
@@ -178,7 +192,9 @@ EXPORT ER drv_ir_init(void)
 	out_w(GPIO_CTRL(S3_PIN_IR_RIGHT), GPIO_CTRL_FUNCSEL_NULL);
 	clr_w(GPIO(S3_PIN_IR_RIGHT), GPIO_IE | GPIO_PUE | GPIO_PDE);
 	set_w(ADC_CS, ADC_CS_EN);
-	while ((in_w(ADC_CS) & ADC_CS_READY) == 0) ;
+	while ((in_w(ADC_CS) & ADC_CS_READY) == 0) {
+		/* wait for the ADC conversion to finish */
+	}
 
 	bc_head = bc_tail = 0;
 	bc_samples = bc_overflows = 0;
@@ -188,7 +204,7 @@ EXPORT ER drv_ir_init(void)
 	/* Sampling interrupt.  EnableInt acts on the NVIC of the core
 	   that calls it: this runs from usermain(), on core 0. */
 	dint.intatr = TA_HLNG;
-	dint.inthdr = (FP)bc_alarm_handler;
+	dint.inthdr = (FP)bc_alarm_isr;
 	er = tk_def_int(BC_ALARM_INTNO, &dint);
 	if (er < E_OK) return er;
 
@@ -396,6 +412,8 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 		lt->trim = (B)(lt->trim - S3_TRIM_STEP);
 	} else if (pos == 2 && lt->pos != 2 && lt->trim < S3_TRIM_MAX) {
 		lt->trim = (B)(lt->trim + S3_TRIM_STEP);
+	} else {
+		/* no other case needs action */
 	}
 
 	/* 6 Nov: how long the same edge has stayed touched */
@@ -408,6 +426,8 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	} else if (lt->state == S3_LINE_JUNCTION ||
 		   lt->white_ms > S3_BEND_TOUCH_GAP_MS) {
 		lt->touch_n = 0;			/* a flicker does not end it */
+	} else {
+		/* no other case needs action */
 	}
 
 	/* 6 Nov: a long touch: the line may slip outside next */
@@ -453,7 +473,11 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 			lt->bend--;		/* straight: a short touch fades */
 		} else if (lt->bend < 0) {
 			lt->bend++;
+		} else {
+			/* no other case needs action */
 		}
+	} else {
+		/* no other case needs action */
 	}
 	if (lt->bend >  S3_BEND_MAX) lt->bend =  S3_BEND_MAX;
 	if (lt->bend < -S3_BEND_MAX) lt->bend = -S3_BEND_MAX;
@@ -677,8 +701,15 @@ LOCAL INT decode_char_fit(const UH *w, UH *narrow_max)
 				if (e < m) m = e;
 			}
 		}
-		if (m < best) { second = best; best = m; bi = i; }
-		else if (m < second) second = m;
+		if (m < best) {
+			second = best;
+			best = m;
+			bi = i;
+		} else if (m < second) {
+			second = m;
+		} else {
+			/* no other case needs action */
+		}
 	}
 	/* best, second are squared: compare with squared limits */
 	if (bi < 0 ||
@@ -864,6 +895,8 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 			d->ext = sm;
 		} else if ((++d->leak & S3_BC_LC_LEAK_MASK) == 0 && d->ext < sm) {
 			d->ext++;
+		} else {
+			/* no other case needs action */
 		}
 	}
 	det_thresholds(d);
@@ -929,6 +962,8 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 		d->white_q8 += (W)(((W)adc << 8) - (W)d->white_q8)
 			       >> S3_BC_WHITE_SHIFT;
 		det_thresholds(d);
+	} else {
+		/* no other case needs action */
 	}
 	return S3_EDGE_NONE;
 }
@@ -1072,6 +1107,8 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t, S3_BC_RESULT *res)
 			bc->run_max = 0;
 			bc->n       = 0;
 			bc->nostart = 0;
+		} else {
+			/* no other case needs action */
 		}
 		return S3_BEV_NONE;
 
@@ -1281,14 +1318,6 @@ EXPORT UB s3_tlm_slot(UW sts)
 /*  Objects and start-up                                              */
 /* ------------------------------------------------------------------ */
 
-EXPORT ID	tid_line_barcode;
-EXPORT ID	cyc_line_barcode;
-EXPORT ID	mtx_s3_status;
-
-EXPORT ID		mbx_samples;	/* TEMPORARY example, IF-01 */
-EXPORT ID		mtx_stats;	/* TEMPORARY example, IF-04 */
-EXPORT APP_STATS	app_stats;
-
 /* TEMPORARY: the example consumer's objects, still used by S2 and S4 */
 LOCAL ER example_init(void)
 {
@@ -1322,7 +1351,7 @@ EXPORT ER subsystem3_init(void)
 	/* Cyclic handler: wakes the task every 20 ms (NFR8).  Started in
 	   subsystem3_start(), once the task exists. */
 	ccyc.cycatr = TA_HLNG;
-	ccyc.cychdr = (FP)line_barcode_cyclic_handler;
+	ccyc.cychdr = (FP)line_barcode_cyclic_isr;
 	ccyc.cyctim = S3_PERIOD_MS;
 	ccyc.cycphs = S3_PERIOD_MS;
 	cyc_line_barcode = tk_cre_cyc(&ccyc);
@@ -1362,3 +1391,5 @@ EXPORT ER subsystem3_start(void)
 			     "consumer_task");
 	return (tid < E_OK) ? tid : E_OK;
 }
+
+/*** end of file ***/

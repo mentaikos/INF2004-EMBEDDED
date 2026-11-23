@@ -153,6 +153,8 @@ LOCAL void s1_keep_pending(const UB *frame, INT len)
 		tk_unl_mtx(mtx_s1_tlm);
 		(void)s1_tx(MQTT_UTK_T_TELEMETRY, pending, S1_TLM_LEN);
 		return;
+	} else {
+		/* no other case needs action */
 	}
 	tk_unl_mtx(mtx_s1_tlm);
 }
@@ -269,7 +271,7 @@ LOCAL void s1_cmd_task(INT stacd, void *exinf)
 
 	(void)stacd; (void)exinf;
 
-	while (1) {
+	for (;;) {
 		n = tk_rcv_mbf(mbf_s1_rx, buf, TMO_FEVR);
 		if (n <= 0) {
 			continue;
@@ -285,6 +287,8 @@ LOCAL void s1_cmd_task(INT stacd, void *exinf)
 				send_ack(S1_ACK_INVALID, id);
 			} else if (!s1_out_map(letters)) {
 				send_ack(S1_ACK_FAILED, id);
+			} else {
+				/* no other case needs action */
 			}
 			continue;	/* repeating a MAP is harmless: no id filter */
 		}
@@ -341,7 +345,7 @@ LOCAL void s1_heartbeat_task(INT stacd, void *exinf)
 
 	(void)stacd; (void)exinf;
 
-	while (1) {
+	for (;;) {
 		wait = (INT)(next - now_ms());
 		if (wait < 0) {
 			wait = 0;
@@ -387,7 +391,7 @@ LOCAL void s1_telemetry_task(INT stacd, void *exinf)
 
 	(void)stacd; (void)exinf;
 
-	while (1) {
+	for (;;) {
 		s1_tlm_snapshot(slots);
 
 		tk_ref_flg(flg_s1_link, &r);
@@ -466,3 +470,5 @@ EXPORT ER subsystem1_start(void)
 #endif
 	return E_OK;
 }
+
+/*** end of file ***/

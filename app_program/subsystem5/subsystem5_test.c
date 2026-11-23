@@ -24,3 +24,5 @@ EXPORT void subsystem5_test(void)
 }
 
 #endif /* APP_TEST */
+
+/*** end of file ***/

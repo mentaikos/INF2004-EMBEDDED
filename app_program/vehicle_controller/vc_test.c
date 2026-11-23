@@ -294,3 +294,5 @@ EXPORT void vc_test(void)
 }
 
 #endif /* APP_TEST */
+
+/*** end of file ***/

@@ -183,25 +183,25 @@
 typedef struct { UW w0, w1; } S5_PROFILE;
 _Static_assert(sizeof(S5_PROFILE) == 8, "S5 profile must occupy eight bytes");
 
-Inline UINT s5_profile_closest(S5_PROFILE p) { return p.w0 & 127u; }
-Inline UINT s5_profile_width(S5_PROFILE p) { return (p.w0 >> 7) & 255u; }
-Inline INT s5_profile_x(S5_PROFILE p)
+static inline UINT s5_profile_closest(S5_PROFILE p) { return p.w0 & 127u; }
+static inline UINT s5_profile_width(S5_PROFILE p) { return (p.w0 >> 7) & 255u; }
+static inline INT s5_profile_x(S5_PROFILE p)
 {
 	return (INT)(((p.w0 >> 15) & 255u) ^ 128u) - 128;
 }
-Inline UINT s5_profile_y(S5_PROFILE p) { return (p.w0 >> 23) & 127u; }
-Inline UINT s5_profile_left(S5_PROFILE p) { return p.w1 & 127u; }
-Inline UINT s5_profile_right(S5_PROFILE p) { return (p.w1 >> 7) & 127u; }
-Inline UINT s5_profile_action(S5_PROFILE p) { return (p.w1 >> 24) & 7u; }
-Inline BOOL s5_profile_valid(S5_PROFILE p) { return (p.w1 >> 27) & 1u; }
+static inline UINT s5_profile_y(S5_PROFILE p) { return (p.w0 >> 23) & 127u; }
+static inline UINT s5_profile_left(S5_PROFILE p) { return p.w1 & 127u; }
+static inline UINT s5_profile_right(S5_PROFILE p) { return (p.w1 >> 7) & 127u; }
+static inline UINT s5_profile_action(S5_PROFILE p) { return (p.w1 >> 24) & 7u; }
+static inline BOOL s5_profile_valid(S5_PROFILE p) { return (p.w1 >> 27) & 1u; }
 
 /* Status: state [2:0], action [5:3], angle index [10:6], range [17:11],
  * plan-valid [18], fresh line [19], stable samples [21:20],
  * generation [29:22]. Reserved [31:30] are zero. */
-Inline UINT s5_sts_state(UW w) { return w & 7u; }
-Inline UINT s5_sts_action(UW w) { return (w >> 3) & 7u; }
-Inline UINT s5_sts_generation(UW w) { return (w >> 22) & 255u; }
-Inline BOOL s5_sts_plan_valid(UW w) { return (w >> 18) & 1u; }
+static inline UINT s5_sts_state(UW w) { return w & 7u; }
+static inline UINT s5_sts_action(UW w) { return (w >> 3) & 7u; }
+static inline UINT s5_sts_generation(UW w) { return (w >> 22) & 255u; }
+static inline BOOL s5_sts_plan_valid(UW w) { return (w >> 18) & 1u; }
 
 /* Task-private state. Pending needs 25 bits. Modulo-65536 ms deadlines
  * are all shorter than half that period. */
@@ -265,3 +265,5 @@ IMPORT BOOL s5_scan_wants_ping(const S5_SCAN *s, UH now_ms);
 IMPORT UW s5_scan_status(const S5_SCAN *s);
 
 #endif /* OBSTACLE_SCAN_H */
+
+/*** end of file ***/

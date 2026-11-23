@@ -58,7 +58,7 @@ EXPORT void subsystem1_test(void)
 	if (tk_ref_tsk(tid_s1_tlm, &rtsk) != E_OK || rtsk.tskstat == TTS_DMT) ok = FALSE;
 	TEST_CHECK("S1-U02", ok, "Command, Heartbeat and Telemetry tasks started");
 
-	/* S1-U03: telemetry frame is 18 bytes and every slot decodes back
+	/* S1-U03: telemetry frame is 17 bytes and every slot decodes back
 	   unchanged at its fixed bit offset */
 	s1_encode_telemetry(buf, 1, slots);
 	pos = 0;
@@ -69,9 +69,9 @@ EXPORT void subsystem1_test(void)
 	ok &= (s1_get_bits(buf, &pos, S1_B4_BITS) == slots[2]);
 	ok &= (s1_get_bits(buf, &pos, S1_B5_BITS) == slots[3]);
 	ok &= (s1_get_bits(buf, &pos, 1) == 1);		/* Wi-Fi loss, last */
-	ok &= (pos == S1_TLM_BITS) && (S1_TLM_LEN == 18) &&
-	      ((buf[17] & 0x3F) == 0);			/* 6 padding bits */
-	TEST_CHECK("S1-U03", ok, "telemetry 18 B, Wi-Fi-loss bit last (137)");
+	ok &= (pos == S1_TLM_BITS) && (S1_TLM_LEN == 17) &&
+	      ((buf[16] & 0x7F) == 0);			/* 7 padding bits */
+	TEST_CHECK("S1-U03", ok, "telemetry 17 B, Wi-Fi-loss bit last (128)");
 
 	/* S1-U04: 2-bit commands 00/01/10 decode; anything else is INVALID */
 	ok  = (s1_decode_command(make_cmd(buf, S1_TYPE_COMMAND, S1_VERSION, 0, 5), 2, &id) == S1_CMD_START && id == 5);
@@ -136,3 +136,5 @@ EXPORT void subsystem1_test(void)
 }
 
 #endif /* APP_TEST */
+
+/*** end of file ***/

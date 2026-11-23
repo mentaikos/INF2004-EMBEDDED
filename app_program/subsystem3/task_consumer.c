@@ -34,7 +34,7 @@
 #define S3_CAL_CYCLES		10	/* 10 x 20 ms of white for the baseline */
 
 EXPORT volatile UW	g_s3_status;	/* packed, written only here */
-EXPORT S3_DIAG		s3_diag;	/* guarded by mtx_s3_status */
+EXPORT S3_DIAG		g_s3_diag;	/* guarded by mtx_s3_status */
 
 LOCAL S3_DIAG		dg;		/* the task's working copy */
 LOCAL S3_LINE		lt;
@@ -70,7 +70,7 @@ LOCAL volatile ID	fault_flg;
  * Cyclic handler, every S3_PERIOD_MS.  Interrupt context: just wake
  * the task.
  */
-EXPORT void line_barcode_cyclic_handler(void *exinf)
+EXPORT void line_barcode_cyclic_isr(void *exinf)
 {
 	(void)exinf;
 	tk_wup_tsk(tid_line_barcode);
@@ -137,10 +137,14 @@ LOCAL void send_steer(void)
 			held = 2;
 		} else if (held == 0) {
 			held = 1;
+		} else {
+			/* no other case needs action */
 		}
 	} else if (held) {
 		if (held == 2) tm_printf((UB*)"s3: barcode: steering released\n");
 		held = 0;
+	} else {
+		/* no other case needs action */
 	}
 #endif
 	if (motion_send_steer(steer) == E_OK) {
@@ -378,6 +382,8 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 				}
 				grey_max = 0;
 				grey_edges = 0;
+			} else {
+				/* no other case needs action */
 			}
 		}
 #endif
@@ -411,6 +417,8 @@ LOCAL void barcode_cycle(S3_STS_FIELDS *f)
 			}
 			tm_printf((UB*)"\ns3: cap end\n");
 			armed = 0;		/* re-arm next cycle */
+		} else {
+			/* no other case needs action */
 		}
 	}
 #endif
@@ -466,8 +474,8 @@ EXPORT void line_barcode_task(INT stacd, void *exinf)
 	tk_get_tim(&tim);
 	last = tim.lo;
 
-	while (1) {
-		/* Sleep until line_barcode_cyclic_handler wakes us; drop any
+	for (;;) {
+		/* Sleep until line_barcode_cyclic_isr wakes us; drop any
 		   wake-ups that queued while we were busy */
 		tk_slp_tsk(TMO_FEVR);
 		tk_can_wup(TSK_SELF);
@@ -491,7 +499,7 @@ EXPORT void line_barcode_task(INT stacd, void *exinf)
 		dg.samples   = drv_ir_sample_count();
 		dg.overflows = drv_ir_overflow_count();
 		tk_loc_mtx(mtx_s3_status, TMO_FEVR);
-		s3_diag = dg;
+		g_s3_diag = dg;
 		tk_unl_mtx(mtx_s3_status);
 	}
 }
@@ -519,7 +527,7 @@ EXPORT BOOL s3_is_calibrated(void)
 EXPORT void s3_get_diag(S3_DIAG *d)
 {
 	tk_loc_mtx(mtx_s3_status, TMO_FEVR);
-	*d = s3_diag;
+	*d = g_s3_diag;
 	tk_unl_mtx(mtx_s3_status);
 }
 
@@ -537,7 +545,7 @@ EXPORT void consumer_task(INT stacd, void *exinf)
 
 	(void)stacd; (void)exinf;
 
-	while (1) {
+	for (;;) {
 		/* 1. Wait for the next sample (TMO_FEVR = wait forever) */
 		er = tk_rcv_mbx(mbx_samples, (T_MSG **)&msg, TMO_FEVR);
 		if (er < E_OK) {
@@ -548,14 +556,14 @@ EXPORT void consumer_task(INT stacd, void *exinf)
 		/* 2. Update the shared statistics.  Subsystem 4 reads them
 		      too, so lock the mutex around every access (IF-04). */
 		tk_loc_mtx(mtx_stats, TMO_FEVR);
-		if (app_stats.received == 0 || msg->value < app_stats.min) {
-			app_stats.min = msg->value;
+		if (g_app_stats.received == 0 || msg->value < g_app_stats.min) {
+			g_app_stats.min = msg->value;
 		}
-		if (app_stats.received == 0 || msg->value > app_stats.max) {
-			app_stats.max = msg->value;
+		if (g_app_stats.received == 0 || msg->value > g_app_stats.max) {
+			g_app_stats.max = msg->value;
 		}
-		app_stats.sum += msg->value;
-		count = ++app_stats.received;
+		g_app_stats.sum += msg->value;
+		count = ++g_app_stats.received;
 		tk_unl_mtx(mtx_stats);
 
 		/* 3. Every S3_BATCH_SIZE samples, send a text line to subsystem
@@ -581,3 +589,5 @@ EXPORT void consumer_task(INT stacd, void *exinf)
 		tk_sig_sem(sem_slots, 1);
 	}
 }
+
+/*** end of file ***/
