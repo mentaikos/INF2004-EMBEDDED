@@ -2,7 +2,7 @@
  *	encoder.h
  *	Wheel encoders (single channel), private to subsystem 2.
  *
- *	Protocol (report Part C row 3):
+ *	Protocol:
  *	  writer  = encoder ISR only (byte increment, no kernel calls)
  *	  reader  = Motion Control only, at least every 40 ms
  *	  data    = two wrapping uint8 counters in ONE aligned halfword, so

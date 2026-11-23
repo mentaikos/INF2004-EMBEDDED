@@ -4,7 +4,7 @@
  *
  *	APIs shown: tk_cre_mbf, tk_cre_flg, tk_cre_cyc, tk_sta_cyc
  *
- *	Template rule: the receiver/owner creates an object, so Motion
+ *	The receiver/owner creates an object, so Motion
  *	creates mbf_motion_cmd, mbf_steer and flg_safety here, in phase 1,
  *	before any task can send to them.
  */
@@ -60,7 +60,7 @@ EXPORT ER subsystem2_init(void)
 	er = encoder_init();
 	if (er < E_OK) return er;
 
-	/* Example objects still used by subsystems 3 and 4 (remove later) */
+	/* Example objects still used by subsystems 3 and 4 */
 	return s2_example_init();
 }
 
@@ -85,7 +85,7 @@ EXPORT ER subsystem2_start(void)
 }
 
 /*
- * Buddy 1's E-STOP hook (subsystem1.h, IF-S1-02).  Replaces subsystem 1's
+ * Buddy 1's E-STOP hook (subsystem1.h).  Replaces subsystem 1's
  * WEAK print-only version.  A dashboard E-STOP sets the bit in flg_safety
  * straight away: Motion wakes on it and brakes in the same instant, with
  * no Vehicle Controller in the path (NFR10, best effort over MQTT).

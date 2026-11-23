@@ -1,6 +1,6 @@
 /*
  *	motion_control.c
- *	Subsystem 2 -- the Motion Control task (report statechart 6.2).
+ *	Subsystem 2 -- the Motion Control task.
  *
  *	APIs shown: tk_wai_flg / tk_clr_flg / tk_ref_flg, tk_rcv_mbf (TMO_POL),
  *	            tk_snd_mbf (TMO_POL), tk_set_flg from a cyclic handler
@@ -10,7 +10,7 @@
  *	  2. E-STOP check (flg_safety)                -> E_STOP_BRAKE
  *	  3. latest steering (mbf_steer), all commands (mbf_motion_cmd)
  *	  4. state behaviour -> per-wheel target speed and direction
- *	  5. PID (feed-forward + P + clamped I) -> PWM, stall check
+ *	  5. PI + feed-forward (clamped I) -> PWM, stall check
  *	  6. publish the packed status word
  *	With S2_ESTOP_WAKE the task also wakes as soon as S2_FLG_ESTOP is set,
  *	so the brake does not wait for the next 20 ms tick (NFR10).
@@ -53,7 +53,7 @@ typedef struct {
 	H	target;		/* mm/s wanted by the state (magnitude) */
 	H	ramp;		/* mm/s after acceleration limit */
 	H	meas;		/* mm/s measured (magnitude) */
-	H	integ;		/* PID integrator, per mille, clamped */
+	H	integ;		/* PI integrator, per mille, clamped */
 	UH	duty;		/* per mille actually output */
 	UH	since_ms;	/* time since the last pulse (saturates) */
 	UH	active_ms;	/* time the output has been on (saturates) */
@@ -190,7 +190,7 @@ LOCAL void start_goal(UINT type, UH counts, INT cruise)
 LOCAL void handle_cmd(UW w)
 {
 	UINT	type = s2_cmd_type(w);
-	INT	v = s2_cmd_speed(w);			/* 12 Nov: mm/s (was cm/s) */
+	INT	v = s2_cmd_speed(w);			/* mm/s */
 	INT	a, d;
 	UW	um;
 
@@ -228,7 +228,7 @@ LOCAL void handle_cmd(UW w)
 		}
 		if (v == 0) v = S2_DEFAULT_MM_S;
 		if (d < 0) v = imin(v, S2_REVERSE_MAX_MM_S);	/* safe reverse */
-		um = (UW)(d < 0 ? -d : d) * 1000u;		/* 12 Nov: mm -> um */
+		um = (UW)(d < 0 ? -d : d) * 1000u;		/* mm -> um */
 		start_goal(S2_CMD_MOVE_DIST, um_to_counts(um), v);
 		want_dirs(d < 0, d < 0);
 		mf.state = S2_ST_MOVE_DISTANCE;
@@ -258,7 +258,7 @@ LOCAL void handle_cmd(UW w)
 /* ---------------------------------------------------------------------
  *  Encoders -> speed, distance, progress, encoder fault
  * --------------------------------------------------------------------- */
-/* TEMPORARY bring-up prints (see debug_print below); 0 when done */
+/* 1 = print the "s2:" status line once a second (debug_print below) */
 #ifndef S2_DEBUG
 #define S2_DEBUG		1
 #endif
@@ -274,8 +274,8 @@ LOCAL void update_speed(UINT w, UINT d, UINT period_us, INT dt_ms)
 	UINT	k, sum = 0, tsum = 0;
 
 	/* Speed = counts in the last S2_SPEED_WIN cycles divided by the time
-	   those cycles REALLY took (~100 ms).  Dividing by the nominal 20 ms
-	   per cycle gave wrong speeds whenever a cycle ran early or late. */
+	   those cycles really took (~100 ms), so a cycle that runs early or
+	   late does not give a wrong speed. */
 	(void)period_us;
 	p->hist[p->hi] = (UB)(d > 255u ? 255u : d);
 	p->hdt[p->hi]  = (UB)(dt_ms > 255 ? 255 : (dt_ms < 1 ? 1 : dt_ms));
@@ -331,8 +331,8 @@ LOCAL void read_encoders(void)
 	dr = encoder_delta(enc_prev.cnt.c[ENC_RIGHT], s.cnt.c[ENC_RIGHT]);
 	enc_prev = s;
 
-	/* Part C row 3: a delta above the bound is not believable (noise or
-	   a counter wrap): set ENC_FAULT and do not use it. */
+	/* A delta above the bound is not believable (noise or a counter
+	   wrap): set ENC_FAULT and do not use it. */
 	if (dl > S2_ENC_MAX_DELTA || dr > S2_ENC_MAX_DELTA) {
 		raise_fault(FAULT_ENC);
 		return;
@@ -346,9 +346,9 @@ LOCAL void read_encoders(void)
 	if (mf.dir_r == wh[1].want_dir) wh[1].progress += (UH)dr;
 
 	/* ...but a speed from an over-long interval is not used. */
-	/* A late cycle (> 40 ms) is reported as ENC_FAULT (Part C row 3),
-	   but the speed is still updated from the counts and the real time:
-	   skipping it left a stale speed and the PI control then swung. */
+	/* A late cycle (> 40 ms) is reported as ENC_FAULT, but the speed is
+	   still updated from the counts and the real time, so the PI never
+	   works on a stale speed. */
 	late = (dt_ms > S2_ENC_MAX_INTERVAL_MS);
 	if (late) raise_fault(FAULT_ENC);
 	update_speed(ENC_LEFT,  dl, s.period_us[ENC_LEFT],  dt_ms);
@@ -366,8 +366,8 @@ LOCAL void finish_goal(void)
 	send_evt(EVT_MOTION_DONE, type);
 }
 
-/* 4 Nov: speed in SPEED_FOLLOW after the start/stop ramp, -1 = not
-   following (re-initialised from the wheels on entry) */
+/* Speed in SPEED_FOLLOW after the start/stop ramp, -1 = not following
+   (re-initialised from the wheels on entry) */
 LOCAL INT	follow_v = -1;
 
 LOCAL void set_targets(void)
@@ -379,8 +379,8 @@ LOCAL void set_targets(void)
 	switch (mf.state) {
 	case S2_ST_SPEED_FOLLOW:
 		v = imin(cruise_mm_s, limit_mm_s);
-		/* 4 Nov: the start/stop ramp acts on the speed here; the
-		   wheels then follow the steering at once (drive_wheel) */
+		/* the start/stop ramp acts on the speed here; the wheels
+		   then follow the steering at once (drive_wheel) */
 		if (follow_v < 0) follow_v = ((INT)wh[0].ramp + wh[1].ramp) / 2;
 		if (v > follow_v + S2_ACCEL_MM_S_PER_CYC) {
 			follow_v += S2_ACCEL_MM_S_PER_CYC;
@@ -391,10 +391,9 @@ LOCAL void set_targets(void)
 		}
 		v = follow_v;
 		split = v * steer / S2_STEER_FULL;	/* + steer: left faster */
-		/* 28 Oct (jiahao16, Fine-Tuning 4bea17a, merged 30 Oct): the
-		   outer wheel keeps the cruise speed and the inner one slows by
-		   twice the split (same turn rate as +-split), so the robot
-		   slows down in a curve instead of speeding up */
+		/* the outer wheel keeps the cruise speed and the inner one
+		   slows by twice the split (same turn rate as +-split), so the
+		   robot slows down in a curve instead of speeding up */
 		wh[0].target = (H)s2_clamp(split < 0 ? v + 2 * split : v, 0, S2_TOP_SPEED_MM_S);
 		wh[1].target = (H)s2_clamp(split > 0 ? v - 2 * split : v, 0, S2_TOP_SPEED_MM_S);
 		break;
@@ -420,7 +419,7 @@ LOCAL void set_targets(void)
 }
 
 /* ---------------------------------------------------------------------
- *  PID per wheel -> PWM; stall detection
+ *  PI + feed-forward per wheel -> PWM; stall detection
  * --------------------------------------------------------------------- */
 LOCAL void drive_wheel(UINT w, INT dt_ms)
 {
@@ -438,9 +437,9 @@ LOCAL void drive_wheel(UINT w, INT dt_ms)
 		}
 	}
 
-	/* acceleration limit (stopping is immediate).  4 Nov: in
-	   SPEED_FOLLOW the speed is already ramped in set_targets(), so a
-	   wheel may follow a steering change faster */
+	/* acceleration limit (stopping is immediate).  In SPEED_FOLLOW the
+	   speed is already ramped in set_targets(), so a wheel may follow a
+	   steering change faster */
 	{
 		INT	up = S2_ACCEL_MM_S_PER_CYC, dn = S2_DECEL_MM_S_PER_CYC;
 
@@ -501,11 +500,11 @@ LOCAL BOOL stalled(void)
 	return FALSE;
 }
 
-/* TEMPORARY bring-up aid: once a second while a wheel is driven (or
-   turned by hand), print
-   the raw 8-bit encoder counters, duty and measured speed.  If duty is
-   high but the counts do not move, the wheel is not turning (power) or
-   the encoder is not reaching GP0 / GP7.  Set S2_DEBUG to 0 afterwards. */
+/* Console status line: once a second while a wheel is driven (or
+   turned by hand), print the encoder totals, pin toggles, duty,
+   measured speed and cycle timing.  If duty is high but the counts do
+   not move, the wheel is not turning (power) or the encoder is not
+   reaching GP0 / GP7. */
 #if S2_DEBUG
 LOCAL void debug_print(void)
 {
@@ -567,7 +566,7 @@ LOCAL void publish_status(void)
 				      dist_mm, mf.state, mf.dir_l, mf.dir_r,
 				      stopped);
 
-	/* Buddy 1's telemetry slot (IF-S1-01): the tribunal's 26 bits =
+	/* Buddy 1's telemetry slot: 26 bits =
 	   speed_l 7 | speed_r 7 | distance 12 = status bits [25:0].  Every
 	   5th cycle (100 ms) is enough for a 500 ms publisher; the call
 	   takes Buddy 1's mutex (priority inheritance) for a few us only. */
@@ -628,7 +627,7 @@ LOCAL void motion_cycle(void)
 		handle_cmd(w);
 	}
 
-	/* 4.-5. targets, PID, PWM */
+	/* 4.-5. targets, PI, PWM */
 	set_targets();
 	if (mf.braking || mf.state == S2_ST_STOPPED ||
 	    mf.state == S2_ST_E_STOP_BRAKE || mf.state == S2_ST_STALL_FAULT) {

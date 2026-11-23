@@ -13,8 +13,7 @@
  *	Callbacks run in INTERRUPT context: keep them short, never wait,
  *	no tm_printf.  Only tk_set_flg / tk_sig_sem / tk_wup_tsk style calls.
  *	The interrupt is taken on the core that called gpio_irq_init()
- *	(core of usermain()).  [DECIDE] move to a shared folder if the team
- *	prefers; the API stays the same.
+ *	(core of usermain()).
  */
 
 #ifndef GPIO_IRQ_H

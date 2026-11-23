@@ -1,14 +1,12 @@
 /*
  *	s2_example_compat.c
- *	TEMPORARY: the template's example producer, kept only so the example
- *	code still in subsystem 3 (consumer, INT-01) and subsystem 4
- *	(monitor) builds and runs.  Motion Control does not use anything
- *	here.  Delete this file and section 10 of subsystem2.h once Buddies
- *	3 and 4 have replaced their example code.
+ *	The template's example producer, kept so the example code still in
+ *	subsystem 3 (consumer) and subsystem 4 (monitor) builds and runs.
+ *	Motion Control does not use anything here.
  */
 
 #include "subsystem2.h"
-#include "../subsystem3/subsystem3.h"	/* IF-01: mbx_samples */
+#include "../subsystem3/subsystem3.h"	/* mbx_samples */
 
 EXPORT ID	sem_slots;
 EXPORT ID	mpf_samples;

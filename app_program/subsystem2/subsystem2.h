@@ -5,11 +5,11 @@
  *	Public interface of subsystem 2.  Other subsystems include it as
  *	"../subsystem2/subsystem2.h".
  *
- *	What Motion Control does (report section 6.2, statechart 6.2):
+ *	What Motion Control does:
  *	  - the ONLY code that drives the motor pins GP8..GP11;
  *	  - runs every 20 ms (NFR14), checks E-STOP every cycle (NFR9/NFR10);
  *	  - counts the wheel encoders (GP7 left, GP0 right) in an ISR;
- *	  - per-wheel speed PID, MOVE(follow, v), MOVE(d), TURN(angle), STOP,
+ *	  - per-wheel speed PI + feed-forward, MOVE(follow, v), MOVE(d), TURN(angle), STOP,
  *	    SPEED_LIMIT(v); MOTION_DONE when a MOVE(d)/TURN finishes;
  *	  - stall detection (PWM on, no pulse for 300 ms) -> STALL_FAULT;
  *	  - publishes ONE packed 32-bit status word (minimum-bit requirement).
@@ -31,9 +31,8 @@
 /* =====================================================================
  *  1. Task timing and placement
  * ===================================================================== */
-/* Design (report 5.x task table): Motion Control is the highest
-   application task, priority 10, period 20 ms.  [DECIDE] the template's
-   TEAM.md band for S2 was 14-15; the report's numbering is used here. */
+/* Motion Control is the highest-priority application task:
+   priority 10, period 20 ms. */
 #define S2_PRI_MOTION		10
 #define S2_PERIOD_MS		20	/* NFR14 */
 
@@ -41,7 +40,7 @@
    (pri 3) and the Wi-Fi task (pri 4), which would pre-empt Motion and
    add jitter, so Motion runs on core 1.  Data shared with the encoder
    ISR (core 0) is byte/halfword/word sized and has one writer, so it
-   is safe across cores without a lock.  [DECIDE] with the team. */
+   is safe across cores without a lock. */
 #define S2_MOTION_PRC		TP_PRC2
 
 /* E-STOP reaction: 1 = wait on flg_safety between cycles so the brake
@@ -50,57 +49,44 @@
 #define S2_ESTOP_WAKE		1
 
 /* =====================================================================
- *  2. Pins (report section 3, hardware pin layout).  Do not change
- *     without updating the report and the other buddies.
+ *  2. Pins.  Do not change without telling the other buddies.
  * ===================================================================== */
 #define S2_PIN_MR_A		8	/* right motor M1A (PWM slice 4 A) */
 #define S2_PIN_MR_B		9	/* right motor M1B (PWM slice 4 B) */
 #define S2_PIN_ML_A		10	/* left motor  M2A (PWM slice 5 A) */
 #define S2_PIN_ML_B		11	/* left motor  M2B (PWM slice 5 B) */
-#define S2_PIN_ENC_L		7	/* left encoder  (Grove 7 split cable; swapped
-				   26 Oct to match the robot's wiring) */
+#define S2_PIN_ENC_L		7	/* left encoder  (Grove 7 split cable) */
 #define S2_PIN_ENC_R		0	/* right encoder (Grove 1; never build
 				   CRASH_REPORT=1) */
 
-/* Set to 1 if bench testing shows a motor turns backwards on "forward" */
+/* 1 = the motor is mounted the other way round ("forward" reversed) */
 #define S2_INVERT_LEFT		0
-#define S2_INVERT_RIGHT		1	/* 27 Oct: right motor is mirror-mounted and ran
-				   backwards (robot spun on the spot; inverting
-				   the left instead drove it backwards) */
+#define S2_INVERT_RIGHT		1	/* right motor is mirror-mounted */
 
 /* PWM: 125 MHz / (6249 + 1) = 20 kHz (Robo Pico limit is 20 kHz) */
 #define S2_PWM_WRAP		6249
 
 /* =====================================================================
- *  3. Measured constants.  PLACEHOLDERS until measured on the robot
- *     (report 9.5 / testing/subsystem2/TEST_LOG.md S2-M01..S2-M04).
+ *  3. Measured constants (testing/subsystem2/TEST_LOG.md S2-M01)
  * ===================================================================== */
-#define S2_WHEEL_DIAM_MM	43	/* measured 27 Oct */
-/* 12 Nov: 415 (was 220).  Bench run twice: MOVE "100 cm" with 220
-   went 53 cm on the floor, so 220 / 0.53 = 415 counts per wheel turn.
-   Every speed (mm/s) and distance (mm) in the robot is now REAL; the
-   tuned values below and in the VC were converted x 0.53 (220/415),
-   so the robot moves as before. */
+#define S2_WHEEL_DIAM_MM	43
+/* Counts per wheel turn, from a measured MOVE on the floor.  Every
+   speed (mm/s) and distance (mm) in the robot is real. */
 #define S2_ENC_CPR		415	/* counts per wheel rev, rising edges of A */
-/* 12 Nov: effective track for turns on the spot, 0.1 mm.  95 mm was a
-   placeholder; x 0.53 keeps every turn exactly as tuned (a TURN 180
-   still turns ~113 deg on the mat, as before).  For true angles set
-   it from a measured turn: 503 x commanded / measured (180 / 113 ->
-   ~800) -- that changes every turn (bypass, search, junction). */
+/* Effective track for turns on the spot, 0.1 mm.  With 503 a TURN 180
+   turns ~113 deg on the mat; the turns in the VC are tuned to that.
+   For true angles set it from a measured turn: 503 x commanded /
+   measured (180 / 113 -> ~800), which changes every turn (bypass,
+   search, junction). */
 #define S2_TRACK_X10_MM		503
-/* Motor model from the 27 Oct bench run (wheels lifted, no load):
-   duty ~230-300 per mille held ~200 mm/s.  Fitted as deadband 100 +
-   0.75 per mille per mm/s, i.e. ~1200 mm/s at full duty unloaded.  On
-   the floor the load needs more duty: the integrator supplies it.
-   Re-fit on the track (S2-M06) and lower KP if the speed still swings. */
-#define S2_TOP_SPEED_MM_S	424	/* unloaded speed at 100 % duty (12 Nov: 800 x 0.53, real) */
+/* Motor model: a wheel starts at S2_DEADBAND_PM, then speed rises
+   linearly to S2_TOP_SPEED_MM_S at full duty (unloaded).  On the floor
+   the load needs more duty: the integrator supplies it. */
+#define S2_TOP_SPEED_MM_S	424	/* unloaded speed at 100 % duty */
 #define S2_DEADBAND_PM		100	/* duty (per mille) where a wheel starts */
-/* 12 Nov: the gains work on mm/s, now real (x 0.53), so they are
-   / 0.53 to give the same duty as before: 288 -> 544, 96 -> 181,
-   16 -> 30 */
 #define S2_KFF_Q8		544	/* feed-forward: (1000-100)/424 * 256 */
-#define S2_KP_Q8		181	/* PI gains, Q8 (256 = 1.0); was 512, which */
-#define S2_KI_Q8		30	/* swung duty 0 <-> 400 around the target */
+#define S2_KP_Q8		181	/* PI gains, Q8 (256 = 1.0); a higher KP */
+#define S2_KI_Q8		30	/* swings the duty around the target */
 #define S2_I_MAX_PM		300	/* integrator clamp, per mille duty */
 
 /* Derived: micrometres travelled per encoder count (pi ~ 355/113) */
@@ -108,27 +94,22 @@
 	((S2_WHEEL_DIAM_MM * 1000UL * 355UL / 113UL) / S2_ENC_CPR)
 
 /* =====================================================================
- *  4. Behaviour limits (report FR/NFR)
+ *  4. Behaviour limits (FR / NFR)
  * ===================================================================== */
-/* 12 Nov: all real mm/s now (the old value x 0.53 in brackets) */
-#define S2_MAX_SPEED_MM_S	265	/* "no cap" (was 50 cm/s); command field max 511 */
-#define S2_REVERSE_MAX_MM_S	53	/* "safe reverse" cap (100) */
-#define S2_SLOW_MM_S		42	/* last 10 % of a MOVE(d)/TURN (80) */
-#define S2_DEFAULT_MM_S		79	/* MOVE(d)/TURN with speed field 0 (150) */
-#define S2_ACCEL_MM_S_PER_CYC	11	/* (20; 10.6 rounded) target ramp; was 10, then 15:
-					   the inner wheel took 300 ms to slow for a
-					   curve (jiahao16, Fine-Tuning 4bea17a) */
-#define S2_DECEL_MM_S_PER_CYC	21	/* (40) slowing down, Fine-Tuning */
-/* 4 Nov (line-follow weave): in SPEED_FOLLOW the two limits above now
-   apply to the robot's SPEED only (follow_v in set_targets()); each
-   wheel may then change by up to S2_FOLLOW_STEP_MM_S_PER_CYC per cycle,
-   so a steering correction reaches the wheels in 1 cycle instead of 3-5
-   (that delay made the robot overshoot each edge of the line and swing
-   from side to side).  MOVE(d) / TURN (obstacle bypass, junction turns)
-   are unchanged. */
-#define S2_FOLLOW_STEP_MM_S_PER_CYC	42	/* (80) */
-#define S2_HEADING_K_X100	212	/* heading hold: mm/s x 100 per count of L/R difference
-				   (12 Nov: 4 mm/s x 0.53; 15 made the robot weave, 27 Oct) */
+#define S2_MAX_SPEED_MM_S	265	/* "no cap"; command field max 511 */
+#define S2_REVERSE_MAX_MM_S	53	/* "safe reverse" cap */
+#define S2_SLOW_MM_S		42	/* last 10 % of a MOVE(d)/TURN */
+#define S2_DEFAULT_MM_S		79	/* MOVE(d)/TURN with speed field 0 */
+#define S2_ACCEL_MM_S_PER_CYC	11	/* target ramp up, per 20 ms cycle */
+#define S2_DECEL_MM_S_PER_CYC	21	/* target ramp down, per 20 ms cycle */
+/* In SPEED_FOLLOW the two limits above apply to the robot's speed only
+   (follow_v in set_targets()); each wheel may then change by up to
+   S2_FOLLOW_STEP_MM_S_PER_CYC per cycle, so a steering correction
+   reaches the wheels in one cycle and the robot does not swing from
+   side to side.  MOVE(d) / TURN ramp each wheel with the limits above. */
+#define S2_FOLLOW_STEP_MM_S_PER_CYC	42
+#define S2_HEADING_K_X100	212	/* heading hold: mm/s x 100 per count of L/R
+				   difference (higher makes the robot weave) */
 #define S2_STEER_FULL		64	/* steer value giving a 100 % speed split */
 #define S2_STEER_TIMEOUT_MS	100	/* no steer message -> steer 0 */
 #define S2_SPEED_WIN		5	/* speed = counts in the last 5 cycles (100 ms) */
@@ -136,15 +117,12 @@
 #define S2_STALL_ARM_MS		500	/* start-up window before stall can trip */
 #define S2_ZERO_SPEED_MS	200	/* no pulse for this long -> speed 0 */
 #define S2_REVERSE_SETTLE_MS	60	/* brake before changing direction */
-#define S2_ENC_MAX_INTERVAL_MS	40	/* Part C row 3: one missed cycle */
+#define S2_ENC_MAX_INTERVAL_MS	40	/* one missed cycle -> ENC_FAULT */
 #define S2_ENC_DEBOUNCE_US	500	/* ignore edges closer than this: a real
 				   edge at top speed is ~1.5 ms apart */
-/* Largest believable count change in one read interval (x2 margin).
-   The formula needs the real counts per revolution: these motors' hall
-   encoders give hundreds per wheel turn, not the placeholder 20, which
-   would make every real reading look impossible (ENC_FAULT).  Until
-   S2_ENC_CPR is measured (S2-M01), use a loose bound that only catches
-   garbage; set S2_CPR_MEASURED to 1 after measuring. */
+/* Largest believable count change in one read interval.
+   S2_CPR_MEASURED 1: derived from the top speed (x2 margin);
+   0: a loose bound that only catches garbage. */
 #define S2_CPR_MEASURED		0
 #if S2_CPR_MEASURED
 #define S2_ENC_MAX_DELTA \
@@ -155,8 +133,6 @@
 
 /* =====================================================================
  *  5. mbf_motion_cmd -- one 32-bit packed word (VC -> Motion)
- *	12 Nov: speed in mm/s and distance in mm (were cm/s and cm), so
- *	real values like 10.6 cm/s fit:
  *	[2:0]   type      S2_CMD_*
  *	[11:3]  speed     0..S2_MAX_SPEED_MM_S mm/s  (MOVE_FOLLOW, SPEED_LIMIT;
  *	                  cruise speed of MOVE_DIST/TURN, 0 = default)
@@ -226,8 +202,6 @@ static inline INT  s2_cmd_dist(UW w)  { return s2_sext(w >> S2_CMD_DIST_SHIFT, 1
  *	[29]    dir_l     1 = reverse
  *	[30]    dir_r     1 = reverse
  *	[31]    stopped   1 = STOPPED and both wheels still for 40 ms
- *  When the team's g_status/mtx_status exists, Motion copies this word
- *  into its own slot there (one writer per word).
  * ===================================================================== */
 #define S2_ST_STOPPED		0
 #define S2_ST_SPEED_FOLLOW	1
@@ -283,7 +257,8 @@ static inline INT s2_dist_diff(UW old_mm, UW new_mm)
 /* =====================================================================
  *  7. flg_safety (created here, shared)
  *     Set S2_FLG_ESTOP with tk_set_flg (task or ISR): IMU when the
- *     robot is LIFTED or OVERTURNED (12 Nov), Obstacle on TOO_CLOSE, Command Handler on MQTT E-STOP.
+ *     robot is LIFTED or OVERTURNED, Obstacle on TOO_CLOSE, Command
+ *     Handler on MQTT E-STOP.
  *     ONLY the VC clears it (tk_clr_flg(flg_safety, ~S2_FLG_ESTOP))
  *     on a new START.  Bits 1..14 are free for the other buddies
  *     (e.g. B4's LIFTED / IMU_FAULT); bit 15 is private to Motion.
@@ -298,7 +273,7 @@ static inline INT s2_dist_diff(UW old_mm, UW new_mm)
  *     a shared header may define these first to override them.
  * ===================================================================== */
 #ifndef FAULT_STALL
-#define FAULT_STALL		0x0001u	/* [DECIDE] Buddy 1 assigns positions */
+#define FAULT_STALL		0x0001u
 #endif
 #ifndef FAULT_ENC
 #define FAULT_ENC		0x0002u
@@ -306,7 +281,7 @@ static inline INT s2_dist_diff(UW old_mm, UW new_mm)
 
 /* mbf_vc_evt word: [3:0] event type, [31:4] payload */
 #ifndef EVT_SENSOR_FAULT
-#define EVT_SENSOR_FAULT	9	/* [DECIDE] VC owner fixes the codes */
+#define EVT_SENSOR_FAULT	9
 #endif
 #ifndef EVT_MOTION_DONE
 #define EVT_MOTION_DONE		13
@@ -343,8 +318,7 @@ IMPORT void	motion_cyclic_isr(void *exinf);
 /* =====================================================================
  *  10. Template example compatibility (s2_example_compat.c).
  *      The example consumer (subsystem 3) and monitor (subsystem 4)
- *      still use these.  REMOVE when Buddies 3 and 4 replace their
- *      example code; nothing in Motion Control uses them.
+ *      use these; nothing in Motion Control does.
  * ===================================================================== */
 #define S2_EXAMPLE_PRODUCER	1	/* 0 = stop the example producer */
 #define S2_PRI_PRODUCER		15	/* lowest of the old S2 band */
