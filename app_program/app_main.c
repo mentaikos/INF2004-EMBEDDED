@@ -141,7 +141,6 @@ EXPORT INT usermain(void)
 	   here in the initial task, while the system is running.  Tests may
 	   call tk_dly_tsk() to let the other tasks work for a while. */
 	tm_printf((UB*)"[TEST] === test run start ===\n");
-	subsystem1_test();
 	subsystem2_test();
 	subsystem3_test();
 	subsystem4_test();

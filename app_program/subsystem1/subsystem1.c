@@ -248,10 +248,10 @@ EXPORT void s1_net_link(int up)
 
 /* ==================================================================== */
 /* 6. Task: Command Handler (pri 16)                                     */
-/*    2-bit command: 00 START / 01 STOP -> Vehicle Controller hook,      */
-/*    4-byte MAP (code 11): barcode letter mapping -> s1_out_map (1 Nov) */
-/*    10 E-STOP -> flg_safety hook (never filtered), else ack INVALID.   */
-/*    A START/STOP whose 6-bit id was just handled is ignored.           */
+/*    2-byte command: 00 START / 01 STOP -> s1_out_start / s1_out_stop,  */
+/*    10 E-STOP -> s1_out_estop (never filtered), 11 -> ack INVALID.     */
+/*    4-byte command (code 11): MAP -> s1_out_map.                       */
+/*    A START/STOP whose 6-bit id was recently delivered is ignored.     */
 /* ==================================================================== */
 LOCAL void send_ack(INT result, UB id)
 {
@@ -277,7 +277,6 @@ LOCAL void s1_cmd_task(INT stacd, void *exinf)
 			continue;
 		}
 
-		/* 1 Nov: a 4-byte message is the MAP command */
 		if (n == S1_MAP_LEN) {
 			char	letters[S1_MAP_COUNT];
 
@@ -379,7 +378,7 @@ LOCAL void s1_heartbeat_task(INT stacd, void *exinf)
 /* 8. Task: Telemetry Publisher (pri 20, every 500 ms)                   */
 /*    Copies the slots under the mutex, packs the 18-byte frame outside  */
 /*    it.  Wi-Fi-loss bit (bit 137, last) stays 1 until one frame with   */
-/*    it has been handed to the network.                                 */
+/*    it has been queued in mbf_s1_tx.                                   */
 /* ==================================================================== */
 LOCAL void s1_telemetry_task(INT stacd, void *exinf)
 {
@@ -408,7 +407,7 @@ LOCAL void s1_telemetry_task(INT stacd, void *exinf)
 			s1_keep_pending(frame, S1_TLM_LEN);
 		}
 
-		next += S1_TELEMETRY_MS;		/* fixed period */
+		next += S1_TELEMETRY_MS;
 		now   = now_ms();
 		wait  = (INT)(next - now);
 		if (wait <= 0) {
@@ -428,7 +427,7 @@ EXPORT ER subsystem1_init(void)
 	T_CFLG	cflg = {0};
 	T_CMTX	cmtx = {0};
 
-	cmtx.mtxatr = TA_INHERIT;		/* priority inheritance */
+	cmtx.mtxatr = TA_INHERIT;
 	mtx_s1_tlm = tk_cre_mtx(&cmtx);
 	if (mtx_s1_tlm < E_OK) return mtx_s1_tlm;
 
@@ -444,7 +443,7 @@ EXPORT ER subsystem1_init(void)
 	if (mbf_s1_rx < E_OK) return mbf_s1_rx;
 
 	cflg.flgatr  = TA_TFIFO | TA_WMUL;
-	cflg.iflgptn = 0;			/* LINK_UP = 0 */
+	cflg.iflgptn = 0;			/* link starts down */
 	flg_s1_link = tk_cre_flg(&cflg);
 	if (flg_s1_link < E_OK) return flg_s1_link;
 

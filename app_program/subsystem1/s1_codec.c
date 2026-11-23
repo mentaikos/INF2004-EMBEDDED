@@ -60,8 +60,7 @@ int s1_encode_telemetry(uint8_t out[S1_TLM_LEN], int wifi_loss,
 	for (i = 0; i < 4; i++) {
 		s1_put_bits(out, &pos, slots[i] & mask(width[i]), width[i]);
 	}
-	/* Wi-Fi-loss bit at the end of the payload (tribunal decision) */
-	s1_put_bits(out, &pos, wifi_loss ? 1u : 0u, 1);
+	s1_put_bits(out, &pos, wifi_loss ? 1u : 0u, 1);	/* Wi-Fi-loss bit */
 	return S1_TLM_LEN;		/* pos == S1_TLM_BITS, rest is padding */
 }
 
@@ -83,7 +82,7 @@ int s1_encode_heartbeat(uint8_t out[S1_HB_LEN], uint8_t seq,
 	s1_put_bits(out, &pos, mission_state & 0x7u, 3);
 	s1_put_bits(out, &pos, uptime_s, 16);
 	s1_put_bits(out, &pos, link_losses, 4);
-	/* 4 Nov: last barcode letter in the 5 bits that were padding */
+	/* last barcode letter: 0 = none, 1..26 = 'A'..'Z' */
 	s1_put_bits(out, &pos, (barcode >= 'A' && barcode <= 'Z') ?
 		    (uint32_t)(barcode - 'A' + 1) : 0u, 5);
 	return S1_HB_LEN;
@@ -117,10 +116,10 @@ int s1_decode_command(const uint8_t *buf, int len, uint8_t *id)
 	if (type != S1_TYPE_COMMAND || version != S1_VERSION) {
 		return S1_CMD_INVALID;
 	}
-	return (int)cmd;	/* 00 START, 01 STOP, 10 E-STOP, 11 invalid */
+	return (int)cmd;	/* 11 maps to S1_CMD_INVALID */
 }
 
-/* 1 Nov: MAP command, header(4) | 11 | id(6) | 4 x letter(5) = 32 bits */
+/* header(4) | 11 | id(6) | 4 x letter(5) = 32 bits */
 int s1_decode_map(const uint8_t *buf, int len, uint8_t *id,
 		  char letters[S1_MAP_COUNT])
 {

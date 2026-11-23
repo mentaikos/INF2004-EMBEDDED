@@ -8,8 +8,7 @@
  *	  bits 0..1  message type (0 telemetry, 1 heartbeat, 2 command, 3 ack)
  *	  bits 2..3  layout version
  *
- *	TELEMETRY (type 0), 17 bytes, robot -> dashboard, every 500 ms
- *	(fixed length; slot widths agreed at the Week 8 tribunal)
+ *	TELEMETRY (type 0), 18 bytes (fixed), robot -> dashboard, every 500 ms
  *	  bits   0..3   header (type, version)
  *	  bits   4..29  Buddy 2 slot (26)
  *	  bits  30..37  Buddy 3 slot (8)
@@ -27,17 +26,17 @@
  *	HEARTBEAT (type 1), 5 bytes, robot -> dashboard, every 1 s
  *	  header(4) | seq(8) | mission state(3) | uptime s(16) |
  *	  link losses(4, saturates at 15) | last barcode(5)
- *	  last barcode (4 Nov, was 5 bits of padding): the last letter Line &
- *	  Barcode decoded, 0 = none yet, 1..26 = 'A'..'Z'.  Same length, so
- *	  a dashboard that does not know the field still reads the rest.
+ *	  uptime saturates at 65535 s; last barcode is the last letter Line &
+ *	  Barcode decoded, 0 = none yet, 1..26 = 'A'..'Z'.
  *
  *	COMMAND (type 2), 2 bytes, dashboard -> robot
- *	  header(4) | command(2): 00 START, 01 STOP, 10 E-STOP (11 invalid) |
+ *	  header(4) | command(2): 00 START, 01 STOP, 10 E-STOP
+ *	  (11 is invalid in a 2-byte command; see MAP) |
  *	  id(6): 0..63, changes with every new command (duplicate filter) |
  *	  pad(4)
  *
  *	MAP (type 2, command code 11), 4 bytes, dashboard -> robot
- *	(1 Nov: barcode letter -> movement mapping, sent before the demo)
+ *	(barcode letter -> movement mapping, sent before the demo)
  *	  header(4) | command(2) = 11 | id(6) |
  *	  forward(5) | U-turn(5) | left(5) | right(5)
  *	  each letter 0..25 = 'A'..'Z' (26..31 invalid); the four letters
@@ -64,7 +63,7 @@
 
 #define S1_HB_LEN		5
 #define S1_CMD_LEN		2
-#define S1_MAP_LEN		4	/* MAP command (1 Nov) */
+#define S1_MAP_LEN		4
 #define S1_ACK_LEN		2
 
 #define S1_B2_BITS		26
@@ -77,12 +76,12 @@
 			 S1_B4_BITS + S1_B5_BITS + 1)		/* = 129 */
 #define S1_TLM_LEN	((S1_TLM_BITS + 7) / 8)			/* = 17  */
 
-/* 2-bit command codes (tribunal decision) */
+/* 2-bit command codes */
 #define S1_CMD_START		0	/* 00 */
 #define S1_CMD_STOP		1	/* 01 */
 #define S1_CMD_ESTOP		2	/* 10 */
 #define S1_CMD_INVALID		3	/* 11 in a 2-byte command, also returned for bad messages */
-#define S1_CMD_MAP		4	/* 11 in a 4-byte message: letter mapping (1 Nov) */
+#define S1_CMD_MAP		4	/* 11 in a 4-byte message (not a wire value) */
 
 /* MAP: order of the four letters in the message */
 #define S1_MAP_FORWARD		0
@@ -103,7 +102,7 @@ uint64_t s1_get_bits(const uint8_t *buf, uint32_t *pos, uint32_t nbits);
 int s1_encode_telemetry(uint8_t out[S1_TLM_LEN], int wifi_loss,
 			const uint64_t slots[4]);
 
-/* barcode: last letter decoded, 'A'..'Z', or 0 = none (4 Nov) */
+/* barcode: last letter decoded, 'A'..'Z', or 0 = none */
 int s1_encode_heartbeat(uint8_t out[S1_HB_LEN], uint8_t seq,
 			uint8_t mission_state, uint32_t uptime_s,
 			uint32_t link_losses, char barcode);
@@ -114,10 +113,10 @@ int s1_encode_ack(uint8_t out[S1_ACK_LEN], int result, uint8_t id);
  * if the message is not a valid command of this version. */
 int s1_decode_command(const uint8_t *buf, int len, uint8_t *id);
 
-/* 1 Nov: a MAP message.  Returns S1_CMD_MAP and writes *id and
+/* Returns S1_CMD_MAP and writes *id and
  * letters[S1_MAP_FORWARD..S1_MAP_RIGHT] as 'A'..'Z', or S1_CMD_INVALID
  * (wrong type/version/length/code, a letter > 'Z', or a letter used
- * twice).  s1_decode_command() still handles the 2-byte commands. */
+ * twice). */
 int s1_decode_map(const uint8_t *buf, int len, uint8_t *id,
 		  char letters[S1_MAP_COUNT]);
 

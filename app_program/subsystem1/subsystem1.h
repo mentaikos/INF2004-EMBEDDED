@@ -6,7 +6,7 @@
  *	PUBLIC interface: only what other subsystems may use.  Other subsystems
  *	include it as "../subsystem1/subsystem1.h".
  *
- *	Tasks (RTOS task table, Week 6 design review):
+ *	Tasks:
  *	  Command Handler           pri 16  event-driven (mbf_s1_rx)
  *	  Heartbeat & Link Monitor  pri 19  every 1 s, and on link loss
  *	  Telemetry Publisher       pri 20  every 500 ms
@@ -64,7 +64,7 @@ IMPORT ER	s1_tlm_set_slot(UINT slot, UD bits);
    0 INIT, 1 IDLE, 2 RUNNING, 3 E_STOPPED, 4 FAULT, 5 COMPLETE */
 IMPORT void	s1_set_mission_state(UINT state);
 
-/* Last barcode letter decoded (Line & Barcode -> S1, 4 Nov), 'A'..'Z';
+/* Last barcode letter decoded (Line & Barcode -> S1), 'A'..'Z';
    sent in every heartbeat so the dashboard can show it.  Never blocks. */
 IMPORT void	s1_set_barcode(char letter);
 
@@ -73,29 +73,29 @@ IMPORT void	s1_set_barcode(char letter);
  *
  *  Called by the Command Handler after a robot/cmd message is decoded.
  *  Subsystem 1 provides WEAK default versions that only print, so it can be
- *  tested alone.  The owners override them with real ones (same name, no
- *  WEAK_FUNC) that:
- *    s1_out_start / s1_out_stop : send EVT_START / EVT_STOP to the Vehicle
- *        Controller through mbf_vc_evt with TMO_POL; return FALSE if the
- *        buffer is full (S1 then publishes robot/ack = FAILED).
- *    s1_out_estop : set E_STOP in flg_safety (bypasses the Vehicle
- *        Controller; Motion Control polls it every 20 ms).
+ *  tested alone.  The real versions (same name) replace them at link time:
+ *    s1_out_start / s1_out_stop (vehicle_controller/vc_s1_hooks.c): post
+ *        EVT_START / EVT_STOP to mbf_vc_evt with TMO_POL; return FALSE if
+ *        the START guard fails or the buffer is full (S1 then publishes
+ *        robot/ack = FAILED).
+ *    s1_out_estop (subsystem2/subsystem2.c): sets E_STOP in flg_safety
+ *        directly, bypassing the Vehicle Controller.
  *  They must never block.
  * --------------------------------------------------------------------- */
 IMPORT BOOL	s1_out_start(void);
 IMPORT BOOL	s1_out_stop(void);
 IMPORT void	s1_out_estop(void);
 
-/* 1 Nov: MAP command (barcode letter -> movement, sent before the demo).
+/* MAP command (barcode letter -> movement, sent before the demo).
    letters[0..3] = the letters for forward, U-turn, left, right
    (S1_MAP_xxx order, 'A'..'Z', all different).  The Vehicle Controller
    overrides it to store the mapping; FALSE -> robot/ack = FAILED. */
 IMPORT BOOL	s1_out_map(const char letters[4]);
 
-/* ---- Used by subsystem1_test.c only ---- */
-IMPORT ID	mbf_s1_tx;	/* outgoing messages -> network task */
-IMPORT ID	mbf_s1_rx;	/* robot/cmd payloads -> Command Handler */
-IMPORT ID	flg_s1_link;	/* link status bits */
+/* ---- Internal: exported for test/debug code, not for other subsystems ---- */
+IMPORT ID	mbf_s1_tx;
+IMPORT ID	mbf_s1_rx;
+IMPORT ID	flg_s1_link;
 IMPORT ID	tid_s1_cmd, tid_s1_hb, tid_s1_tlm;
 IMPORT void	s1_tlm_snapshot(UD out[S1_SLOT_COUNT]);
 
