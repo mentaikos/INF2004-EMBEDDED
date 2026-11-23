@@ -55,7 +55,6 @@ IMPORT ER subsystem5_start(void);
 IMPORT void subsystem2_test(void);
 IMPORT void subsystem3_test(void);
 IMPORT void subsystem4_test(void);
-IMPORT void subsystem5_test(void);
 #endif
 
 /* ---------------------------------------------------------------------

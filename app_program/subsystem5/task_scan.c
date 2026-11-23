@@ -4,7 +4,7 @@
 #include "../subsystem2/subsystem2.h"
 #include "../subsystem4/subsystem4.h"
 #include "../subsystem3/subsystem3.h"
-#include "../subsystem1/subsystem1.h"	/* 19 Nov: telemetry slot */
+#include "../subsystem1/subsystem1.h"
 #include <tk/syslib.h>
 
 EXPORT ID tid_s5_scan;
@@ -21,14 +21,6 @@ LOCAL UH now_ms(void)
 	return (UH)now.lo;
 }
 
-/* 19 Nov: "stopped" while a scan is in progress.  Motion's stopped bit
- * drops on a single encoder tick (a wheel settling after the brake, or
- * the servo's swing rocking the robot): the scan was thrown away after
- * its coarse pass, every time, and reported NO_CLEAR -- three reverses,
- * then FAULT, without the sides ever being looked at (19 Nov log).
- * Once a scan has started (it starts only on the strict bit), it is
- * aborted only if Motion is driving again or the robot has really moved
- * (S5_SCAN_DRIFT_MM on the odometer). */
 LOCAL BOOL scan_hold;                   /* a scan is in progress */
 LOCAL UW scan_dist0;                    /* odometer when it started */
 
@@ -149,11 +141,6 @@ LOCAL void inputs(S5_INPUT *in)
 
 LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns);
 
-/* 19 Nov: the obstacle shown on the dashboard (publish): the FIRST
-   finished scan of each obstacle that saw it (face width > 0).  The
-   rescans after a reverse are of the same obstacle and do not change
-   it; a new detection while following / passing / rejoining starts
-   the next obstacle. */
 LOCAL S5_PROFILE tlm_last;
 LOCAL UINT tlm_width;                   /* s5_face_width, cm */
 LOCAL UINT tlm_scans;                   /* obstacles shown (slot keeps 4 bits) */
@@ -167,7 +154,7 @@ LOCAL UB tlm_prev_state;                /* S5 state at the last publish */
    log.  Range codes: 0 = under 5 cm, 1 = over 100 cm (clear), 2 = no
    echo, 3 = not scanned, else cm.  Set S5_DEBUG_SCAN to 0 when done. */
 #ifndef S5_DEBUG_SCAN
-#define S5_DEBUG_SCAN		1	/* 29 Oct: muted for barcodes; 30 Oct: back on for obstacles */
+#define S5_DEBUG_SCAN		1
 #endif
 #if S5_DEBUG_SCAN
 LOCAL void print_scan(const S5_SCAN *scan, INT event)
@@ -181,7 +168,6 @@ LOCAL void print_scan(const S5_SCAN *scan, INT event)
 	for (i = 0; i < S5_ANGLES; i++) {
 		tm_printf((UB*)" %d:%d", s5_angle_deg(i), s5_scan_get(scan->scan, i));
 	}
-	/* 19 Nov: bins a width re-ping heard nearer (for the width only) */
 	tm_printf((UB*)"\ns5: width re-pings nearer:");
 	for (i = 0; i < S5_ANGLES; i++) {
 		if (s5_scan_get(scan->wscan, i) != s5_scan_get(scan->scan, i))
@@ -198,8 +184,6 @@ LOCAL void print_scan(const S5_SCAN *scan, INT event)
 		  (S5_ROBOT_WIDTH_MM + 2 * (S5_CLEARANCE_MARGIN_MM +
 					    S5_RANGE_ERROR_MM)) / 10,
 		  s5_angle_deg((p.w1 >> 14) & 31u), s5_angle_deg((p.w1 >> 19) & 31u));
-	/* 19 Nov: what the dashboard shows (s5_face_width); "width" above
-	   is what the bypass plans with */
 	if (tlm_kept)
 		tm_printf((UB*)"s5: obstacle width %dcm (dashboard)\n", tlm_width);
 	else
@@ -218,9 +202,6 @@ LOCAL void deliver(const S5_OUTPUT *out, const S5_SCAN *scan, UH *drops, UH over
 	if (out->estop || fault) CHECK(tk_set_flg(flg_safety, S2_FLG_ESTOP), "S5 safety");
 	if (fault && vc_faults > 0) CHECK(tk_set_flg(vc_faults, fault), "S5 fault");
 	if (out->event < 0) return;
-	/* 19 Nov: dashboard obstacle.  A detection while watching ahead
-	   (following, passing, rejoining) is a new obstacle; one while
-	   stopped / scanning / reversing is the same one. */
 	if (out->event == EVT_OBSTACLE_DETECTED &&
 	    (tlm_prev_state == S5_ST_FORWARD_WATCH || tlm_prev_state == S5_ST_BYPASSING ||
 	     tlm_prev_state == S5_ST_LINE_RECOVERY))
@@ -269,9 +250,6 @@ LOCAL void publish(const S5_SCAN *scan, UH drops, UH overruns)
 	published.overruns = overruns;
 	published_ms = scan->plan_ms;         /* original plan time, not refresh time */
 	tk_unl_mtx(mtx_s5_status);
-	/* 19 Nov: Buddy 1's telemetry slot (subsystem5.h s5_tlm_slot); the
-	   dashboard's "Obstacle width" is the measured face width
-	   (s5_face_width), not the bypass's planning width */
 	{
 		S5_PROFILE t = tlm_last;
 		t.w0 = (t.w0 & ~((UW)255u << 7)) | ((UW)(tlm_width & 255u) << 7);
@@ -305,11 +283,6 @@ LOCAL UINT watch_index(BOOL moving)
 	s3_sts_unpack(s3_get_status(), &f);
 	steer_avg_q4 += ((W)f.steer * 16 - steer_avg_q4) / 8;
 	avg = steer_avg_q4 / 16;
-	/* 30 Oct: on a straight the line follower weaves, steering one way
-	   then the other every few hundred ms, and the average swung the
-	   sensor left and right.  A bend steers ONE way for a long time:
-	   look into it only after the steering has stayed the same way for
-	   S5_WATCH_HOLD_MS, and come back to centre as soon as it changes. */
 	way = f.steer > S5_WATCH_DEADBAND ? 1 :
 	      f.steer < -S5_WATCH_DEADBAND ? -1 : 0;
 	if (way != 0 && way == steer_way) {

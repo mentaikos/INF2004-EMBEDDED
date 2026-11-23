@@ -61,8 +61,7 @@ IMPORT ER s5_reset(void);               /* stopped, E-STOP clear */
  *   [16:13] obstacles scanned (wraps at 16)
  *   last obstacle scanned:
  *   [23:17] closest cm      [31:24] WIDTH cm      [39:32] centre x cm,
- *   signed, + right         [46:40] y cm (forward to its near face)
- *   22 Nov: was 55 bits with [54:47] always 0 (minimum-bit rule). */
+ *   signed, + right         [46:40] y cm (forward to its near face) */
 static inline UD s5_tlm_slot(UW status, S5_PROFILE last, UINT scans)
 {
 	return (UD)(status & 7u) | ((UD)((status >> 3) & 7u) << 3) |

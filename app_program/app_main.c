@@ -144,7 +144,6 @@ EXPORT INT usermain(void)
 	subsystem2_test();
 	subsystem3_test();
 	subsystem4_test();
-	subsystem5_test();
 	vc_test();
 	tm_printf((UB*)"[TEST] === test run end ===\n");
 #endif

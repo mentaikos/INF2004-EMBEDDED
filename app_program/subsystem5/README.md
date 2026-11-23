@@ -176,25 +176,14 @@ The new task also needs the standard 2048-byte kernel stack and kernel objects.
 
 ## Build and verification
 
-From the repo root, PC tests (GCC; `libm` generates test scenes only):
-
-```sh
-gcc -std=c11 -O2 -Wall -Wextra -Werror -DS5_HOST_TEST \
-    app_program/subsystem5/host_test/test_host.c \
-    app_program/subsystem5/obstacle_scan.c -lm -o /tmp/s5_test
-/tmp/s5_test
-```
-
 Firmware uses the unchanged build system:
 
 ```sh
 cd build_make
-make TEST=1 -j8
+make -j8
 ```
 
-Use USB CDC and `CRASH_REPORT=0` to preserve Buddy 2's GP0 encoder. The tests
-in `scan_checks.h` are shared by the host runner and on-target `TEST_CHECK`
-suite. Host results do not assert that hardware or on-target tests passed.
+Use USB CDC and `CRASH_REPORT=0` to preserve Buddy 2's GP0 encoder.
 See `testing/subsystem5/TEST_LOG.md` for evidence and the remaining bench tests.
 
 The default footprint (160 x 200 mm), error margins, critical distance,

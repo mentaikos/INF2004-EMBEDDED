@@ -160,13 +160,7 @@ LOCAL UINT required_width_mm(void)
  * obstacle face + S5_PASS_DEPTH_MM).  Readings further ahead do not
  * matter for the bypass.  Missing echoes or a very near return on that
  * side make it 0 (unknown is not clear); an unscanned coarse bin too.
- * Nothing in the strip: S5_SIDE_FREE_MM (the sweep saw open space).
- *
- * 28 Oct: this replaced a "free wedge chord" that only credited the
- * angle left over beyond the obstacle's edges, minus a 15-degree beam
- * allowance.  A 30 cm box 22 cm away fills 60..125 degrees, so that
- * gave 14..17 cm with nothing at all beside the box, and the robot
- * reversed until NO_CLEAR. */
+ * Nothing in the strip: S5_SIDE_FREE_MM (the sweep saw open space). */
 LOCAL UINT side_clearance(const UB *scan, UINT edge, BOOL left, UINT band,
 			  INT edge_mm)
 {
@@ -200,7 +194,7 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 	BOOL unknown = FALSE, near = FALSE, foreground_known = TRUE;
 	INT ox = 0;
 	BOOL have_ox = FALSE;
-	UB floor_free[S5_SCAN_BYTES];		/* 19 Nov: scan without the floor */
+	UB floor_free[S5_SCAN_BYTES];
 	for (i = 0; i < S5_ANGLES; i++) {
 		r = s5_scan_get(scan, i);
 		if (r == S5_RANGE_NEAR) near = TRUE;
@@ -212,11 +206,6 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 			if ((UINT)px <= required_width_mm() / 2u) path = r;
 		}
 	}
-	/* 19 Nov: obstacle nearer than the floor echoes: those are floor --
-	 * not part of the obstacle (width, edges) and open space beside it
-	 * (side clearance).  Without this the real 20 cm box at 19 cm, with
-	 * the floor at 23 cm on both sides, filled the whole sweep: 0 cm
-	 * free either side, REVERSE, until the rescans ran out (FAULT). */
 	if (closest < S5_FLOOR_MIN_CM) {
 		/* a face 21-22 cm away reads up to 2 cm more off its middle:
 		   that is still the obstacle, not floor */
@@ -246,8 +235,6 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 			if (px < xmin) xmin = px;
 			if (px > xmax) xmax = px;
 		}
-		/* 16 Nov: width of the obstacle itself (S5_WIDTH_BAND_CM):
-		 * the unbroken run of bins next to the closest reading */
 		{
 			UINT a = nearest_i, b = nearest_i, k;
 			INT wmin, wmax;
@@ -282,10 +269,7 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 				      -xmin);
 		right = side_clearance(scan, lo, FALSE, closest + S5_PROFILE_BAND_CM,
 				       xmax);
-		/* All measured bearings must clear the in-place turning envelope.
-		 * 19 Nov: measured from the axle, which is S5_SENSOR_AHEAD_MM
-		 * behind the sensor (was from the sensor: a 16 cm stop said
-		 * REVERSE with the robot's corners ~6 cm clear of the box). */
+		/* All measured bearings must clear the in-place turning envelope. */
 		if (foreground_known &&
 		    closest * 10u + S5_SENSOR_AHEAD_MM > turn_radius_mm()) {
 			if (left >= required_width_mm() || right >= required_width_mm()) {
@@ -299,7 +283,7 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 	}
 	if (closest <= 100) {
 		x = project((INT)closest * 10, 90 - (INT)s5_angle_deg(nearest_i)) / 10;
-		if (have_ox) x = ox / 10;	/* 16 Nov: the obstacle's centre */
+		if (have_ox) x = ox / 10;
 		y = project((INT)closest * 10, (INT)s5_angle_deg(nearest_i)) / 10;
 	} else closest = S5_RANGE_FAR;
 	if (near) {
@@ -317,24 +301,6 @@ EXPORT S5_PROFILE s5_make_profile(const UB *scan)
 	return p;
 }
 
-/* 19 Nov: the obstacle's width as reported to the dashboard (telemetry
- * slot) and the scan log -- NOT the profile's width, which the bypass
- * plans from and is left exactly as it is.
- *
- * The beam is ~15-20 degrees wide, so a flat face echoes straight back
- * at bearings well beyond its edges, at about the same range; and one
- * bin can drop out (FAR / no echo) in the middle of it.  So:
- *  1. the run of bins round the closest reading within S5_WIDTH_BAND_CM
- *     of it (floor echoes excluded as in s5_make_profile), bridging
- *     single dropped bins;
- *  2. the face's forward distance = the median forward component
- *     (r sin a) of those bins;
- *  3. only bins whose forward component is within S5_FACE_TOL_MM of
- *     it are really looking at the face -- the beam's spill-over beyond
- *     an edge reads short there (r sin a < face);
- *  4. the face reaches half a bin beyond the outermost such bins:
- *     width = face x (cot(right edge) - cot(left edge)).
- * Returns cm; 0 = no obstacle in range. */
 LOCAL INT cot_mm(INT y_mm, INT deg)	/* sideways at bearing deg, + right */
 {
 	INT s = sin_deg(deg);
@@ -404,13 +370,6 @@ EXPORT UINT s5_face_width(const UB *scan)
 	return (UINT)clamp((k + 5) / 10, 0, 200);
 }
 
-/* 19 Nov: bins to ping once more for the width (wscan): within
- * S5_WIDTH_REPING_BINS of the closest reading, every bin that did not
- * hear the obstacle (floor, far or no echo).  An angled, smooth face
- * reflects most of the sound away from those bearings (log 19 Nov: a
- * 20 cm box was heard only at 90..100 deg, the rest was floor); a second
- * ping sometimes catches its weaker echo.  Nothing in range: none.
- * At most 2 x S5_WIDTH_REPING_BINS + 1 pings, ~60 ms each. */
 LOCAL UW s5_width_mask(const UB *scan)
 {
 	UINT i, r, closest = 101, nearest = S5_CENTRE, cap;
@@ -634,8 +593,6 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 		return;
 	}
 	if (range == S5_RANGE_NO_ECHO && s->width_pass) {
-		/* 19 Nov: a width re-ping that hears nothing is expected (the
-		   face reflects the sound away there), not a faulty sensor */
 	} else if (range == S5_RANGE_NO_ECHO) {
 		if (s->invalid_count < 3) s->invalid_count++;
 		if (s->invalid_count >= S5_INVALID_LIMIT) {
@@ -651,8 +608,6 @@ EXPORT void s5_scan_sample(S5_SCAN *s, const S5_INPUT *in, UB range, S5_OUTPUT *
 			return;
 		}
 		if (s->width_pass) {
-			/* 19 Nov: width re-ping: keep the nearer echo in wscan
-			   only -- s->scan (what the bypass plans from) is final */
 			UINT old = s5_scan_get(s->wscan, s->index);
 			if (measured(range) && (!measured(old) || range < old))
 				s5_scan_set(s->wscan, s->index, range);
