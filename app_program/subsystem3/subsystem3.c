@@ -36,8 +36,8 @@ EXPORT APP_STATS	g_app_stats;
 /*
  *	Why a hardware timer and not a cyclic handler: the kernel tick is
  *	CNF_TIMER_PERIOD (config/config.h), so a cyclic handler cannot run
- *	every 0.25 ms.  The RP2040 TIMER
- *	counts microseconds and has four alarms; nothing else uses alarm 3.
+ *	every 0.25 ms.  The RP2040 TIMER counts microseconds and has four
+ *	alarms; nothing else uses alarm 3.
  *
  *	Why not the kernel's "adc" driver: it waits on an event flag for
  *	each conversion, which an interrupt handler may not do.  A single
@@ -142,7 +142,7 @@ LOCAL void bc_alarm_isr(UINT intno)
 	bc_samples++;
 
 #if S3_BC_LOW_CONTRAST
-	/* 5 Nov: moving average of S3_BC_LC_AVG samples (2 ms) */
+	/* moving average of S3_BC_LC_AVG samples (2 ms) */
 	{
 		static UH	avg_buf[S3_BC_LC_AVG];
 		static UW	avg_sum;
@@ -416,7 +416,6 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 		/* no other case needs action */
 	}
 
-	/* 6 Nov: how long the same edge has stayed touched */
 	if (pos == 2 || pos == -2) {
 		if (pos != lt->touch_pos) {		/* other edge: new touch */
 			lt->touch_pos = pos;
@@ -430,7 +429,6 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 		/* no other case needs action */
 	}
 
-	/* 6 Nov: a long touch: the line may slip outside next */
 	if (lt->touch_n > S3_BEND_DELAY) {
 		lt->slip_ms = S3_BEND_SLIP_MS;
 	} else if (lt->slip_ms > dt_ms) {
@@ -438,7 +436,7 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	} else {
 		lt->slip_ms = 0;
 	}
-	/* 6 Nov: remember a curve for a while (no delay inside it) */
+	/* remember a curve for a while (no delay inside it) */
 	if (lt->bend >= S3_BEND_CURVE || lt->bend <= -S3_BEND_CURVE) {
 		lt->curve_ms = S3_BEND_CURVE_MEM_MS;
 	} else if (lt->curve_ms > dt_ms) {
@@ -453,18 +451,17 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	} else if ((pos == 2 && lt->bend < 0) || (pos == -2 && lt->bend > 0)) {
 		lt->bend = 0;			/* other edge: overshoot, restart */
 	} else if ((pos == 2 || pos == -2) && (pos == lt->pos || lt->touch_n > 1)) {
-		/* 6 Nov: only once the touch has lasted S3_BEND_DELAY */
+		/* only once the touch has lasted S3_BEND_DELAY */
 		if (lt->touch_n > S3_BEND_DELAY || lt->curve_ms > 0) {
 			lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP : -S3_BEND_STEP));
 		}
 	} else if (!left && !center) {
-		/* 30 Oct: restores the 28 Oct straight-line fix (lost in a
-		   merge): grow while white only once a curve is confirmed */
+		/* grow while white only once a curve is confirmed */
 		if (lt->bend >= S3_BEND_CURVE || lt->bend <= -S3_BEND_CURVE ||
-		    lt->curve_ms > 0 ||		/* 6 Nov: or just in a curve */
-		    lt->slip_ms > 0) {		/* 6 Nov: or after a long touch */
+		    lt->curve_ms > 0 ||		/* or just in a curve */
+		    lt->slip_ms > 0) {		/* or after a long touch */
 			/* in a curve: the line slipped outside the sensor;
-			   6 Nov: grow towards where it was last seen */
+			   grow towards where it was last seen */
 			if (lt->white_ms > S3_BEND_WHITE_MS) {
 				lt->bend = (B)(lt->bend + (pos > 0 ? S3_BEND_STEP
 								   : -S3_BEND_STEP));
@@ -485,7 +482,7 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
 	if (lt->state == S3_LINE_JUNCTION) {
 		steer = 0;
 	} else if (!left && !center) {
-		/* 4 Nov: centred = no drift at first, then a slow ramp */
+		/* centred = no drift at first, then a slow ramp */
 		W	seek = 0;
 
 		if (lt->white_ms > S3_SEEK_DELAY_MS) {
@@ -522,7 +519,7 @@ EXPORT INT s3_line_step(S3_LINE *lt, UINT left, UINT center, UW dt_ms)
  *	  MEASURING --bc_ring overflow--> WAIT_FOR_BAR     (discard, 8.3)
  */
 
-/* 1 Nov: the letter -> movement mapping is not in the code: it comes by
+/* The letter -> movement mapping is not in the code: it comes by
    MQTT (robot/cmd MAP) to the Vehicle Controller.  The decoder accepts
    every single letter A..Z, read in either direction. */
 EXPORT BOOL s3_bc_is_letter(const char *text)
@@ -633,10 +630,9 @@ LOCAL INT decode_char(const UH *w, UH *narrow_max)
 	return -1;
 }
 
-/* 1 Nov: speed-tolerant decoding (tried FIRST, the rank method above is
+/* Speed-tolerant decoding (tried FIRST, the rank method above is
    the fallback).  The robot's speed can change a lot inside one
-   character (the 1 Nov "Y" read: the two wide bars of the start '*'
-   measured 73 and 145 ms).  For every Code 39 pattern, and a wide:narrow
+   character.  For every Code 39 pattern, and a wide:narrow
    ratio of 2, 2.5 or 3, fit a speed that changes linearly across the 9
    elements (time per unit = a + b x position) and keep the pattern that
    fits best.  Accepted only if it fits well (rms error
@@ -736,7 +732,7 @@ LOCAL INT decode_dir(const UH *w, INT n, char *text, INT max)
 	if (n < 29 || (n + 1) % 10 != 0) return -S3_BCERR_FRAME;
 
 	for (i = 0; i < k; i++) {
-		c = decode_char_fit(&w[10 * i], &nmax);	/* 1 Nov: first */
+		c = decode_char_fit(&w[10 * i], &nmax);	/* speed fit first */
 		if (c < 0) c = decode_char(&w[10 * i], &nmax);
 		if (c < 0) return -S3_BCERR_PATTERN;
 
@@ -802,12 +798,12 @@ LOCAL void det_thresholds(S3_BC_DET *d)
 	W amp   = (W)d->amp;
 
 #if S3_BC_LOW_CONTRAST
-	(void)amp;			/* 5 Nov: fixed, just above white */
-	(void)white;			/* 12 Nov: above the local valley (s3_bc_detect) */
+	(void)amp;			/* unused in low-contrast mode */
+	(void)white;			/* threshold sits above the local valley (s3_bc_detect) */
 	d->thr_on  = clamp_adc((W)d->ext + S3_BC_LC_RISE);
 	d->thr_off = d->thr_on;
 #else
-	/* 1 Nov: part of the way from white to the black actually seen */
+	/* part of the way from white to the black actually seen */
 	d->thr_on  = clamp_adc(white + amp * S3_BC_ON_PCT / 100);
 	d->thr_off = clamp_adc(white + amp * S3_BC_OFF_PCT / 100);
 #endif
@@ -821,7 +817,7 @@ EXPORT void s3_bc_det_init(S3_BC_DET *d, UH white)
 	d->amp      = S3_BC_AMP_INIT;
 	if (d->amp < S3_BC_AMP_MIN) d->amp = S3_BC_AMP_MIN;
 	d->white_n  = 0;
-	d->leak     = 0;		/* 12 Nov */
+	d->leak     = 0;
 	d->step_ok  = 0;
 	d->sm_q4    = (UW)white << 4;
 	d->ext      = white;
@@ -832,7 +828,7 @@ EXPORT void s3_bc_det_init(S3_BC_DET *d, UH white)
 }
 
 #if S3_BC_LOW_CONTRAST
-/* 12 Nov: low-contrast mode, each bar against the paper next to it
+/* Low-contrast mode, each bar against the paper next to it
    (S3_BC_LC_RISE in subsystem3.h).  adc is the ISR's moving average. */
 EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 {
@@ -923,7 +919,7 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 {
 	if (d->black) {
-		/* 1 Nov: learn how dark the bars are (only grows) */
+		/* learn how dark the bars are (only grows) */
 		W lv = (W)adc - (W)(d->white_q8 >> 8);
 
 		if (lv > (W)d->amp) {
@@ -940,7 +936,7 @@ EXPORT INT s3_bc_detect(S3_BC_DET *d, UH adc)
 		d->white_n = 0;
 		return S3_EDGE_TO_WHITE;
 	}
-	/* 5 Nov: white for S3_BC_AMP_FORGET_MS: forget the learnt black */
+	/* white for S3_BC_AMP_FORGET_MS: forget the learnt black */
 	if (d->white_n < 0xFFFFu) d->white_n++;
 	if (d->white_n == (UH)S3_MS(S3_BC_AMP_FORGET_MS) &&
 	    d->amp != S3_BC_AMP_INIT) {
@@ -1036,7 +1032,7 @@ LOCAL INT end_read(S3_BC *bc, UH now, S3_BC_RESULT *res)
 
 	res->ch  = (len > 0) ? text[0] : 0;
 	res->rev = rev ? 1 : 0;
-	res->cmd = NAV_NONE;		/* 1 Nov: the VC maps the letter */
+	res->cmd = NAV_NONE;		/* the VC maps the letter */
 	if (!s3_bc_is_letter(text)) {
 		bc->state = S3_BC_WAIT_FOR_BAR;
 		res->err = S3_BCERR_UNKNOWN;
@@ -1067,10 +1063,8 @@ EXPORT INT s3_bc_abort(S3_BC *bc, UH now, S3_BC_RESULT *res)
 	return ev;
 }
 
-/* 5 Nov (track run 21:33): with the low-contrast levels the mat's
-   marks (tile seams, logos, the line's edge in a curve) opened long
-   "reads" of 30+ elements; they held the steering limit through curves
-   and could swallow a real barcode.  Every Code 39 barcode starts with
+/* Marks on the mat (tile seams, logos, the line's edge in a curve) can
+   open long false reads.  Every Code 39 barcode starts with
    '*' (or ends with it, read backwards), so the first 9 elements must
    be '*' one way round.  If not, the oldest bar + space are dropped and
    the check repeats on the next pair: marks never lock on, and a real
@@ -1123,7 +1117,7 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t, S3_BC_RESULT *res)
 		if (w > bc->run_max) bc->run_max = w;
 		bc->last_t  = t;
 		bc->black   = (UB)black;
-		/* 5 Nov: not a '*' start: slide on by one bar + space */
+		/* not a '*' start: slide on by one bar + space */
 		if (bc->n == 9 && !is_start(bc->elem)) {
 			INT	i;
 
@@ -1134,7 +1128,7 @@ EXPORT INT s3_bc_edge(S3_BC *bc, BOOL black, UH t, S3_BC_RESULT *res)
 				if (bc->elem[i] > bc->run_max) bc->run_max = bc->elem[i];
 			}
 			bc->n = 7;
-			bc->nostart = 1;	/* 6 Nov: steering released */
+			bc->nostart = 1;	/* steering released */
 		}
 		return S3_BEV_NONE;
 
@@ -1171,7 +1165,7 @@ EXPORT INT s3_bc_poll(S3_BC *bc, UH now, S3_BC_RESULT *res)
 		    (W)quiet > 2 * (W)bc->run_max) {
 			return end_read(bc, now, res);
 		}
-		/* 12 Nov: the same, with the paper's edge after the barcode
+		/* The same, with the paper's edge after the barcode
 		   seen as one more "bar": either still black (one element
 		   too many, its space) or already ended (two too many).
 		   They are dropped here. */
@@ -1181,13 +1175,10 @@ EXPORT INT s3_bc_poll(S3_BC *bc, UH now, S3_BC_RESULT *res)
 			if (bc->black) {
 				bc->n = (UB)(bc->n - 1);
 			} else {
-				/* 19 Nov (capture of the small 'Y', sheet darker
-				   than the mat): the two extra elements can also be
-				   the paper's edge BEFORE the barcode, when they
-				   happened to pass the '*' check with the first
-				   bar.  Keep the end that gives a whole barcode:
-				   the elements without the last two, else without
-				   the first two. */
+				/* The two extra elements can also be the paper's
+				   edge BEFORE the barcode.  Keep the end that
+				   gives a whole barcode: without the last two,
+				   else without the first two. */
 				char	t[8];
 				BOOL	r;
 				INT	i;
@@ -1204,20 +1195,20 @@ EXPORT INT s3_bc_poll(S3_BC *bc, UH now, S3_BC_RESULT *res)
 			}
 			return end_read(bc, now, res);
 		}
-		/* 4 Nov: a few elements, then nothing: a line, not a barcode */
+		/* a few elements, then nothing: a line, not a barcode */
 		if (bc->n < S3_BC_HOLD_MIN_ELEMS &&
-		    quiet >= (H)S3_MS(S3_BC_DROP_QUIET_MS)) {	/* 5 Nov: was HOLD_QUIET */
+		    quiet >= (H)S3_MS(S3_BC_DROP_QUIET_MS)) {
 			return end_read(bc, now, res);
 		}
-		/* 6 Nov: a read that has stopped (robot stopped on it):
+		/* a read that has stopped (robot stopped on it):
 		   no edge for S3_BC_SLOW_TIMEOUT_MS ends it (a partial read
 		   is discarded).  Also keeps quiet well inside 16 bits. */
 		if (quiet >= (H)S3_MS(S3_BC_SLOW_TIMEOUT_MS)) {
 			return end_read(bc, now, res);
 		}
-		/* 30 Oct: otherwise the read stays open S3_BC_READ_MAX_MS from
-		   its first bar, then ends (a partial read is discarded).
-		   6 Nov: measured as the elements so far plus the open one,
+		/* otherwise the read stays open S3_BC_READ_MAX_MS from
+		   its first bar, then ends (a partial read is discarded),
+		   measured as the elements so far plus the open one,
 		   in 32 bits, so the limit may pass the 16-bit clock's 8 s */
 		{
 			UW	el = (quiet > 0) ? (UW)quiet : 0;
