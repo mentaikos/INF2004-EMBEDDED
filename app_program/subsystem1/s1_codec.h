@@ -8,7 +8,7 @@
  *	  bits 0..1  message type (0 telemetry, 1 heartbeat, 2 command, 3 ack)
  *	  bits 2..3  layout version
  *
- *	TELEMETRY (type 0), 18 bytes (fixed), robot -> dashboard, every 500 ms
+ *	TELEMETRY (type 0), 17 bytes (fixed), robot -> dashboard, every 500 ms
  *	  bits   0..3   header (type, version)
  *	  bits   4..29  Buddy 2 slot (26)
  *	  bits  30..37  Buddy 3 slot (8)
@@ -17,9 +17,8 @@
  *	  bit  128      Wi-Fi loss since the last telemetry (1 = yes),
  *	                the LAST data bit of the payload (tribunal decision)
  *	  bits 129..135 padding (0)
- *	Version 2 (22 Nov): no slot carries always-zero bits any more
- *	(minimum-bit rule): B4 lost its spare bit, B5 its 8 unused top bits,
- *	so the frame is 129 bits = 17 bytes (was 138 bits = 18 bytes).
+ *	No slot carries always-zero bits (minimum-bit rule), so the frame is
+ *	129 data bits = 17 bytes.
  *	If a buddy's width changes, edit S1_Bx_BITS below and bump S1_VERSION;
  *	the frame length is recomputed automatically.
  *
@@ -54,7 +53,7 @@
 #define S1_TYPE_BITS		2
 #define S1_VERSION_BITS		2
 #define S1_HDR_BITS		(S1_TYPE_BITS + S1_VERSION_BITS)	/* 4 */
-#define S1_VERSION		2	/* 0..3; 2 = 17-byte telemetry (22 Nov) */
+#define S1_VERSION		2	/* 0..3; 2 = 17-byte telemetry */
 
 #define S1_TYPE_TELEMETRY	0
 #define S1_TYPE_HEARTBEAT	1
@@ -120,7 +119,8 @@ int s1_decode_command(const uint8_t *buf, int len, uint8_t *id);
 int s1_decode_map(const uint8_t *buf, int len, uint8_t *id,
 		  char letters[S1_MAP_COUNT]);
 
-/* Builds a MAP message (dashboard side, and the tests). Returns S1_MAP_LEN. */
+/* Builds a MAP message (same format the dashboard sends); not used by the
+ * firmware itself.  Returns S1_MAP_LEN. */
 int s1_encode_map(uint8_t out[S1_MAP_LEN], uint8_t id,
 		  const char letters[S1_MAP_COUNT]);
 

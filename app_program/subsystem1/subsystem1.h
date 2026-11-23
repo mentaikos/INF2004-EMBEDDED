@@ -92,7 +92,7 @@ IMPORT void	s1_out_estop(void);
    overrides it to store the mapping; FALSE -> robot/ack = FAILED. */
 IMPORT BOOL	s1_out_map(const char letters[4]);
 
-/* ---- Internal: exported for test/debug code, not for other subsystems ---- */
+/* ---- Internal: exported for debugging only, not for other subsystems ---- */
 IMPORT ID	mbf_s1_tx;
 IMPORT ID	mbf_s1_rx;
 IMPORT ID	flg_s1_link;

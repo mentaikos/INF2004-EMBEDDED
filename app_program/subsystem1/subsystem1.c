@@ -29,7 +29,7 @@ EXPORT ID	mbf_s1_tx;	/* outgoing messages -> network task      */
 EXPORT ID	mbf_s1_rx;	/* robot/cmd payloads -> Command Handler  */
 EXPORT ID	flg_s1_link;	/* link status bits, below                 */
 EXPORT ID	tid_s1_cmd, tid_s1_hb, tid_s1_tlm;
-LOCAL  ID	mtx_s1_tlm;	/* protects the telemetry slots            */
+LOCAL  ID	mtx_s1_tlm;	/* protects tlm_slot[] and pending[]       */
 
 #define S1_FLG_LINK_UP		0x01	/* MQTT session up                    */
 #define S1_FLG_LINK_LOST	0x02	/* event: link just lost (to monitor) */
@@ -376,8 +376,8 @@ LOCAL void s1_heartbeat_task(INT stacd, void *exinf)
 
 /* ==================================================================== */
 /* 8. Task: Telemetry Publisher (pri 20, every 500 ms)                   */
-/*    Copies the slots under the mutex, packs the 18-byte frame outside  */
-/*    it.  Wi-Fi-loss bit (bit 137, last) stays 1 until one frame with   */
+/*    Copies the slots under the mutex, packs the 17-byte frame outside  */
+/*    it.  Wi-Fi-loss bit (bit 128, last) stays 1 until one frame with   */
 /*    it has been queued in mbf_s1_tx.                                   */
 /* ==================================================================== */
 LOCAL void s1_telemetry_task(INT stacd, void *exinf)
