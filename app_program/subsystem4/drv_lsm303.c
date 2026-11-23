@@ -329,11 +329,6 @@ EXPORT BOOL lsm303_probe(UB addr)
  * If no known magnetometer answers but the accelerometer does, run
  * accelerometer-only: everything works except heading / turn rate.
  */
-/* 20 Nov: write a control register and read it back.  After a cold
-   power-up the first write to the accelerometer's CTRL_REG1 was
-   sometimes lost: the chip stayed in power-down, every accel read
-   returned 0, and pitch sat at exactly 0.0 for the whole run (the
-   magnetometer, set up later, worked).  Retry a few times, 10 ms apart. */
 LOCAL BOOL write_reg_checked(UB addr, UB reg, UB val)
 {
 	UB	v;
@@ -488,10 +483,6 @@ EXPORT void lsm303_read(IMU_SAMPLE *s)
 	}
 
 robot_axes:
-	/* 20 Nov: a working accelerometer on the ground always reads ~1 g.
-	   Below 0.3 g it is powered down (all zeros) or not answering
-	   properly: report a failed read, so after 3 of them the IMU goes
-	   to FAULT and the task re-runs lsm303_init() every 1 s. */
 	if ((W)sx * sx + (W)sy * sy + (W)sz * sz < LSM303_ACC_DEAD_MG * LSM303_ACC_DEAD_MG) {
 		s->ok = FALSE;
 		return;

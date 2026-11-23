@@ -30,12 +30,6 @@
  * --------------------------------------------------------------------- */
 #define IMU_PERIOD_MS		10	/* NFR11 */
 #define IMU_CAL_SAMPLES		200	/* 2 s still at start: accel offsets */
-/* 20 Nov: calibration only accepts a STILL robot reading about 1 g.  A
-   sample outside 1 g +- IMU_CAL_G_TOL_MG, or any axis swinging more than
-   IMU_CAL_MAX_SPAN_MG over the 2 s, restarts it.  Before, a robot being
-   placed or held while booting (or an accel still reading 0) was taken
-   as "level", and the flat floor then read ~+3 deg: right at the CLIMBING
-   threshold, so the IMU sat in CLIMBING and real humps never finished. */
 #define IMU_CAL_G_TOL_MG	200
 #define IMU_CAL_MAX_SPAN_MG	80	/* sensor noise is ~+-10 mg */
 
@@ -63,11 +57,6 @@
 #define IMU_PITCH_LEVEL_MDEG	1500	/* also where height summing starts */
 #define IMU_CLIMB_CONFIRM_MS	50
 #define IMU_LEVEL_CONFIRM_MS	100
-/* 12 Nov (integration, Buddy 2): Motion Control's distance is now real
-   mm (it was 1.89 x real, subsystem2.h S2_ENC_CPR).  These three are
-   x 0.53 (old value in brackets) so hump detection works as before.
-   The height sum (dd x sin pitch) now uses real distance too, so it
-   no longer comes out 1.89 x too high. */
 #define IMU_MIN_HUMP_TRAVEL_MM	11	/* (20) shorter = false trigger */
 #define IMU_MAX_HUMP_TRAVEL_MM	318	/* (600) never levelled again = abort */
 #define IMU_MAX_STEP_MM		106	/* (200) sanity clamp on one 10 ms step */
@@ -78,59 +67,18 @@
    the rear axle still on the flat. */
 #define IMU_WHEELBASE_MM	120	/* MEASURE: front-to-rear axle distance */
 
-/* 5 Nov: hump under ONE wheel only (the track ramp is under the right
-   wheel).  The robot then mostly ROLLS (tilts sideways) about the other
-   wheel, and the pitch seen depends on where the caster is: the pitch
-   formulas above gave 15 mm on the 10 mm ramp.  The wheel's lift is
-   exact from the roll instead:  height = track x sin(peak roll).
-   Used when the peak roll is at least IMU_ONE_WHEEL_ROLL_MDEG (3 deg =
-   a 5 mm lift); a hump under both wheels has almost no roll and keeps
-   the pitch formulas.  Either wheel works (the size of the roll is
-   used, not its sign). */
 #define IMU_TRACK_MM		95	/* MEASURE: left to right wheel, centre of
 					   the tyre contact (physical; 12 Nov: not
 					   Motion's S2_TRACK_X10_MM, an effective turn value) */
 #define IMU_ONE_WHEEL_ROLL_MDEG	3000
 #define IMU_ROLL_LPF_DIV	2	/* lighter than the pitch's 4: the 50 ms median
 					   below already rejects noise and jolts */
-/* 5 Nov: the peak roll is taken from the median of the last
-   IMU_PEAK_HOLD_N samples (5 x 10 ms = 50 ms): the wheel hitting the
-   ramp's edge jolts the accelerometer for a sample or two, and that
-   jolt is not tilt.  The ramp's top lasts far longer (10 mm ramp at
-   20 cm/s: ~200 ms). */
 #define IMU_PEAK_HOLD_N		5
 
 /* Height sum (Version C gap 2 / row 14): 0.01 mm units, clamped to
    +-63 mm = +-6300, which needs 14 bits signed -> int16 (H) */
 #define IMU_SUM_MAX_CMM		6300
 
-/* 12 Nov: the shock check (|a| > 2.5 g = collision) is removed: the
-   professor's update drops IMU collision detection. */
-
-/* 12 Nov (professor's update): LIFTED / OVERTURNED.  Lifting the robot
-   ends the run in the demo, so the motors must stop.  Any ONE of:
-   1. OVERTURNED: tilted more than 45 deg (Z below the sideways part,
-      az^2 < ax^2 + ay^2, or az <= 0 upside down) for
-      IMU_TILT_CONFIRM_MS.  The track humps tilt it ~12-19 deg at most.
-   2. JERKED UP: the median of the last 5 calibrated Z readings (50 ms)
-      more than IMU_LIFT_UP_MG above 1 g for IMU_LIFT_CONFIRM_MS: a
-      quick pick-up.  A 1-2 sample jolt never gets through the median.
-   3. HELD UP (the usual case: a gentle lift was missed by 2. in the
-      12 Nov 17:58 log, which only showed a 19 deg "hump").  A robot
-      held still in the air reads 1 g like one on the floor, so the IMU
-      alone cannot see it; the line sensors can: in the air both read
-      BLACK (no floor reflects).  On the track both are black only while
-      crossing a junction line (~0.2 s).  So: both line sensors black
-      ("no floor", set by the task from Line & Barcode, imu_set_floor)
-      for IMU_NOFLOOR_MS while LEVEL, or IMU_NOFLOOR_HUMP_MS while the
-      IMU thinks it is on a hump (a lifted robot is usually tilted), AND
-      the IMU saw the robot disturbed -- |pitch| or |roll| >=
-      IMU_DISTURB_MDEG, or Z off 1 g by IMU_DISTURB_MG -- within the last
-      IMU_DISTURB_WINDOW_MS.  The IMU condition keeps a robot standing
-      still on a junction line from counting as lifted.
-   LIFTED holds while any of them lasts, and IMU_LIFT_HOLD_MS after.
-   MEASURE on the robot: lift it 10x (no false miss), and drive the
-   whole track incl. both humps and every junction (no false LIFTED). */
 #define IMU_TILT_CONFIRM_MS	200
 #define IMU_LIFT_UP_MG		250
 #define IMU_LIFT_CONFIRM_MS	40
@@ -164,7 +112,7 @@ typedef struct {
 #define IMU_EV_HUMP_START	1
 #define IMU_EV_HUMP_END		2	/* height_mm 0 = aborted, not a hump */
 #define IMU_EV_SENSOR_FAULT	3
-#define IMU_EV_LIFTED		4	/* 12 Nov (was SHOCK): height_mm = IMU_LIFT_CAUSE_xxx */
+#define IMU_EV_LIFTED		4
 
 typedef struct {
 	UB	type;		/* IMU_EV_xxx */
@@ -185,7 +133,7 @@ typedef struct {
 	UB	cal_n;			/* 0..IMU_CAL_SAMPLES (200) */
 	W	cal_sum[3];		/* 200 x +-4096 mg -> 21 bits */
 	H	acc_off[3];		/* mg */
-	H	cal_min[3], cal_max[3];	/* 20 Nov: stillness check, mg */
+	H	cal_min[3], cal_max[3];
 	H	mag_min[3], mag_max[3];	/* hard-iron tracking, counts */
 	UB	mag_seen;
 	UB	calibrated;
@@ -193,7 +141,7 @@ typedef struct {
 
 	/* filtered orientation */
 	W	pitch_mdeg;		/* +-180000 -> 19 bits */
-	W	roll_mdeg;		/* 5 Nov: sideways tilt, + = right side up */
+	W	roll_mdeg;
 	W	heading_mdeg;		/* 0..359999 -> 19 bits */
 	W	rate_cdps;		/* turn rate, 0.01 deg/s */
 	W	mag_f[2];		/* filtered field X, Y, counts x 16 */
@@ -209,15 +157,14 @@ typedef struct {
 	H	hump_sum_cmm;		/* 0.01 mm, +-6300 */
 	H	hump_sum_peak_cmm;
 	W	hump_peak_mdeg;
-	W	hump_peak_roll_mdeg;	/* 5 Nov: peak of the 50 ms median |roll| */
+	W	hump_peak_roll_mdeg;
 	H	hold_roll[IMU_PEAK_HOLD_N];	/* last |roll|s, 0.1 deg */
 	UB	hold_i, hold_n;		/* ring index, samples in it */
 	UB	last_hump_mm;		/* 0..31 */
 	UB	hump_count;		/* saturates at 255, packed to 4 bits */
 	W	last_peak_mdeg;		/* peak pitch of the last hump (console log) */
-	W	last_peak_roll_mdeg;	/* 5 Nov: peak |roll| of the last hump */
+	W	last_peak_roll_mdeg;
 
-	/* 12 Nov: lifted / overturned */
 	H	lift_az[IMU_LIFT_MED_N];	/* last calibrated Z, mg */
 	UB	lift_i, lift_n;		/* ring index, samples in it */
 	UB	jerk_n;			/* samples the Z median has been high */
@@ -243,8 +190,6 @@ IMPORT void	imu_restart(IMU_MONITOR *m);
 /* Sensor not answering at start-up: go straight to FAULT */
 IMPORT void	imu_set_fault(IMU_MONITOR *m);
 
-/* 12 Nov: before each imu_step: TRUE while both line sensors read
-   black (no floor under them), from Line & Barcode's status */
 IMPORT void	imu_set_floor(IMU_MONITOR *m, BOOL no_floor);
 
 /* One 10 ms cycle.  dd_mm: distance driven since the previous call

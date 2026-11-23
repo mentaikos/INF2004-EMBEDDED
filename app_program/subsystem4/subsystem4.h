@@ -88,11 +88,6 @@
    example LED) and claim it with the team first.
      TIMING pin  high while one IMU cycle runs: period, jitter and WCET
                  (S4-T01) */
-/* 12 Nov: LIFTED / OVERTURNED -> E-STOP.  1 = normal: the motors stop
-   at once (Motion brakes on S2_FLG_ESTOP) and the VC ends the run.
-   0 = bench mode ONLY while tuning (imu_monitor.h IMU_LIFT_xxx):
-   LIFTED is still detected and logged and the VC still ends the run
-   (it stops the motors itself), but E-STOP is not set. */
 #define S4_LIFT_ESTOP		1
 
 /*   LIFT pin    high from LIFTED until the latch is acknowledged:
@@ -111,9 +106,7 @@
 #define FAULT_IMU		0x0004u	/* sensor not answering */
 #endif
 #ifndef FAULT_LIFTED
-#define FAULT_LIFTED		0x0080u	/* 12 Nov: lifted / overturned latch
-					   (was FAULT_SHOCK), cleared by
-					   Telemetry or the VC's reset */
+#define FAULT_LIFTED		0x0080u
 #endif
 
 /* =====================================================================
@@ -146,14 +139,6 @@ IMPORT BOOL	s4_in_hump(void);	/* CLIMBING or DESCENDING: S3 may
 					   ignore a short line loss, S5 may
 					   ignore echoes off the hump */
 
-/* 12 Nov: LIFTED latch (like the old SHOCK latch): one writer per byte:
-   the IMU counts lift events, Telemetry acknowledges the count it
-   published.
-	seq = s4_lift_seq();
-	if (s4_lift_pending()) { publish the alert; s4_lift_ack(seq); }
-   The VC notes s4_lift_seq() at START; a new count while running = the
-   robot was lifted: the run ends (COMPLETE).  The count goes up BEFORE
-   E-STOP is set, so the VC never mistakes a lift for another E-STOP. */
 IMPORT UB	s4_lift_seq(void);
 IMPORT BOOL	s4_lift_pending(void);
 IMPORT void	s4_lift_ack(UB seq);
@@ -196,8 +181,6 @@ IMPORT void	imu_cyclic_isr(void *exinf);
 IMPORT void	imu_log_task(INT stacd, void *exinf);
 
 #if APP_TEST
-/* 12 Nov test hook: the IMU task runs its LIFTED reaction once, as if
-   the robot had been picked up (INT-05).  No real lift needed. */
 IMPORT void	s4_test_inject_lift(void);
 #endif
 

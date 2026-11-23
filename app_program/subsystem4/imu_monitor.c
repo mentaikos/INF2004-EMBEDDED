@@ -111,7 +111,7 @@ LOCAL void reset_hump(IMU_MONITOR *m)
 	m->hump_sum_cmm      = 0;
 	m->hump_sum_peak_cmm = 0;
 	m->hump_peak_mdeg    = 0;
-	m->hump_peak_roll_mdeg = 0;	/* 5 Nov */
+	m->hump_peak_roll_mdeg = 0;
 	m->hold_i            = 0;
 	m->hold_n            = 0;
 }
@@ -125,7 +125,7 @@ EXPORT void imu_restart(IMU_MONITOR *m)
 	for (i = 0; i < 3; i++) m->cal_sum[i] = 0;
 	m->calibrated = 0;
 	m->fail_count = 0;
-	m->lift_n     = 0;		/* 12 Nov: lift checks from scratch */
+	m->lift_n     = 0;
 	m->jerk_n     = 0;
 	m->tilt_n     = 0;
 	m->no_floor_ms = 0;
@@ -171,8 +171,6 @@ LOCAL UB hump_result_mm(const IMU_MONITOR *m)
 {
 	W	geo, sum, h;
 
-	/* 5 Nov: one wheel over the hump (the robot rolled): the wheel's
-	   lift is track x sin(roll), whatever the pitch did */
 	if (m->hump_peak_roll_mdeg >= IMU_ONE_WHEEL_ROLL_MDEG) {
 		h = (IMU_TRACK_MM * imu_sin_q14(m->hump_peak_roll_mdeg)
 		     + IMU_Q14_ONE / 2) / IMU_Q14_ONE;
@@ -188,9 +186,6 @@ LOCAL UB hump_result_mm(const IMU_MONITOR *m)
 	return (UB)s4_clamp(h, 0, S4_HUMP_MAX_MM);
 }
 
-/* 5 Nov: median of the last IMU_PEAK_HOLD_N values.  A jolt of one
-   or two samples (the wheel hitting the ramp's edge) never becomes the
-   peak, and noise does not pull it down the way the minimum did. */
 LOCAL W held_median(const H *v)
 {
 	H	t[IMU_PEAK_HOLD_N], x;
@@ -205,7 +200,6 @@ LOCAL W held_median(const H *v)
 }
 
 /* ------------------------------------------------------------------ */
-/*  12 Nov: lifted / overturned (imu_monitor.h, IMU_LIFT_xxx)          */
 /* ------------------------------------------------------------------ */
 #if IMU_LIFT_MED_N != IMU_PEAK_HOLD_N
 #error "held_median() sorts IMU_PEAK_HOLD_N values"
@@ -284,7 +278,7 @@ LOCAL UB lift_check(IMU_MONITOR *m, const IMU_SAMPLE *s, W dt_ms, UW now_ms)
 
 LOCAL void update_orientation(IMU_MONITOR *m, const IMU_SAMPLE *s, W dt_ms)
 {
-	W	ax = (W)s->ax - m->acc_off[0];	/* 5 Nov: for the roll */
+	W	ax = (W)s->ax - m->acc_off[0];
 	W	ay = (W)s->ay - m->acc_off[1];
 	W	az = (W)s->az - m->acc_off[2];
 	W	raw, mx, my, hdg, rate;
@@ -295,7 +289,6 @@ LOCAL void update_orientation(IMU_MONITOR *m, const IMU_SAMPLE *s, W dt_ms)
 	raw = imu_atan2_mdeg(ay, az);
 	m->pitch_mdeg += (raw - m->pitch_mdeg) / IMU_PITCH_LPF_DIV;
 
-	/* 5 Nov: roll (X = right), low-pass like the pitch */
 	raw = imu_atan2_mdeg(ax, az);
 	m->roll_mdeg += (raw - m->roll_mdeg) / IMU_ROLL_LPF_DIV;
 
@@ -412,7 +405,7 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 			}
 			m->acc_off[2] -= 1000;	/* keep 1 g on Z */
 			m->pitch_mdeg = 0;
-			m->roll_mdeg  = 0;	/* 5 Nov */
+			m->roll_mdeg  = 0;
 			m->calibrated = 1;
 			m->state      = S4_ST_LEVEL;
 			reset_hump(m);
@@ -422,7 +415,6 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 
 	update_orientation(m, s, dt_ms);
 
-	/* ---------- 12 Nov: lifted / overturned ---------- */
 	cause = lift_check(m, s, dt_ms, now_ms);
 	if (m->state == S4_ST_LIFTED) {
 		if (cause != 0) {
@@ -475,9 +467,6 @@ EXPORT INT imu_step(IMU_MONITOR *m, const IMU_SAMPLE *s, INT dd_mm,
 			m->hump_sum_peak_cmm = m->hump_sum_cmm;
 		}
 		if (p > m->hump_peak_mdeg) m->hump_peak_mdeg = p;
-		/* 5 Nov: peak of the 50 ms median of |roll|
-		   (the pitch peak stays as it was: on the short black hump at
-		   speed, holding it 50 ms cut the real crest) */
 		{
 			W	r = (m->roll_mdeg < 0) ? -m->roll_mdeg : m->roll_mdeg;
 			W	held;

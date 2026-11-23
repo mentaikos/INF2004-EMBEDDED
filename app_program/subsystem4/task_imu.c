@@ -23,7 +23,7 @@
 #include "drv_lsm303.h"
 #include "../subsystem2/subsystem2.h"	/* g_motion_status, flg_safety */
 #include "../subsystem1/subsystem1.h"	/* s1_tlm_set_slot, S1_SLOT_B4 */
-#include "../subsystem3/subsystem3.h"	/* 12 Nov: line sensors (lifted?) */
+#include "../subsystem3/subsystem3.h"
 #include <tk/syslib.h>
 
 EXPORT ID		tid_imu;
@@ -36,7 +36,6 @@ LOCAL IMU_MONITOR	imu;		/* IMU task only */
 LOCAL S4_DIAG		dg;		/* IMU task's working copy */
 LOCAL S4_DIAG		s4_diag;	/* guarded by mtx_s4_status */
 
-/* 12 Nov: LIFTED latch, one writer per byte (s4_lift_ack) */
 LOCAL volatile UB	lift_seq;	/* IMU task only: lift events, wraps */
 LOCAL volatile UB	lift_acked;	/* Telemetry only: last one published */
 LOCAL volatile UB	lift_cause;	/* IMU task only: IMU_LIFT_CAUSE_xxx */
@@ -138,12 +137,6 @@ LOCAL void on_sensor_fault(void)
 	send_vc(EVT_SENSOR_FAULT, FAULT_IMU);
 }
 
-/* 12 Nov: LIFTED / OVERTURNED.  Count it first, then stop: the VC
-   sees the new count with (or before) the E-STOP, so it knows the run
-   is over rather than an ordinary E-STOP.  Motion wakes on
-   S2_FLG_ESTOP at once and brakes.  E-STOP is cleared only by the VC
-   on a new START; FAULT_LIFTED by Telemetry (s4_lift_ack) or the VC's
-   fault reset. */
 LOCAL void on_lifted(UB cause)
 {
 	lift_cause = cause;
@@ -356,8 +349,6 @@ EXPORT void imu_task(INT stacd, void *exinf)
 		/* 2. distance from Motion Control (one aligned word) */
 		dist = s2_sts_dist(motion_get_status());
 
-		/* 12 Nov: both line sensors black = no floor under them
-		   (lifted).  Line & Barcode's word, one aligned load. */
 		{
 			UW	w3 = s3_get_status();
 
@@ -508,7 +499,7 @@ EXPORT void imu_log_task(INT stacd, void *exinf)
 			tm_printf((UB*)" deg (humps=%d)\n", f.hump_count);
 			last_count = f.hump_count;
 		}
-		if (lift_seq != last_lift) {	/* 12 Nov */
+		if (lift_seq != last_lift) {
 			tm_printf((UB*)"s4: %s -> E-STOP%s, motors stopped\n",
 				  lift_cause == IMU_LIFT_CAUSE_TILT ? "OVERTURNED"
 								 : "LIFTED",

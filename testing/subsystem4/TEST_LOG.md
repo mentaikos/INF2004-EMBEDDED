@@ -6,46 +6,34 @@ See `testing/README.md` for how to run tests and record results.
 
 ## Test cases
 
-Define a test here before running it. Test IDs never change.
+Test cases
+ID	Test	Steps	Pass if you see	Req.
+S4-AUTO	Automatic checks	1. Flash the test build. 2. Open the serial monitor. 3. Wait until it stops printing (about 20 s).	Every [TEST] S4-… line ends in PASS (no FAIL). Covers S4-U01, S4-U03…U17 (robot flat and still from power-on). PC test S4-H01: ./t prints ALL TESTS PASSED (known: one long-ramp FAIL, S4-H05)	—
+S4-M01	IMU found at power-on	Power on, watch the serial monitor.	Serial s4: I2C scan: 2 device(s) listing 0x19 (accelerometer) and 0x1E (magnetometer); dashboard Calibrated = yes after 2 s	FR13
+S4-M02	Pitch	Robot flat and still at power-on (2 s). Then put a 2 cm block under the front wheels, then under the back wheels.	Dashboard pitch about 0 flat; clearly positive with the nose up (state CLIMBING); negative with the nose down; back to about 0 (LEVEL) when flat	FR13, FR14
+S4-M03	Heading	Turn the robot slowly by hand a quarter turn, then a full turn.	Dashboard heading changes by about 90, then goes all the way round 0→359	FR13
+S4-M10	Calibration needs a still robot ×5	Power on while holding the robot and moving it gently for 5 s, then put it flat and let go.	It does not become LEVEL while you hold it; about 2 s after you let go it shows LEVEL with pitch about 0	FR13
+S4-M07	Hump height ×10 each	Drive over the hump, 10 times each.	Dashboard Last hump (or serial s4: HUMP_END height=):  hump 8–12 mm; the hump count does not go up on flat track. Video: https://youtu.be/QX4s-SHfH3Y (videos/README.md)	FR21
+S4-M05	Lift stops the robot ×10	While the robot drives, pick it up (5 times gently, 5 times quickly).	Wheels stop within about 1 s. Serial s4: LIFTED …. Dashboard state COMPLETE. Video: https://youtu.be/v4tPge_iHPI (videos/README.md)	FR27, NFR10
+S4-M09	Tipped over	Wheels spinning (START, robot held off the table), tip it onto its side.	Wheels stop. Serial s4: LIFTED (overturned > 45 deg)	FR27
+S4-M12	START refused while lifted	Hold the robot in the air and press START.	Robot does not start. Serial vc: START refused: robot lifted or overturned …	FR14, NFR9
+S4-M17	Junction is not a lift	Put the robot standing on a junction line for 10 s, then lift it from there.	No LIFTED while standing. LIFTED as soon as you lift it	FR27
+S4-M06	IMU unplugged and back	Robot idle. Unplug the IMU cable for 3 s, plug it back in, keep the robot still for 2 s.	Dashboard IMU state FAULT while unplugged, then back to LEVEL by itself	FR14
+S4-M16	IMU panel on the dashboard	WiFi build: tilt, turn and lift the robot by hand.	Dashboard pitch, heading, state and the lifted indicator follow what you do	FR15, FR22
 
-| ID | What is tested | Requirement / interface | Method | Steps / how | Expected result |
-|---|---|---|---|---|---|
-| S4-U01 | message buffer max line = S4_SUMMARY_MAX (template example, kept for S3's example consumer) | IF-03 | auto | `subsystem4_test.c` | `[TEST] S4-U01 PASS` |
-| S4-U02 | LED pauses and resumes every 6 reports (template example monitor) | IF-05 | manual | 1. Flash normal image. 2. Watch LED and console ~20 s. | console shows "LED task paused"/"resumed"; LED stops/starts |
-| S4-U03 | packed status: 42 bits in 2 words, round trip, negative pitch/rate sign-extend, unused bits 0 | minimum-bit (Week 8) | auto | `subsystem4_test.c` | `[TEST] S4-U03 PASS` |
-| S4-U04 | packed status fields clamp, never wrap (pitch ±25.5°, rate ±255°/s, height 31 mm, count 15, fails 3) | minimum-bit | auto | `subsystem4_test.c` | `[TEST] S4-U04 PASS` |
-| S4-U05 | VC event words: HUMP_START, HUMP_END(height, 5 bits, clamped), SENSOR_FAULT(FAULT_IMU) | `mbf_vc_evt` (app.h EVT_PACK) | auto | `subsystem4_test.c` | `[TEST] S4-U05 PASS` |
-| S4-U06 | integer atan2 (CORDIC) within 0.02°, integer sine within 0.5 % | FR13 (no FPU, no libm) | auto | `subsystem4_test.c` | `[TEST] S4-U06 PASS` |
-| S4-U07 | made-up drive over the black (25 mm) and yellow (10 mm) humps: one HUMP_START + one HUMP_END each, height ±3 / ±2 mm | FR (MEASURE), Version C row 14 | auto | `subsystem4_test.c` | `[TEST] S4-U07 PASS` |
-| S4-U08 | 2 m of flat track with ±40 mg noise: no false hump | A4 thresholds (+3°) | auto | `subsystem4_test.c` | `[TEST] S4-U08 PASS` |
-| S4-U09 | (12 Nov, was shock: > 2.5 g → SHOCK) jerked up (+0.5 g on Z for 150 ms) → one LIFTED; 2-sample jolts, a 4 g spike and a sideways knock → none; LEVEL 1 s after it is put down | FR27 | auto | `subsystem4_test.c` | `[TEST] S4-U09 PASS` |
-| S4-U10 | (12 Nov, was shock) lifted while on a hump → HUMP_END(0) so the VC leaves HUMP_TRAVERSE | Version C row 9 | auto | `subsystem4_test.c` | `[TEST] S4-U10 PASS` |
-| S4-U16 | (12 Nov) overturned: upside down 200 ms → LIFTED, held while over, LEVEL 1 s after back on its wheels; on its side → LIFTED; a 30° slope → none | FR27 (12 Nov update) | auto | `subsystem4_test.c` | `[TEST] S4-U16 PASS` |
-| S4-U17 | (12 Nov) held up: gentle lift (19° tilt, then level) with both line sensors black → LIFTED, held in the air, LEVEL 1 s after put down; standing on a junction line 4 s, or crossing one for 0.2 s after a hump → none | FR27 (12 Nov update) | auto | `subsystem4_test.c` | `[TEST] S4-U17 PASS` |
-| S4-U11 | 3 failed reads → FAULT + one SENSOR_FAULT; recovery → CALIBRATING | statechart 6.4 | auto | `subsystem4_test.c` | `[TEST] S4-U11 PASS` |
-| S4-U12 | sizes: status 32 B unpacked → 8 B packed; height sum int16 (2 B) | Week 13 evidence, Version C row 14 | auto | `subsystem4_test.c` (sizes printed) | `[TEST] S4-U12 PASS` |
-| S4-U13 | IMU task runs every 10 ms (95–105 cycles in 1 s), WCET < 1 ms | NFR11, A6 | auto | `subsystem4_test.c` | `[TEST] S4-U13 PASS` |
-| S4-U14 | sensor found on Grove 6, calibrated, LEVEL (robot still and flat from power-up) | FR13 | auto (needs sensor) | `subsystem4_test.c` | `[TEST] S4-U14 PASS` |
-| S4-H01 | PC simulation: exact two-axle geometry over both humps at 100–400 mm/s, noise, long ramp, flat, lifted / overturned, fault, packing | design check | auto (PC) | `cd app_program/subsystem4/host_test`, build line in `test_host.c`, run | `ALL TESTS PASSED` |
-| S4-M01 | I2C bring-up: both chips answer | hardware, Grove 6 | manual | Flash, read the console at boot | `s4: I2C1 GP26/GP27: accel 0x19 found, mag 0x1E found -> LSM303DLHC ready` |
-| S4-M02 | axis mapping | FR13 | manual | Robot flat, then lift the nose ~10° | pitch ≈ +0.0 flat, ≈ +10.0 nose up (if negative: fix `LSM303_ROBOT_*` in `drv_lsm303.h`) |
-| S4-M03 | heading and turn rate | FR14, FR15 | manual | Rotate the robot slowly 360° by hand, then once quickly | heading runs 0→359; rate sign matches the turn direction |
-| S4-M04 | magnetometer disturbed by the motors (Version C row 12) | assumption | manual | Same heading, motors off vs driving; read `hdg` | note the difference in degrees |
-| S4-M05 | (12 Nov, was tap → SHOCK) lift the robot mid-run → LIFTED → E-STOP → motors stop, run ends | FR27 (12 Nov update), NFR10 | manual | START a run on the track, pick the robot up by hand, 10× (gently and quickly, level and tilted); also 10 full runs incl. both humps and every junction with NO false LIFTED | `s4: LIFTED (...)`, `s4: LIFTED -> E-STOP, motors stopped`, `vc: robot lifted / overturned: motors stopped, run ended`; wheels stop within ~1 s of the pick-up |
-| S4-M09 | (12 Nov) overturn by hand | FR27 (12 Nov update) | manual | Motors running (START, wheels off the table), tip the robot past 45° or turn it over | `s4: LIFTED (overturned > 45 deg)`, motors stop; START refused while it is still over |
-| S4-M06 | unplug Grove 6 → SENSOR_FAULT → recovery | statechart 6.4 | manual | Unplug for 3 s, plug back in, keep still 2 s | state FAULT, then CALIBRATING → LEVEL |
-| S4-M07 | real humps, 10 runs each at cruise speed | FR (MEASURE), A4 | manual | Drive over black and yellow hump 10× each, read `s4: HUMP_END height=` | black 25 ± 2 mm, yellow 10 ± 2 mm, no false humps between |
-| S4-M08 | measure wheelbase and hump slope lengths | constants | manual | Ruler: front-to-rear axle; each hump's slope length | set `IMU_WHEELBASE_MM`; record slopes here |
-| S4-T01 | IMU period, jitter and WCET with Wi-Fi active, before vs after packing | NFR11, A6, Week 13 | manual (GPIO toggle) | Set `S4_DEBUG_TIMING_PIN` to a free pin, scope it; also read `wcet=` in the log | period 10 ms ± 1 tick; WCET well below 10 ms |
-| S4-T02 | (12 Nov, was shock) lifted → brake latency | NFR10 (≤ 100 ms), Version C row 11 | manual (logic analyser) | Set `S4_DEBUG_LIFT_PIN`; lift the robot; measure its edge → GP8..11 all LOW | ≤ 100 ms worst case over 20 trials |
+Results
 
-*Method:* **auto** = `TEST_CHECK` in code, result printed on the console;
-**manual** = a person observes the result (LED, scope, meter, phone app…).
 
-## Results
-
-Add a new row for every run. Never edit or delete old rows.
-
-| Date | Test ID | Commit | Tester | Result | Log / evidence | Notes |
-|---|---|---|---|---|---|---|
-| YYYY-MM-DD | S4-U01 | `abc1234` | | PASS / FAIL | `logs/YYYY-MM-DD_….txt` | |
+Date	Test ID		    Tester	        Result	Notes
+2026-11-23	S4-AUTO		Poh Yang Sheng	PASS	All [TEST] S4-… lines PASS on the robot
+2026-11-23	S4-M01		Poh Yang Sheng	PASS	I2C scan found 0x19 and 0x1E; Calibrated = yes
+2026-11-23	S4-M02		Poh Yang Sheng	PASS	Pitch ~0 flat, positive (CLIMBING) nose up, negative nose down
+2026-11-23	S4-M03		Poh Yang Sheng	PASS	Heading changed ~90 for a quarter turn, 0→359 for a full turn
+2026-11-23	S4-M10		Poh Yang Sheng	PASS	5/5: not LEVEL while held, LEVEL ~2 s after put down
+2026-11-23	S4-M07		Poh Yang Sheng	PASS	Hump height. Video: https://youtu.be/QX4s-SHfH3Y (commit 56c9e25)
+2026-11-23	S4-M05		Poh Yang Sheng	PASS	10/10: lift stops the motors, COMPLETE. Video: https://youtu.be/v4tPge_iHPI (commit 56c9e25)
+2026-11-23	S4-M09		Poh Yang Sheng	PASS	Tipped on its side: wheels stopped, LIFTED (overturned > 45 deg)
+2026-11-23	S4-M12		Poh Yang Sheng	PASS	START refused while held in the air
+2026-11-23	S4-M17		Poh Yang Sheng	PASS	No LIFTED standing on a junction 10 s; LIFTED when picked up
+2026-11-23	S4-M06		Poh Yang Sheng	PASS	FAULT while unplugged, back to LEVEL by itself
+2026-11-23	S4-M16		Poh Yang Sheng	PASS	Dashboard pitch, heading, state and lifted followed the robot

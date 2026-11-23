@@ -37,7 +37,7 @@
 #define S4_ST_LEVEL		1
 #define S4_ST_CLIMBING		2
 #define S4_ST_DESCENDING	3
-#define S4_ST_LIFTED		4	/* 12 Nov: lifted or overturned (was SHOCK) */
+#define S4_ST_LIFTED		4
 #define S4_ST_FAULT		5
 
 /* Unpacked view: the Week 13 "before" representation (8 x 4 = 32 B)

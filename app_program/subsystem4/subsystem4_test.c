@@ -28,10 +28,10 @@
 typedef struct {
 	INT	starts, ends, faults, lifts;
 	INT	height;		/* first HUMP_END height */
-	INT	cause;		/* 12 Nov: IMU_LIFT_CAUSE_xxx of the last LIFTED */
+	INT	cause;
 } RESULT;
 
-LOCAL BOOL	no_floor_in;	/* 12 Nov: "both line sensors black" for step() */
+LOCAL BOOL	no_floor_in;
 
 LOCAL UW	t_ms;
 LOCAL UW	rnd_state = 12345;
