@@ -8,12 +8,12 @@
 |---|---|---|---|---|
 | S1-M01 | Robot connects | 1. Start the hotspot and the broker. 2. Open the dashboard. 3. Power on the robot. | Within 10 s the dashboard shows the robot **ONLINE**. Serial: `mqtt: CONNECTED to …` | FR2 |
 | S1-M03 | Live data on the dashboard | Robot connected, not running. Turn one wheel by hand. | The Motion panel values change while the wheel turns, and stop changing when you stop (updates about twice a second) | FR3, NFR6 |
-| S1-M04 | Heartbeat | Watch the dashboard for 30 s, then push the robot over a barcode by hand. | Heartbeat age says "just now"; uptime goes up by 1 s every second. The last-barcode box shows the letter you passed | FR5, NFR17 |
-| S1-M05 | START and STOP ×10 | Robot on the line, calibrated. Press **START**, wait 5 s, press **STOP**. Repeat 10 times. | Every START: robot drives. Every STOP: robot stops | FR4 |
+| S1-M04 | Heartbeat | Watch the dashboard for 30 s, then push the robot over a barcode by hand. | Heartbeat age says "just now"; uptime goes up by 1 s every second. The last-barcode box shows the letter you passed | FR3, FR5, NFR17 |
+| S1-M05 | START and STOP ×10 | Robot on the line, calibrated. Press **START**, wait 5 s, press **STOP**. Repeat 10 times. | Every START: robot drives. Every STOP: robot stops | FR1, FR4 |
 | S1-M06 | E-STOP ×10 | While the robot drives, press **E-STOP**. Wait 5 s. Then press START. Repeat 10 times. | Wheels stop at once. The robot does **not** move again by itself. It only moves after START | FR4, NFR9 |
 | S1-M09 | Send a barcode MAP | On the dashboard pick four different letters for forward / U-turn / left / right and press send. | Serial: `vc: barcode map: forward=… U-turn=… left=… right=…` with the same letters | FR4, FR29 |
-| S1-M08 | Bad command is refused (optional) | From the laptop: `mosquitto_pub -t robot/cmd -m "x"` (a wrong-length message). | Serial: `S1: INVALID command …`; the dashboard shows an ack INVALID; the robot does nothing | FR4 |
-| S1-M10 | Wi-Fi drop and reconnect | Robot connected and idle. Turn the hotspot **off**, count 10 s, turn it **on** again. | Dashboard shows OFFLINE, then ONLINE again **by itself** within 10 s of the hotspot coming back. Link-loss count goes up by 1 | NFR7, NFR19 |
+| S1-M08 | Bad command is refused (optional) | From the laptop: `mosquitto_pub -t robot/cmd -m "x"` (a wrong-length message). | Serial: `S1: INVALID command …`; the dashboard shows an ack INVALID; the robot does nothing | FR3, FR4 |
+| S1-M10 | Wi-Fi drop and reconnect | Robot connected and idle. Turn the hotspot **off**, count 10 s, turn it **on** again. | Dashboard shows OFFLINE, then ONLINE again **by itself** within 10 s of the hotspot coming back. Link-loss count goes up by 1 | FR5, NFR7, NFR19 |
 | S1-M12 | Link loss noticed quickly | Robot connected. Turn the hotspot off and start a stopwatch. | Dashboard shows the robot **OFFLINE** within 4 s | FR5, NFR20 |
 
 ## Results
